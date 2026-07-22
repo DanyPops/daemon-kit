@@ -89,4 +89,40 @@ describe("openSqliteWithPragmas", () => {
 		expect((db.query("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode).not.toBe("wal");
 		db.close();
 	});
+
+	it("rejects a database whose schema is newer than every supplied migration -- a downgrade, not silently opened", () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-storage-"));
+		const path = join(dir, "db.sqlite");
+		try {
+			const db1 = openSqliteWithPragmas(path, {
+				migrations: [
+					{ version: 1, up: (d) => d.exec("CREATE TABLE t (x INTEGER)") },
+					{ version: 2, up: (d) => d.exec("ALTER TABLE t ADD COLUMN y TEXT") },
+				],
+			});
+			db1.close();
+			expect(() =>
+				openSqliteWithPragmas(path, { migrations: [{ version: 1, up: (d) => d.exec("CREATE TABLE t (x INTEGER)") }] }),
+			).toThrow(/database schema 2 is newer than supported 1/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("passes databaseOptions through to bun:sqlite verbatim (e.g. strict mode)", () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-storage-"));
+		const path = join(dir, "db.sqlite");
+		try {
+			const db = openSqliteWithPragmas(path, {
+				migrations: [{ version: 1, up: (d) => d.exec("CREATE TABLE t (name TEXT)") }],
+				databaseOptions: { create: true, strict: true },
+			});
+			// Strict mode: a bound named parameter no longer needs its $/:/@ sigil.
+			db.query("INSERT INTO t (name) VALUES ($name)").run({ name: "ok" });
+			expect(db.query("SELECT name FROM t").get()).toEqual({ name: "ok" });
+			db.close();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

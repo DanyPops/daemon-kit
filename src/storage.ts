@@ -6,7 +6,7 @@
  * whose db.ts only ever set journal_mode, missing busy_timeout,
  * foreign_keys, optimize, and any versioned migration runner at all.
  */
-import { Database } from "bun:sqlite";
+import { Database, type DatabaseOptions } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -19,6 +19,8 @@ export interface Migration {
 export interface OpenSqliteOptions {
 	migrations: Migration[];
 	busyTimeoutMs?: number;
+	/** Passed through to `new Database(path, databaseOptions)` verbatim -- e.g. { create: true, strict: true }. */
+	databaseOptions?: DatabaseOptions;
 }
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
@@ -34,13 +36,21 @@ function userVersion(db: Database): number {
  */
 export function openSqliteWithPragmas(path: string, options: OpenSqliteOptions): Database {
 	if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-	const db = new Database(path);
+	const db = new Database(path, options.databaseOptions);
 	db.exec("PRAGMA foreign_keys = ON");
 	db.exec(`PRAGMA busy_timeout = ${options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS}`);
 	if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL");
 
 	const sorted = [...options.migrations].sort((a, b) => a.version - b.version);
+	const targetVersion = sorted.at(-1)?.version ?? 0;
 	let current = userVersion(db);
+	// A database newer than every migration this caller knows about means a
+	// downgrade (older code opening a database a newer version created) --
+	// fail closed rather than silently opening a schema this code doesn't
+	// fully understand.
+	if (current > targetVersion) {
+		throw new Error(`database schema ${current} is newer than supported ${targetVersion}`);
+	}
 	for (const migration of sorted) {
 		if (migration.version <= current) continue;
 		if (migration.version !== current + 1) {
