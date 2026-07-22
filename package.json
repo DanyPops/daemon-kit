@@ -1,0 +1,37 @@
+{
+	"name": "@danypops/daemon-kit",
+	"version": "0.1.0",
+	"description": "Shared substrate for supervised, authenticated, loopback-only Bun daemons: process lifecycle, SQLite storage bootstrap, structured logging, and an HTTP auth/RPC layer",
+	"license": "MIT",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts",
+		"./paths": "./src/paths.ts",
+		"./storage": "./src/storage.ts",
+		"./logging": "./src/logging.ts",
+		"./http": "./src/http.ts",
+		"./daemon": "./src/daemon.ts",
+		"./rpc-client": "./src/rpc-client.ts",
+		"./version": "./src/version.ts"
+	},
+	"scripts": {
+		"test": "bun test",
+		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	},
+	"dependencies": {
+		"pino": "^10.3.1"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/DanyPops/daemon-kit.git"
+	},
+	"files": ["src", "README.md"]
+}
