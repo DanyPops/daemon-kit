@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/daemon-kit",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"description": "Shared substrate for supervised, authenticated, loopback-only Bun daemons: process lifecycle, SQLite storage bootstrap, structured logging, and an HTTP auth/RPC layer",
 	"license": "MIT",
 	"type": "module",

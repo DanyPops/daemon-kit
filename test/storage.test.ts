@@ -2,7 +2,32 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkpoint, openSqliteWithPragmas, optimize } from "../src/storage.ts";
+import { checkpoint, openSqliteWithPragmas, optimize, runMigrations, type Migration, type SqliteMigrationRunner } from "../src/storage.ts";
+
+/**
+ * A deliberately non-bun:sqlite-shaped fake runner (a plain in-memory statement log, no
+ * .query()/.transaction() combinator) -- proves runMigrations is reusable by a storage layer
+ * that could never satisfy openSqliteWithPragmas's old bun:sqlite-only signature, without
+ * modifying storage.ts itself.
+ */
+function fakeRunner(): SqliteMigrationRunner<string[]> & { statements: string[]; version: number } {
+	const statements: string[] = [];
+	const runner = {
+		statements,
+		raw: statements,
+		version: 0,
+		userVersion(): number {
+			return runner.version;
+		},
+		setUserVersion(version: number): void {
+			runner.version = version;
+		},
+		transaction(fn: () => void): void {
+			fn();
+		},
+	};
+	return runner;
+}
 
 describe("openSqliteWithPragmas", () => {
 	it("applies migrations in order and is safe to call again (no re-application)", () => {
@@ -124,5 +149,56 @@ describe("openSqliteWithPragmas", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("runMigrations (generic engine, no bun:sqlite dependency)", () => {
+	it("applies migrations in order against a non-bun:sqlite runner and advances its version marker", () => {
+		const runner = fakeRunner();
+		const migrations: Migration<string[]>[] = [
+			{ version: 1, up: (raw) => raw.push("create t") },
+			{ version: 2, up: (raw) => raw.push("alter t") },
+		];
+		runMigrations(runner, migrations);
+		expect(runner.statements).toEqual(["create t", "alter t"]);
+		expect(runner.version).toBe(2);
+	});
+
+	it("skips already-applied migrations (idempotent re-run)", () => {
+		const runner = fakeRunner();
+		runner.version = 1;
+		runMigrations(runner, [
+			{ version: 1, up: (raw) => raw.push("create t") },
+			{ version: 2, up: (raw) => raw.push("alter t") },
+		]);
+		expect(runner.statements).toEqual(["alter t"]); // version 1 was already applied, never re-run
+		expect(runner.version).toBe(2);
+	});
+
+	it("rejects a migration list with a gap", () => {
+		const runner = fakeRunner();
+		expect(() => runMigrations(runner, [{ version: 1, up: () => {} }, { version: 3, up: () => {} }])).toThrow(/migration gap/);
+	});
+
+	it("rejects a version newer than every supplied migration -- a downgrade, not silently opened", () => {
+		const runner = fakeRunner();
+		runner.version = 5;
+		expect(() => runMigrations(runner, [{ version: 1, up: () => {} }])).toThrow(/database schema 5 is newer than supported 1/);
+	});
+
+	it("wraps each migration in the runner's own transaction, not a bun:sqlite-specific one", () => {
+		const calls: string[] = [];
+		const runner: SqliteMigrationRunner<null> = {
+			raw: null,
+			userVersion: () => 0,
+			setUserVersion: () => calls.push("setUserVersion"),
+			transaction: (fn) => {
+				calls.push("transaction:start");
+				fn();
+				calls.push("transaction:end");
+			},
+		};
+		runMigrations(runner, [{ version: 1, up: () => calls.push("up") }]);
+		expect(calls).toEqual(["transaction:start", "up", "setUserVersion", "transaction:end"]);
 	});
 });
