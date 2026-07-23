@@ -64,11 +64,20 @@ export function startDaemon(options: StartDaemonOptions): RunningDaemon {
 	for (const task of options.maintenanceTasks ?? []) {
 		timers.push(
 			setInterval(() => {
-				try {
-					void task.run();
-				} catch (error) {
-					logger.error(`maintenance task failed: ${task.name}`, { error: error instanceof Error ? error.message : String(error) });
-				}
+				// `task.run` may return a Promise; awaiting inside this IIFE (rather than the historical
+				// `try { void task.run() } catch`) is load-bearing. A synchronous throw is caught either
+				// way, but a *rejected* Promise from an async run() would otherwise become an unhandled
+				// rejection outside this try/catch entirely -- Bun does not swallow that, it crashes the
+				// process (verified directly against a consuming daemon's own now-redundant guard against
+				// exactly this: jittor's reportMaintenanceFailure existed only because `void somePromise()`
+				// with no `.catch` was fatal). A daemon-kit consumer must get that protection for free.
+				void (async () => {
+					try {
+						await task.run();
+					} catch (error) {
+						logger.error(`maintenance task failed: ${task.name}`, { error: error instanceof Error ? error.message : String(error) });
+					}
+				})();
 			}, task.intervalMs),
 		);
 	}

@@ -57,6 +57,38 @@ describe("startDaemon", () => {
 		expect(errors.some((m) => m.includes("bad"))).toBe(true);
 	});
 
+	it("catches a rejected async maintenance task, not just a synchronous throw", async () => {
+		// Regression test: an async task.run() rejection must never become an unhandled promise
+		// rejection (Bun does not swallow those -- it crashes the process). A prior implementation
+		// only wrapped the (synchronous) call to task.run() in try/catch, which cannot observe a
+		// rejection surfacing later on the microtask queue.
+		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
+		const handlePath = join(dir, "handle.json");
+		let goodRuns = 0;
+		const errors: string[] = [];
+		const rejections: unknown[] = [];
+		const onUnhandledRejection = (reason: unknown) => rejections.push(reason);
+		process.on("unhandledRejection", onUnhandledRejection);
+		try {
+			daemon = startDaemon({
+				daemonLabel: "Acme",
+				handlePath,
+				buildApp: trivialApp,
+				logger: { debug() {}, info() {}, warn() {}, error: (msg) => errors.push(msg) },
+				maintenanceTasks: [
+					{ name: "good", intervalMs: 5, run: () => { goodRuns++; } },
+					{ name: "bad-async", intervalMs: 5, run: async () => { await Promise.resolve(); throw new Error("async boom"); } },
+				],
+			});
+			await new Promise((resolve) => setTimeout(resolve, 40));
+		} finally {
+			process.off("unhandledRejection", onUnhandledRejection);
+		}
+		expect(goodRuns).toBeGreaterThan(1);
+		expect(errors.some((m) => m.includes("bad-async"))).toBe(true);
+		expect(rejections).toEqual([]);
+	});
+
 	it("calls onShutdown exactly once during stop()", async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
