@@ -1,5 +1,6 @@
 /**
- * bun:sqlite bootstrap: pragmas + PRAGMA user_version migration runner.
+ * SQLite bootstrap: pragmas + PRAGMA user_version migration runner. Backed by
+ * bun:sqlite under Bun and node:sqlite everywhere else (see openRawDatabase).
  * Generalizes the skeleton that was identical across web-spider-daemon,
  * jittor, and papyrus's db.ts (down to the same header comment admitting
  * "Mirrors jittor/src/db.ts"), and closes a real gap in pi-packed's --
@@ -15,9 +16,20 @@
  * Db port is one concrete example that could not satisfy the old bun:sqlite-only
  * signature without this split.
  */
-import { Database, type DatabaseOptions } from "bun:sqlite";
+import type { Database, DatabaseOptions } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname } from "node:path";
+
+// bun:sqlite is imported as a type only above -- it's erased at compile time,
+// so this module loads fine under Node (e.g. as a pi extension dependency,
+// which runs in pi's own Node process, not Bun). The one place we need the
+// real constructor (openRawDatabase, below) resolves it lazily and only under
+// Bun; everywhere else falls back to node:sqlite. createRequire (rather than
+// a bare `require`) is what makes that resolution work from this "type":
+// "module" package regardless of which loader executes the .ts directly.
+const require = createRequire(import.meta.url);
+const isBun = typeof Bun !== "undefined";
 
 /** A single versioned schema migration. Generic over the raw handle its up() mutates directly -- bun:sqlite's Database by default, or another SQLite binding via a SqliteMigrationRunner<Handle> adapter. */
 export interface Migration<Handle = Database> {
@@ -29,8 +41,9 @@ export interface Migration<Handle = Database> {
 /**
  * Runtime-agnostic port runMigrations needs: read/write the schema version marker and wrap
  * one migration in a transaction. Implement this over any SQLite-shaped store to reuse the
- * generic engine below without modifying it -- see bunSqliteMigrationRunner for the reference
- * bun:sqlite adapter that openSqliteWithPragmas itself uses.
+ * generic engine below without modifying it -- see sqliteMigrationRunner for the reference
+ * adapter that openSqliteWithPragmas itself uses (works against both the bun:sqlite and
+ * node:sqlite handles openRawDatabase can return, since it only touches exec/query/transaction).
  */
 export interface SqliteMigrationRunner<Handle> {
 	/** The raw handle passed to each Migration's up(). */
@@ -77,7 +90,7 @@ export function runMigrations<Handle>(runner: SqliteMigrationRunner<Handle>, mig
 	}
 }
 
-function bunSqliteMigrationRunner(db: Database): SqliteMigrationRunner<Database> {
+function sqliteMigrationRunner(db: Database): SqliteMigrationRunner<Database> {
 	return {
 		raw: db,
 		userVersion: () => (db.query("PRAGMA user_version").get() as { user_version: number }).user_version,
@@ -87,20 +100,56 @@ function bunSqliteMigrationRunner(db: Database): SqliteMigrationRunner<Database>
 }
 
 /**
- * Opens (creating parent directories as needed) and migrates a bun:sqlite
- * database. Safe to call on every daemon start: migrations already applied
- * (per PRAGMA user_version) are skipped. Built on the generic runMigrations
- * engine via bunSqliteMigrationRunner -- see that engine's doc comment for how
- * a different SQLite binding reuses it without editing this function.
+ * Opens a SQLite database handle shaped like bun:sqlite's Database --
+ * exec(), query(sql).get/all/run(), and transaction(fn) -- which is the only
+ * surface this module and its known consumers use. Under Bun that's the real
+ * bun:sqlite Database. Everywhere else it's a thin wrapper over Node's
+ * built-in node:sqlite (stable enough here; emits an ExperimentalWarning on
+ * first use, harmless). `databaseOptions` is bun:sqlite's own option shape
+ * (create/strict/safeIntegers/...) and is passed through verbatim on Bun only
+ * -- it has no node:sqlite equivalent, so it's silently ignored on the Node
+ * path. No current caller sets it, so this hasn't needed to be solved yet;
+ * revisit if one does.
+ */
+function openRawDatabase(path: string, databaseOptions?: DatabaseOptions): Database {
+	if (isBun) {
+		const bunSqlite = require("bun:sqlite") as typeof import("bun:sqlite");
+		return new bunSqlite.Database(path, databaseOptions) as Database;
+	}
+	const nodeSqlite = require("node:sqlite") as typeof import("node:sqlite");
+	const raw = new nodeSqlite.DatabaseSync(path);
+	return {
+		exec: (sql: string) => raw.exec(sql),
+		query: (sql: string) => raw.prepare(sql),
+		transaction: (fn: () => void) => () => {
+			raw.exec("BEGIN");
+			try {
+				fn();
+				raw.exec("COMMIT");
+			} catch (err) {
+				raw.exec("ROLLBACK");
+				throw err;
+			}
+		},
+	} as unknown as Database;
+}
+
+/**
+ * Opens (creating parent directories as needed) and migrates a SQLite
+ * database -- see openRawDatabase for which runtime backs it. Safe to call on
+ * every daemon start: migrations already applied (per PRAGMA user_version)
+ * are skipped. Built on the generic runMigrations engine via
+ * sqliteMigrationRunner -- see that engine's doc comment for how a different
+ * SQLite binding reuses it without editing this function.
  */
 export function openSqliteWithPragmas(path: string, options: OpenSqliteOptions): Database {
 	if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-	const db = new Database(path, options.databaseOptions);
+	const db = openRawDatabase(path, options.databaseOptions);
 	db.exec("PRAGMA foreign_keys = ON");
 	db.exec(`PRAGMA busy_timeout = ${options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS}`);
 	if (path !== ":memory:") db.exec("PRAGMA journal_mode = WAL");
 
-	runMigrations(bunSqliteMigrationRunner(db), options.migrations);
+	runMigrations(sqliteMigrationRunner(db), options.migrations);
 
 	db.exec("PRAGMA optimize=0x10002");
 	return db;
