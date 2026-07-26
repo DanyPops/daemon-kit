@@ -1,6 +1,6 @@
 # @danypops/daemon-kit
 
-Shared substrate for supervised, authenticated, loopback-only Bun daemons.
+Shared daemon substrate and runtime-neutral Vehicle SDK for agent tools.
 
 ## Why this exists
 
@@ -27,7 +27,8 @@ a consumer only pulls in what it uses.
 | `rpc-client` | each daemon's `client.ts` | Typed `AuthenticatedRpcClient<Op, Inputs, Outputs>`: `call(op, input)`, `operations()`, `health()`, `ready()` over a single Bearer-authenticated dispatch endpoint. |
 | `version` | each daemon's `version.ts` | Reads the running version from the caller's own `package.json` -- the single release source of truth, never hand-duplicated or hardcoded. |
 | `pi-load-harness` | ad hoc, per-consumer jiti test setups (new) | Verifies a module loads under every path Pi's own extension loader can take (native ESM, jiti tryNative:false, jiti tryNative:true), so a Pi-facing module or its test suite can assert load-safety directly instead of discovering a loader failure in a live session. |
-| `pi-client` | each Pi extension's own retrying-client copy (lector's `lectorClient()`, web-spider's `callWebSpider()`, papyrus's `callService()`, pi-packed's `createNatives()`) and their independently-forked auto-start policy | `createRetryingClient()`: caches a connected client and retries exactly once against a freshly reconnected one on a stale-connection error (the daemon rebinds a random port on every restart). `connectWithPolicy()`: one explicit `autoStart` flag (default false, fail closed) instead of a silent per-daemon fork between failing closed and transparently spawning the daemon. Shipped pre-compiled via `bun run build:pi-client` -- the one module in this package meant to be imported directly by a Pi extension rather than by another Bun daemon. |
+| `pi-client` | each Pi extension's own retrying-client copy (lector's `lectorClient()`, web-spider's `callWebSpider()`, papyrus's `callService()`, pi-packed's `createNatives()`) and their independently-forked auto-start policy | `createRetryingClient()`: caches a connected client and retries exactly once against a freshly reconnected one on a stale-connection error (the daemon rebinds a random port on every restart). `connectWithPolicy()`: one explicit `autoStart` flag (default false, fail closed) instead of a silent per-daemon fork between failing closed and transparently spawning the daemon. Shipped pre-compiled via `bun run build:pi-client`. |
+| `vehicle` | agent hosts' and tool providers' local command runtimes | Runtime-neutral operation descriptors and schema codecs, executable bindings, unique provider ownership, `LocalVehicleClient`, structured failures, permissions, idempotency requirements, execution policy, deadlines, cancellation, progress, and request/response bounds. The serializable descriptor stays separate from executable code. Shipped pre-compiled via `bun run build:vehicle`. |
 
 ## What this deliberately does not include
 
@@ -40,7 +41,7 @@ a consumer only pulls in what it uses.
 
 ## Status
 
-Walking skeleton: every module has a real, tested implementation, and
-`test/walking-skeleton.test.ts` wires all of them into one working daemon
-end-to-end (bind, auth, migrate, serve an op, log a maintenance failure,
-shut down cleanly) before any of the four real daemons migrate onto it.
+The daemon walking skeleton in `test/walking-skeleton.test.ts` covers bind,
+auth, migration, dispatch, maintenance, and shutdown. `test/vehicle.test.ts`
+covers the runtime-neutral local Vehicle path before Alef removes its duplicate
+tool runtime or an HTTP transport is added.

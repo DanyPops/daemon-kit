@@ -62,8 +62,25 @@ describe("verifyLoadableUnderPi", () => {
 		expectAllPathsOk(await verifyLoadableUnderPi(SRC("daemon.ts")));
 	});
 
-	// pi-client.ts is the one module this package ships pre-compiled
-	// specifically for Pi extension consumption -- rebuild it fresh here
+	// Vehicle is shared by agent hosts and tool providers, so its published
+	// artifact must remain loadable through the same Node/jiti paths as pi-client.
+	describe("vehicle (the pre-compiled agent-tool runtime)", () => {
+		beforeAll(() => {
+			const result = spawnSync("bun", ["run", "build:vehicle"], { cwd: ROOT, stdio: "inherit" });
+			if (result.status !== 0) throw new Error("bun run build:vehicle failed -- see output above");
+		});
+
+		it("source (src/vehicle.ts) loads under every Pi extension load path", async () => {
+			expectAllPathsOk(await verifyLoadableUnderPi(SRC("vehicle.ts")));
+		});
+
+		it("the compiled artifact (dist/vehicle.js) loads under every Pi extension load path", async () => {
+			expectAllPathsOk(await verifyLoadableUnderPi(resolve(ROOT, "dist", "vehicle.js")));
+		});
+	});
+
+	// pi-client.ts is pre-compiled specifically for Pi extension consumption;
+	// rebuild it fresh here
 	// (rather than trusting a stale dist/ from a previous run) and prove the
 	// actual published artifact loads under every path, not just its source.
 	describe("pi-client (the pre-compiled Pi extension seam)", () => {

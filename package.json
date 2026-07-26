@@ -22,13 +22,18 @@
 		"./pi-client": {
 			"types": "./dist/pi-client.d.ts",
 			"default": "./dist/pi-client.js"
+		},
+		"./vehicle": {
+			"types": "./dist/vehicle.d.ts",
+			"default": "./dist/vehicle.js"
 		}
 	},
 	"scripts": {
 		"test": "bun test",
 		"typecheck": "tsc --noEmit",
 		"build:pi-client": "tsc -p tsconfig.pi-client.json",
-		"build": "bun run build:pi-client"
+		"build:vehicle": "tsc -p tsconfig.vehicle.json",
+		"build": "bun run build:pi-client && bun run build:vehicle"
 	},
 	"peerDependencies": {
 		"typescript": "^5"
@@ -38,6 +43,7 @@
 	},
 	"devDependencies": {
 		"@types/bun": "latest",
+		"@types/node": "^22.0.0",
 		"jiti": "^2.0.0"
 	},
 	"repository": {

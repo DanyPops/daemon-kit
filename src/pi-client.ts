@@ -15,7 +15,8 @@
  * Pi extension rather than by another Bun daemon, and Pi's jiti-based
  * extension loader has a real, demonstrated failure class importing a
  * dependency's raw, unbuilt TypeScript (see pi-load-harness.ts). This
- * module has no imports of its own -- fetch/Request/TypeError/AbortError
+ * module and the Vehicle SDK are the runtime-neutral precompiled surfaces.
+ * This module has no imports of its own -- fetch/Request/TypeError/AbortError
  * are all global -- so it is safe to load under Node without a Bun runtime.
  *
  * `connectWithPolicy` covers the other silent per-daemon fork found

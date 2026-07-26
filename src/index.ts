@@ -6,3 +6,4 @@ export * from "./session-identity.ts";
 export * from "./daemon.ts";
 export * from "./rpc-client.ts";
 export * from "./version.ts";
+export * from "./vehicle.ts";

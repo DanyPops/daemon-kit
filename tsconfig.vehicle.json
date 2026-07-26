@@ -1,0 +1,19 @@
+{
+	"compilerOptions": {
+		"lib": ["ESNext"],
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"target": "ES2022",
+		"types": ["node"],
+		"strict": true,
+		"skipLibCheck": true,
+		"declaration": true,
+		"outDir": "dist"
+	},
+	"include": [
+		"src/vehicle.ts",
+		"src/vehicle-contract.ts",
+		"src/vehicle-errors.ts",
+		"src/vehicle-runtime.ts"
+	]
+}
