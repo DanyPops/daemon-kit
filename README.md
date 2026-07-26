@@ -29,6 +29,31 @@ a consumer only pulls in what it uses.
 | `pi-load-harness` | ad hoc, per-consumer jiti test setups (new) | Verifies a module loads under every path Pi's own extension loader can take (native ESM, jiti tryNative:false, jiti tryNative:true), so a Pi-facing module or its test suite can assert load-safety directly instead of discovering a loader failure in a live session. |
 | `pi-client` | each Pi extension's own retrying-client copy (lector's `lectorClient()`, web-spider's `callWebSpider()`, papyrus's `callService()`, pi-packed's `createNatives()`) and their independently-forked auto-start policy | `createRetryingClient()`: caches a connected client and retries exactly once against a freshly reconnected one on a stale-connection error (the daemon rebinds a random port on every restart). `connectWithPolicy()`: one explicit `autoStart` flag (default false, fail closed) instead of a silent per-daemon fork between failing closed and transparently spawning the daemon. Shipped pre-compiled via `bun run build:pi-client`. |
 | `vehicle` | agent hosts' and tool providers' local command runtimes | Runtime-neutral operation descriptors and schema codecs, executable bindings, unique provider ownership, `LocalVehicleClient`, structured failures, permissions, idempotency requirements, execution policy, deadlines, cancellation, progress, and request/response bounds. The serializable descriptor stays separate from executable code. Shipped pre-compiled via `bun run build:vehicle`. |
+| `vehicle-pi` | hand-written `pi.registerTool()` wrappers around service clients | Projects a `VehicleClient` manifest into native Pi tools. It preserves exact operation versions, schemas, cancellation, Pi call/session identity, explicit permissions and principals, keyed idempotency, progress, and structured failures. Destructive and open-world operations require a real approval capability. Shipped pre-compiled via `bun run build:vehicle-pi`. |
+
+## Use a Vehicle from a Pi extension
+
+```ts
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { registerVehicleTools } from "@danypops/daemon-kit/vehicle-pi";
+import { createIssuesVehicleClient } from "./issues-client.js";
+
+export default async function (pi: ExtensionAPI) {
+  const client = createIssuesVehicleClient();
+  await registerVehicleTools(pi, client, {
+    permissions: ["issues:read"],
+    principal: { id: "pi-extension" },
+    closeClientOnSessionShutdown: true,
+  });
+}
+```
+
+The extension factory must be async because it reads the Vehicle manifest before
+Pi starts the session. Operation names are projected to Pi-safe names (`issues.search`
+becomes `issues_search`); multiple versions receive `_vN` suffixes. Existing or
+projected name collisions fail before any tool is registered. Supply
+`resolveInvocation` when an operation needs per-call revisions, delegated
+permissions, or an approval capability minted by an authority.
 
 ## What this deliberately does not include
 
@@ -43,5 +68,5 @@ a consumer only pulls in what it uses.
 
 The daemon walking skeleton in `test/walking-skeleton.test.ts` covers bind,
 auth, migration, dispatch, maintenance, and shutdown. `test/vehicle.test.ts`
-covers the runtime-neutral local Vehicle path before Alef removes its duplicate
-tool runtime or an HTTP transport is added.
+covers the runtime-neutral local Vehicle path; `test/vehicle-pi.test.ts` covers
+its Pi-native tool projection.

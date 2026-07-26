@@ -79,6 +79,22 @@ describe("verifyLoadableUnderPi", () => {
 		});
 	});
 
+	// Type-only Pi peers keep the host projection loadable before Pi initializes it.
+	describe("vehicle-pi (the pre-compiled Pi host projection)", () => {
+		beforeAll(() => {
+			const result = spawnSync("bun", ["run", "build:vehicle-pi"], { cwd: ROOT, stdio: "inherit" });
+			if (result.status !== 0) throw new Error("bun run build:vehicle-pi failed -- see output above");
+		});
+
+		it("source (src/vehicle-pi.ts) loads under every Pi extension load path", async () => {
+			expectAllPathsOk(await verifyLoadableUnderPi(SRC("vehicle-pi.ts")));
+		});
+
+		it("the compiled artifact (dist/vehicle-pi.js) loads under every Pi extension load path", async () => {
+			expectAllPathsOk(await verifyLoadableUnderPi(resolve(ROOT, "dist", "vehicle-pi.js")));
+		});
+	});
+
 	// pi-client.ts is pre-compiled specifically for Pi extension consumption;
 	// rebuild it fresh here
 	// (rather than trusting a stale dist/ from a previous run) and prove the

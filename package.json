@@ -26,6 +26,10 @@
 		"./vehicle": {
 			"types": "./dist/vehicle.d.ts",
 			"default": "./dist/vehicle.js"
+		},
+		"./vehicle-pi": {
+			"types": "./dist/vehicle-pi.d.ts",
+			"default": "./dist/vehicle-pi.js"
 		}
 	},
 	"scripts": {
@@ -33,18 +37,25 @@
 		"typecheck": "tsc --noEmit",
 		"build:pi-client": "tsc -p tsconfig.pi-client.json",
 		"build:vehicle": "tsc -p tsconfig.vehicle.json",
-		"build": "bun run build:pi-client && bun run build:vehicle"
+		"build:vehicle-pi": "tsc -p tsconfig.vehicle-pi.json",
+		"build": "bun run build:pi-client && bun run build:vehicle && bun run build:vehicle-pi"
 	},
 	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
 		"typescript": "^5"
+	},
+	"peerDependenciesMeta": {
+		"@earendil-works/pi-coding-agent": { "optional": true }
 	},
 	"dependencies": {
 		"pino": "^10.3.1"
 	},
 	"devDependencies": {
+		"@earendil-works/pi-coding-agent": "0.82.1",
 		"@types/bun": "latest",
 		"@types/node": "^22.0.0",
-		"jiti": "^2.0.0"
+		"jiti": "^2.0.0",
+		"typebox": "1.1.38"
 	},
 	"repository": {
 		"type": "git",

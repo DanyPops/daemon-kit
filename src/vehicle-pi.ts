@@ -1,0 +1,251 @@
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import type { TSchema } from "typebox";
+import type {
+	VehicleClient,
+	VehicleFailure,
+	VehicleInvocationOptions,
+	VehicleManifest,
+	VehicleOperationDescriptor,
+	VehiclePrincipal,
+} from "./vehicle.js";
+import { VehicleError } from "./vehicle.js";
+
+export interface PiVehicleIdentity {
+	readonly name: string;
+	readonly version: string;
+	readonly operation: string;
+	readonly operationVersion: number;
+	readonly toolCallId: string;
+}
+
+export interface PiVehicleToolDetails {
+	readonly vehicle: PiVehicleIdentity;
+	readonly output?: unknown;
+	readonly progress?: unknown;
+}
+
+export interface PiVehicleInvocationRequest {
+	readonly descriptor: VehicleOperationDescriptor;
+	readonly manifest: VehicleManifest;
+	readonly toolName: string;
+	readonly toolCallId: string;
+	readonly input: unknown;
+	readonly context: ExtensionContext;
+}
+
+export type PiVehicleInvocationResolver = (
+	request: PiVehicleInvocationRequest,
+) => VehicleInvocationOptions | Promise<VehicleInvocationOptions>;
+
+export interface RegisterVehicleToolsOptions {
+	readonly permissions?: readonly string[];
+	readonly principal?: VehiclePrincipal;
+	readonly resolveInvocation?: PiVehicleInvocationResolver;
+	readonly toolName?: (descriptor: VehicleOperationDescriptor, versioned: boolean) => string;
+	readonly closeClientOnSessionShutdown?: boolean;
+}
+
+export interface RegisteredPiVehicleTool {
+	readonly toolName: string;
+	readonly operationName: string;
+	readonly operationVersion: number;
+}
+
+export interface RegisteredPiVehicle {
+	readonly manifest: VehicleManifest;
+	readonly tools: readonly RegisteredPiVehicleTool[];
+}
+
+export class PiVehicleInvocationError extends Error {
+	constructor(readonly failure: VehicleFailure) {
+		super(`${failure.code}: ${failure.message}`);
+		this.name = "PiVehicleInvocationError";
+	}
+}
+
+const RISKY_EFFECTS = new Set<VehicleOperationDescriptor["effect"]>(["destructive", "open-world"]);
+
+function defaultToolName(descriptor: VehicleOperationDescriptor, versioned: boolean): string {
+	const base = descriptor.name
+		.toLowerCase()
+		.replace(/[^a-z0-9_]+/g, "_")
+		.replace(/_+/g, "_")
+		.replace(/^_+|_+$/g, "");
+	if (!base) throw new Error(`Vehicle operation ${descriptor.name}@${descriptor.version} has no valid Pi tool name`);
+	return versioned ? `${base}_v${descriptor.version}` : base;
+}
+
+function operationKey(descriptor: VehicleOperationDescriptor): string {
+	return `${descriptor.name}@${descriptor.version}`;
+}
+
+function displayLabel(descriptor: VehicleOperationDescriptor): string {
+	return descriptor.name
+		.split(/[^a-zA-Z0-9]+/)
+		.filter(Boolean)
+		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+		.join(" ");
+}
+
+function formatJson(value: unknown): string {
+	const text = JSON.stringify(value, null, 2);
+	if (text === undefined) throw new Error("Vehicle returned a non-JSON result");
+	return text;
+}
+
+function vehicleIdentity(
+	manifest: VehicleManifest,
+	descriptor: VehicleOperationDescriptor,
+	toolCallId: string,
+): PiVehicleIdentity {
+	return {
+		name: manifest.name,
+		version: manifest.version,
+		operation: descriptor.name,
+		operationVersion: descriptor.version,
+		toolCallId,
+	};
+}
+
+function sanitizedFailure(error: unknown): VehicleFailure {
+	if (error instanceof VehicleError) return error.toFailure();
+	if (error instanceof PiVehicleInvocationError) return error.failure;
+	return {
+		code: "vehicle-client-failed",
+		category: "unavailable",
+		message: error instanceof Error ? error.message : "Vehicle client invocation failed",
+		retryable: false,
+	};
+}
+
+function projectedNames(
+	manifest: VehicleManifest,
+	nameProjector: NonNullable<RegisterVehicleToolsOptions["toolName"]>,
+): Array<{ descriptor: VehicleOperationDescriptor; toolName: string }> {
+	const versionCounts = new Map<string, number>();
+	for (const descriptor of manifest.operations) {
+		versionCounts.set(descriptor.name, (versionCounts.get(descriptor.name) ?? 0) + 1);
+	}
+	return manifest.operations.map((descriptor) => ({
+		descriptor,
+		toolName: nameProjector(descriptor, (versionCounts.get(descriptor.name) ?? 0) > 1),
+	}));
+}
+
+function assertNamesAvailable(
+	pi: ExtensionAPI,
+	projected: readonly { descriptor: VehicleOperationDescriptor; toolName: string }[],
+): void {
+	const owners = new Map<string, string>();
+	for (const { descriptor, toolName } of projected) {
+		if (!/^[a-zA-Z0-9_-]+$/.test(toolName)) {
+			throw new Error(`Projected Pi tool name '${toolName}' for ${operationKey(descriptor)} is invalid`);
+		}
+		const owner = owners.get(toolName);
+		if (owner) {
+			throw new Error(`Pi tool name collision: ${owner} and ${operationKey(descriptor)} both project to '${toolName}'`);
+		}
+		owners.set(toolName, operationKey(descriptor));
+	}
+	const existing = new Set(pi.getAllTools().map((tool) => tool.name));
+	for (const { descriptor, toolName } of projected) {
+		if (existing.has(toolName)) {
+			throw new Error(`Pi tool '${toolName}' is already registered; refusing to override it with ${operationKey(descriptor)}`);
+		}
+	}
+}
+
+function createTool(
+	client: VehicleClient,
+	manifest: VehicleManifest,
+	descriptor: VehicleOperationDescriptor,
+	toolName: string,
+	options: RegisterVehicleToolsOptions,
+): ToolDefinition<TSchema, PiVehicleToolDetails> {
+	return {
+		name: toolName,
+		label: displayLabel(descriptor),
+		description: descriptor.description,
+		parameters: descriptor.inputSchema as TSchema,
+		async execute(toolCallId, input, signal, onUpdate, context) {
+			const identity = vehicleIdentity(manifest, descriptor, toolCallId);
+			const resolved = await options.resolveInvocation?.({
+				descriptor,
+				manifest,
+				toolName,
+				toolCallId,
+				input,
+				context,
+			});
+			if (RISKY_EFFECTS.has(descriptor.effect) && !resolved?.approvalCapability?.trim()) {
+				throw new PiVehicleInvocationError({
+					code: "approval-capability-required",
+					category: "authorization",
+					message: `${operationKey(descriptor)} requires an approval capability`,
+					retryable: false,
+				});
+			}
+
+			const reportProgress: VehicleInvocationOptions["onProgress"] = (progress) => {
+				onUpdate?.({
+					content: [{ type: "text", text: formatJson(progress) }],
+					details: { vehicle: identity, progress },
+				});
+			};
+			const invocation: VehicleInvocationOptions = {
+				permissions: options.permissions,
+				principal: options.principal,
+				...resolved,
+				operationId: toolCallId,
+				correlationId: resolved?.correlationId ?? context.sessionManager.getSessionId(),
+				signal,
+				onProgress: reportProgress,
+				...(descriptor.idempotency.mode === "keyed" && !resolved?.idempotencyKey
+					? { idempotencyKey: toolCallId }
+					: {}),
+			};
+
+			try {
+				const output = await client.invoke(descriptor.name, descriptor.version, input, invocation);
+				return {
+					content: [{ type: "text", text: formatJson(output) }],
+					details: { vehicle: identity, output },
+				};
+			} catch (error) {
+				throw new PiVehicleInvocationError(sanitizedFailure(error));
+			}
+		},
+	};
+}
+
+export async function registerVehicleTools(
+	pi: ExtensionAPI,
+	client: VehicleClient,
+	options: RegisterVehicleToolsOptions = {},
+): Promise<RegisteredPiVehicle> {
+	const manifest = await client.manifest();
+	const projected = projectedNames(manifest, options.toolName ?? defaultToolName);
+	assertNamesAvailable(pi, projected);
+
+	for (const { descriptor, toolName } of projected) {
+		pi.registerTool(createTool(client, manifest, descriptor, toolName, options));
+	}
+	if (options.closeClientOnSessionShutdown) {
+		pi.on("session_shutdown", async () => {
+			await client.close();
+		});
+	}
+
+	return {
+		manifest,
+		tools: projected.map(({ descriptor, toolName }) => ({
+			toolName,
+			operationName: descriptor.name,
+			operationVersion: descriptor.version,
+		})),
+	};
+}
