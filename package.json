@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/daemon-kit",
-	"version": "0.3.2",
+	"version": "0.4.0",
 	"description": "Shared substrate for supervised, authenticated, loopback-only Bun daemons: process lifecycle, SQLite storage bootstrap, structured logging, and an HTTP auth/RPC layer",
 	"license": "MIT",
 	"type": "module",
@@ -17,11 +17,18 @@
 		"./rpc-client": "./src/rpc-client.ts",
 		"./version": "./src/version.ts",
 		"./vault": "./src/vault.ts",
-		"./supervisor": "./src/supervisor.ts"
+		"./supervisor": "./src/supervisor.ts",
+		"./pi-load-harness": "./src/pi-load-harness.ts",
+		"./pi-client": {
+			"types": "./dist/pi-client.d.ts",
+			"default": "./dist/pi-client.js"
+		}
 	},
 	"scripts": {
 		"test": "bun test",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"build:pi-client": "tsc -p tsconfig.pi-client.json",
+		"build": "bun run build:pi-client"
 	},
 	"peerDependencies": {
 		"typescript": "^5"
@@ -30,11 +37,12 @@
 		"pino": "^10.3.1"
 	},
 	"devDependencies": {
-		"@types/bun": "latest"
+		"@types/bun": "latest",
+		"jiti": "^2.0.0"
 	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/DanyPops/daemon-kit.git"
 	},
-	"files": ["src", "README.md"]
+	"files": ["src", "dist", "README.md"]
 }
