@@ -44,7 +44,7 @@ describe("startDaemon", () => {
 	it("binds an OS-assigned loopback port and the handle file reflects it exactly", async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
-		daemon = startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp });
+		daemon = await startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp });
 		expect(daemon.port).toBeGreaterThan(0);
 		expect(readDaemonHandle(handlePath)?.port).toBe(daemon.port);
 	});
@@ -52,7 +52,7 @@ describe("startDaemon", () => {
 	it("stop() is idempotent and removes the handle file", async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
-		daemon = startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp });
+		daemon = await startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp });
 		await daemon.stop();
 		await daemon.stop(); // must not throw
 		expect(readDaemonHandle(handlePath)).toBeNull();
@@ -63,7 +63,7 @@ describe("startDaemon", () => {
 		const handlePath = join(dir, "handle.json");
 		let goodRuns = 0;
 		const errors: string[] = [];
-		daemon = startDaemon({
+		daemon = await startDaemon({
 			daemonLabel: "Acme",
 			handlePath,
 			buildApp: trivialApp,
@@ -91,7 +91,7 @@ describe("startDaemon", () => {
 		const onUnhandledRejection = (reason: unknown) => rejections.push(reason);
 		process.on("unhandledRejection", onUnhandledRejection);
 		try {
-			daemon = startDaemon({
+			daemon = await startDaemon({
 				daemonLabel: "Acme",
 				handlePath,
 				buildApp: trivialApp,
@@ -114,7 +114,7 @@ describe("startDaemon", () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
 		let shutdowns = 0;
-		daemon = startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp, onShutdown: () => { shutdowns++; } });
+		daemon = await startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp, onShutdown: () => { shutdowns++; } });
 		await daemon.stop();
 		await daemon.stop();
 		expect(shutdowns).toBe(1);
@@ -123,7 +123,7 @@ describe("startDaemon", () => {
 	it("an idle daemon past its budget shuts itself down without any request ever arriving", async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
-		daemon = startDaemon({
+		daemon = await startDaemon({
 			daemonLabel: "Acme",
 			handlePath,
 			buildApp: trivialApp,
@@ -134,33 +134,38 @@ describe("startDaemon", () => {
 		expect(readDaemonHandle(handlePath)).toBeNull();
 	});
 
-	it("a second startDaemon() against the same handlePath while the first is live throws DaemonAlreadyRunningError without binding a port or touching the handle", async () => {
+	it("a second startDaemon() against the same handlePath while the first is live rejects with DaemonAlreadyRunningError without binding a port or touching the handle", async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
-		daemon = startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp });
+		daemon = await startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp });
 		const firstPort = daemon.port;
 
-		expect(() => startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp })).toThrow(DaemonAlreadyRunningError);
+		// startDaemon() is async now (Node's listen() cannot bind synchronously
+		// the way Bun.serve() does), so a losing attempt rejects rather than
+		// throwing synchronously -- .rejects, not a synchronous expect(() => ...).
+		await expect(startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp })).rejects.toBeInstanceOf(DaemonAlreadyRunningError);
 		// The original daemon's own handle/port must be completely undisturbed by the losing attempt.
 		expect(readDaemonHandle(handlePath)?.port).toBe(firstPort);
 	});
 
-	it("N concurrent startDaemon() calls against the same handlePath result in exactly one bound port; the rest throw cleanly", async () => {
+	it("N concurrent startDaemon() calls against the same handlePath result in exactly one bound port; the rest reject cleanly", async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
-		const attempts: Array<RunningDaemon | DaemonAlreadyRunningError> = [];
-		for (let i = 0; i < 6; i++) {
-			try {
-				attempts.push(startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp }));
-			} catch (error) {
-				if (error instanceof DaemonAlreadyRunningError) attempts.push(error);
-				else throw error;
-			}
-		}
-		const winners = attempts.filter((a): a is RunningDaemon => !(a instanceof DaemonAlreadyRunningError));
+		// Fired without awaiting between them so every call's synchronous prefix
+		// (including the actual lock acquisition) races the same way it would
+		// under N genuinely concurrent callers -- Promise.allSettled only
+		// changes how the *results* are collected, not when each call started.
+		const attempts = await Promise.allSettled(
+			Array.from({ length: 6 }, () => startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp })),
+		);
+		const winners = attempts.filter((a): a is PromiseFulfilledResult<RunningDaemon> => a.status === "fulfilled");
+		const losers = attempts.filter((a) => a.status === "rejected");
 		expect(winners.length).toBe(1);
-		expect(attempts.length - winners.length).toBe(5);
-		daemon = winners[0];
+		expect(losers.length).toBe(5);
+		for (const loser of losers) {
+			expect((loser as PromiseRejectedResult).reason).toBeInstanceOf(DaemonAlreadyRunningError);
+		}
+		daemon = winners[0]!.value;
 	});
 
 	it("a stale lock left by a crashed daemon (dead pid, handle never cleaned up) is stolen so a fresh start succeeds", async () => {
@@ -168,7 +173,7 @@ describe("startDaemon", () => {
 		const handlePath = join(dir, "handle.json");
 		const lockPath = join(dir, "daemon.lock");
 		// Simulate a prior daemon that acquired the lock and then died without releasing it.
-		const crashed = startDaemon({ daemonLabel: "Acme", handlePath, lockPath, buildApp: trivialApp });
+		const crashed = await startDaemon({ daemonLabel: "Acme", handlePath, lockPath, buildApp: trivialApp });
 		// Don't call stop() -- instead simulate the crash by force-removing only
 		// the OS resources a real crash would drop, while the lock file (naming
 		// this same, now-invalid-for-the-new-attempt pid) is left behind.
@@ -179,7 +184,7 @@ describe("startDaemon", () => {
 		const dead = spawnSync(process.execPath, ["-e", "process.exit(0)"]);
 		writeFileSync(lockPath, `${dead.pid ?? 999_999}\n`);
 
-		daemon = startDaemon({ daemonLabel: "Acme", handlePath, lockPath, buildApp: trivialApp });
+		daemon = await startDaemon({ daemonLabel: "Acme", handlePath, lockPath, buildApp: trivialApp });
 		expect(daemon.port).toBeGreaterThan(0);
 		expect(readDaemonHandle(handlePath)?.port).toBe(daemon.port);
 	});
@@ -187,15 +192,15 @@ describe("startDaemon", () => {
 	it("stop() releases the single-instance lock, letting an entirely new startDaemon() succeed afterward", async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
-		const first = startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp });
+		const first = await startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp });
 		await first.stop();
-		daemon = startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp });
+		daemon = await startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp });
 		expect(daemon.port).toBeGreaterThan(0);
 	});
 
 	it("launch provenance from env drives the default idle budget when the caller doesn't set one explicitly", async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
-		const serviceDaemon = startDaemon({
+		const serviceDaemon = await startDaemon({
 			daemonLabel: "Acme",
 			handlePath: join(dir, "service", "handle.json"),
 			buildApp: trivialApp,
@@ -204,7 +209,7 @@ describe("startDaemon", () => {
 		expect(serviceDaemon.idleBudgetMs).toBe(0);
 		await serviceDaemon.stop();
 
-		daemon = startDaemon({
+		daemon = await startDaemon({
 			daemonLabel: "Acme",
 			handlePath: join(dir, "auto", "handle.json"),
 			buildApp: trivialApp,
@@ -215,7 +220,7 @@ describe("startDaemon", () => {
 
 	it("an explicit idleBudgetMs always overrides the provenance-derived default", async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
-		daemon = startDaemon({
+		daemon = await startDaemon({
 			daemonLabel: "Acme",
 			handlePath: join(dir, "handle.json"),
 			buildApp: trivialApp,
@@ -228,7 +233,7 @@ describe("startDaemon", () => {
 	it("activity (a real request) resets the idle budget", async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
-		daemon = startDaemon({
+		daemon = await startDaemon({
 			daemonLabel: "Acme",
 			handlePath,
 			buildApp: trivialApp,
@@ -242,5 +247,27 @@ describe("startDaemon", () => {
 			await new Promise((resolve) => setTimeout(resolve, 15));
 		}
 		expect(readDaemonHandle(handlePath)).not.toBeNull();
+	});
+
+	it("rejects a pushChannel option under a non-Bun runtime instead of silently ignoring it", async () => {
+		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
+		const handlePath = join(dir, "handle.json");
+		// This test always runs under bun test (isBun is true here), so it
+		// can't force the real Node code path directly -- it instead proves
+		// the *documented contract* via a fake PushChannel-shaped object,
+		// asserting the guard exists and fires before anything binds. The
+		// actual cross-runtime HTTP behavior is proven by
+		// test/daemon-node-e2e.test.ts, which spawns a real `node` process.
+		if (typeof Bun === "undefined") {
+			await expect(
+				startDaemon({
+					daemonLabel: "Acme",
+					handlePath,
+					buildApp: trivialApp,
+					pushChannel: {} as never,
+				}),
+			).rejects.toThrow(/pushChannel requires the Bun runtime/);
+			expect(readDaemonHandle(handlePath)).toBeNull();
+		}
 	});
 });

@@ -58,7 +58,7 @@ describe("walking skeleton — a real daemon built from every module", () => {
 		});
 
 		let maintenanceRuns = 0;
-		daemon = startDaemon({
+		daemon = await startDaemon({
 			daemonLabel: "Skeleton",
 			handlePath: paths.handle,
 			logger,
@@ -145,6 +145,11 @@ describe("walking skeleton — a real daemon built from every module", () => {
 				onListen: (info) => { listened = info; },
 				buildApp: () => ({ async fetch() { return errorResponse("not found", 404); } }),
 			});
+			// runDaemonProcess() is fire-and-forget by design (the real binary's
+			// entry point isn't awaited by its own caller), but its internals now
+			// await an async startDaemon() -- onListen fires on a later microtask,
+			// not synchronously the instant this call returns.
+			await new Promise((resolve) => setTimeout(resolve, 20));
 			expect(listened?.port).toBeGreaterThan(0);
 			process.emit("SIGTERM");
 			process.emit("SIGTERM"); // idempotent -- must not throw or double-stop

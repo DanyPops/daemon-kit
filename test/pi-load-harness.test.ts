@@ -58,7 +58,7 @@ describe("verifyLoadableUnderPi", () => {
 	// daemon.ts calls Bun.serve() inside startDaemon()/runDaemonProcess(),
 	// never at module top level, so importing it alone never reaches that
 	// call.
-	it("daemon.ts loads under every Pi extension load path (Bun.serve is deferred to a function call)", async () => {
+	it("daemon.ts loads under every Pi extension load path (binding a real listener, Bun or Node, is deferred to a function call)", async () => {
 		expectAllPathsOk(await verifyLoadableUnderPi(SRC("daemon.ts")));
 	});
 
