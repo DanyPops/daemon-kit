@@ -62,6 +62,14 @@ describe("verifyLoadableUnderPi", () => {
 		expectAllPathsOk(await verifyLoadableUnderPi(SRC("daemon.ts")));
 	});
 
+	// service.ts shells out via an injected runCommand rather than importing
+	// node:child_process itself, and has no third-party imports -- checked
+	// here for the same defensive-completeness reason as paths.ts/daemon.ts,
+	// even though it is a daemon-CLI concern, not a Pi-extension-facing one.
+	it("service.ts loads under every Pi extension load path", async () => {
+		expectAllPathsOk(await verifyLoadableUnderPi(SRC("service.ts")));
+	});
+
 	// Vehicle is shared by agent hosts and tool providers, so its published
 	// artifact must remain loadable through the same Node/jiti paths as pi-client.
 	describe("vehicle (the pre-compiled agent-tool runtime)", () => {

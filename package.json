@@ -18,6 +18,7 @@
 		"./version": "./src/version.ts",
 		"./vault": "./src/vault.ts",
 		"./supervisor": "./src/supervisor.ts",
+		"./service": "./src/service.ts",
 		"./pi-load-harness": "./src/pi-load-harness.ts",
 		"./pi-client": {
 			"types": "./dist/pi-client.d.ts",
