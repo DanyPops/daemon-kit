@@ -1,0 +1,217 @@
+/**
+ * A VehicleClient that talks to a remote daemon's vehicle-http-provider.ts
+ * over the same Bearer-authenticated loopback transport every daemon-kit
+ * daemon uses -- so a daemon-backed Pi extension can project a remote
+ * Vehicle through vehicle-pi.ts exactly as it would a LocalVehicleClient.
+ * Part of the compiled `vehicle` export (see vehicle.ts) so it stays
+ * jiti-safe under Pi's extension loader.
+ *
+ * Preserves LocalVehicleClient's semantics over the wire: every
+ * VehicleInvocationOptions field is sent in the request body; the deadline
+ * is converted to a relative deadlineMs (this client and the provider may
+ * have different clocks); cancellation aborts the underlying fetch AND
+ * best-effort notifies the provider's /vehicle/cancel so the operation
+ * itself stops, not just this client's wait on it; progress requires the
+ * SSE path (a plain JSON response can only carry a final result), so
+ * onProgress being set is what selects it; a VehicleError round-trips with
+ * its original code/category/details rather than becoming a generic HTTP
+ * error.
+ */
+import { randomUUID } from "node:crypto";
+import { VehicleError } from "./vehicle-errors.js";
+import type { VehicleFailureCategory, VehicleRecovery } from "./vehicle-errors.js";
+import type { JsonValue, VehicleClient, VehicleInvocationOptions, VehicleManifest } from "./vehicle-contract.js";
+
+const KNOWN_FAILURE_CATEGORIES: readonly VehicleFailureCategory[] = [
+	"validation",
+	"not_found",
+	"conflict",
+	"authorization",
+	"capacity",
+	"timeout",
+	"cancelled",
+	"unavailable",
+	"internal",
+];
+
+function parseFailureCategory(value: unknown): VehicleFailureCategory {
+	return typeof value === "string" && (KNOWN_FAILURE_CATEGORIES as readonly string[]).includes(value) ? (value as VehicleFailureCategory) : "internal";
+}
+
+export interface RemoteVehicleClientOptions {
+	/** e.g. "http://127.0.0.1:4242" -- no trailing slash. */
+	baseUrl: string;
+	token: string;
+	/** Defaults to the global fetch. Injectable for tests. */
+	fetch?: typeof globalThis.fetch;
+}
+
+interface FailurePayload {
+	code?: unknown;
+	category?: unknown;
+	message?: unknown;
+	retryable?: unknown;
+	retryAfterMs?: unknown;
+	recovery?: unknown;
+	details?: unknown;
+	operationId?: unknown;
+}
+
+export class RemoteVehicleClient implements VehicleClient {
+	private readonly fetchImpl: typeof globalThis.fetch;
+	private closed = false;
+
+	constructor(private readonly options: RemoteVehicleClientOptions) {
+		this.fetchImpl = options.fetch ?? globalThis.fetch;
+	}
+
+	async manifest(): Promise<VehicleManifest> {
+		this.ensureOpen();
+		const response = await this.fetchImpl(`${this.options.baseUrl}/vehicle/manifest`, {
+			headers: { authorization: `Bearer ${this.options.token}` },
+		});
+		if (!response.ok) throw await this.errorFromResponse(response);
+		return (await response.json()) as VehicleManifest;
+	}
+
+	async invoke<Output = unknown>(name: string, version: number, input: unknown, options: VehicleInvocationOptions = {}): Promise<Output> {
+		this.ensureOpen();
+		const operationId = options.operationId ?? randomUUID();
+		const body = {
+			name,
+			version,
+			input,
+			operationId,
+			correlationId: options.correlationId,
+			deadlineMs: options.deadline !== undefined ? Math.max(0, options.deadline - Date.now()) : undefined,
+			permissions: options.permissions,
+			principal: options.principal,
+			idempotencyKey: options.idempotencyKey,
+			expectedRevision: options.expectedRevision,
+			approvalCapability: options.approvalCapability,
+		};
+
+		const onAbort = options.signal ? (): void => void this.cancel(operationId) : undefined;
+		if (onAbort) options.signal!.addEventListener("abort", onAbort, { once: true });
+		try {
+			return options.onProgress
+				? await this.invokeStreaming<Output>(body, options)
+				: await this.invokePlain<Output>(body, options.signal);
+		} finally {
+			if (onAbort) options.signal!.removeEventListener("abort", onAbort);
+		}
+	}
+
+	/** Best-effort: notifies the provider to abort a still-in-flight operation. The local fetch's own AbortSignal already stops this client's wait regardless of whether this succeeds. */
+	async cancel(operationId: string): Promise<void> {
+		try {
+			await this.fetchImpl(`${this.options.baseUrl}/vehicle/cancel`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${this.options.token}`, "content-type": "application/json" },
+				body: JSON.stringify({ operationId }),
+			});
+		} catch {
+			// Best-effort only.
+		}
+	}
+
+	close(): Promise<void> {
+		this.closed = true;
+		return Promise.resolve();
+	}
+
+	private async invokePlain<Output>(body: Record<string, unknown>, signal: AbortSignal | undefined): Promise<Output> {
+		const response = await this.fetchImpl(`${this.options.baseUrl}/vehicle/invoke`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${this.options.token}`, "content-type": "application/json" },
+			body: JSON.stringify(body),
+			signal,
+		});
+		const payload = (await response.json()) as { output?: Output; error?: FailurePayload };
+		if (!response.ok) throw this.errorFromPayload(payload);
+		return payload.output as Output;
+	}
+
+	private async invokeStreaming<Output>(body: Record<string, unknown>, options: VehicleInvocationOptions): Promise<Output> {
+		const response = await this.fetchImpl(`${this.options.baseUrl}/vehicle/invoke`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${this.options.token}`, "content-type": "application/json", accept: "text/event-stream" },
+			body: JSON.stringify(body),
+			signal: options.signal,
+		});
+		if (!response.ok || !response.body) throw await this.errorFromResponse(response);
+
+		const reader = response.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = "";
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			let frameEnd = buffer.indexOf("\n\n");
+			while (frameEnd !== -1) {
+				const frame = buffer.slice(0, frameEnd);
+				buffer = buffer.slice(frameEnd + 2);
+				const parsed = parseSseFrame(frame);
+				if (parsed) {
+					const outcome = this.handleSseFrame<Output>(parsed, options);
+					if (outcome) return outcome.value;
+				}
+				frameEnd = buffer.indexOf("\n\n");
+			}
+		}
+		throw new Error("Vehicle HTTP invoke stream ended without a result or error frame");
+	}
+
+	private handleSseFrame<Output>(frame: { event: string; data: string }, options: VehicleInvocationOptions): { value: Output } | undefined {
+		if (frame.event === "progress") {
+			options.onProgress?.(JSON.parse(frame.data));
+			return undefined;
+		}
+		if (frame.event === "result") {
+			return { value: (JSON.parse(frame.data) as { output: Output }).output };
+		}
+		if (frame.event === "error") {
+			throw this.errorFromPayload({ error: JSON.parse(frame.data) as FailurePayload });
+		}
+		return undefined;
+	}
+
+	private ensureOpen(): void {
+		if (this.closed) throw new Error("Vehicle HTTP client is closed");
+	}
+
+	private errorFromPayload(payload: { error?: FailurePayload } | undefined): Error {
+		const failure = payload?.error;
+		if (failure && typeof failure.code === "string" && typeof failure.message === "string") {
+			const recovery =
+				failure.recovery && typeof failure.recovery === "object" && "message" in failure.recovery && typeof (failure.recovery as VehicleRecovery).message === "string"
+					? (failure.recovery as VehicleRecovery)
+					: undefined;
+			return new VehicleError(failure.code, failure.message, {
+				category: parseFailureCategory(failure.category),
+				retryable: failure.retryable === true,
+				retryAfterMs: typeof failure.retryAfterMs === "number" ? failure.retryAfterMs : undefined,
+				recovery,
+				details: failure.details as JsonValue | undefined,
+				operationId: typeof failure.operationId === "string" ? failure.operationId : undefined,
+			});
+		}
+		return new Error("Vehicle HTTP invoke failed");
+	}
+
+	private async errorFromResponse(response: Response): Promise<Error> {
+		const payload = (await response.json().catch(() => undefined)) as { error?: FailurePayload } | undefined;
+		return payload ? this.errorFromPayload(payload) : new Error(`Vehicle HTTP request failed with status ${response.status}`);
+	}
+}
+
+function parseSseFrame(frame: string): { event: string; data: string } | undefined {
+	let event: string | undefined;
+	const dataLines: string[] = [];
+	for (const line of frame.split("\n")) {
+		if (line.startsWith("event:")) event = line.slice("event:".length).trim();
+		else if (line.startsWith("data:")) dataLines.push(line.slice("data:".length).trim());
+	}
+	return event ? { event, data: dataLines.join("\n") } : undefined;
+}
