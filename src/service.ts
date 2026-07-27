@@ -84,10 +84,21 @@ function shellQuote(value: string): string {
 	return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
 }
 
+// Same literal string independently declared in daemon.ts and pi-client.ts
+// -- lets startDaemon() pick "always-on" (no idle shutdown) for a
+// service-launched daemon versus a bounded default for a lazily
+// auto-spawned one. Not imported across those modules: pi-client.ts is
+// compiled standalone with no imports of its own by design.
+const LAUNCH_PROVENANCE_ENV_VAR = "DAEMON_KIT_LAUNCH_PROVENANCE";
+
+function withServiceProvenance(env: Record<string, string> | undefined): Record<string, string> {
+	return { [LAUNCH_PROVENANCE_ENV_VAR]: "service", ...env };
+}
+
 /** Pure text generator -- a systemd --user unit that starts on login and stays a plain one-shot start, no Restart= (see the module doc comment for why). */
 export function generateSystemdUnit(spec: ServiceSpec): string {
 	const execLine = [spec.binPath, ...(spec.args ?? [])].map(shellQuote).join(" ");
-	const envLines = Object.entries(spec.env ?? {})
+	const envLines = Object.entries(withServiceProvenance(spec.env))
 		.map(([key, value]) => `Environment=${key}=${value}`)
 		.join("\n");
 	return [
@@ -109,7 +120,7 @@ export function generateSystemdUnit(spec: ServiceSpec): string {
 export function generateLaunchdPlist(spec: ServiceSpec): string {
 	const label = `com.danypops.${spec.name}`;
 	const programArguments = [spec.binPath, ...(spec.args ?? [])].map((value) => `\t\t<string>${escapeXml(value)}</string>`).join("\n");
-	const envEntries = Object.entries(spec.env ?? {});
+	const envEntries = Object.entries(withServiceProvenance(spec.env));
 	const envBlock = envEntries.length
 		? [
 				"\t<key>EnvironmentVariables</key>",
@@ -142,7 +153,22 @@ function escapeXml(value: string): string {
 	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-/** The exact command line stored in the Windows Run registry value. */
+/**
+ * The exact command line stored in the Windows Run registry value.
+ *
+ * Known gap: a Run key value is a plain command line with no mechanism to
+ * set environment variables for the process it launches, unlike systemd's
+ * `Environment=` or launchd's `EnvironmentVariables` dict -- so a
+ * Windows-service-installed daemon does not receive
+ * DAEMON_KIT_LAUNCH_PROVENANCE="service" the way Linux/macOS ones do. It
+ * reports "unknown" instead, which resolveIdleBudgetMs() (daemon.ts)
+ * already treats the same as "auto-spawn": a bounded idle-shutdown budget
+ * rather than always-on. In practice this is not a correctness gap --
+ * connectWithPolicy's auto-spawn resurrects the daemon on the next tool
+ * call regardless of platform -- just a real, documented asymmetry: a
+ * Windows service-installed daemon self-terminates and restarts on demand
+ * rather than staying warm indefinitely the way Linux/macOS ones do.
+ */
 export function windowsRunCommand(spec: ServiceSpec): string {
 	return [spec.binPath, ...(spec.args ?? [])].map((value) => `"${value}"`).join(" ");
 }

@@ -400,7 +400,14 @@ export function spawnDetachedDaemon(options: SpawnDetachedDaemonOptions): void {
 	const spawnOptions: SpawnPlatformOptions = {
 		detached: true,
 		stdio: "ignore",
-		env: options.env,
+		// "DAEMON_KIT_LAUNCH_PROVENANCE": lets startDaemon() (daemon.ts) pick a
+		// bounded default idle-shutdown budget for a lazily auto-spawned daemon
+		// instead of running forever by default -- a caller-supplied value in
+		// options.env always wins over this default. Declared as the same literal
+		// string independently in daemon.ts/service.ts rather than imported, since
+		// this module has no imports of its own by design (see the module doc
+		// comment).
+		env: { DAEMON_KIT_LAUNCH_PROVENANCE: "auto-spawn", ...options.env },
 		...(platform === "win32" ? { windowsHide: true } : {}),
 	};
 	options.spawn(options.binPath, options.args ?? [], spawnOptions);

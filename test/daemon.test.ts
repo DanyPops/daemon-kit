@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DaemonAlreadyRunningError, startDaemon, type RunningDaemon } from "../src/daemon.ts";
+import { DEFAULT_AUTO_SPAWN_IDLE_BUDGET_MS, DaemonAlreadyRunningError, readLaunchProvenance, resolveIdleBudgetMs, startDaemon, type RunningDaemon } from "../src/daemon.ts";
 import { readDaemonHandle } from "../src/paths.ts";
 
 let daemon: RunningDaemon | undefined;
@@ -19,6 +19,26 @@ afterEach(async () => {
 function trivialApp() {
 	return { async fetch() { return new Response("ok"); } };
 }
+
+describe("readLaunchProvenance / resolveIdleBudgetMs", () => {
+	it("reads a known provenance value from env, and \"unknown\" for anything else", () => {
+		expect(readLaunchProvenance({ DAEMON_KIT_LAUNCH_PROVENANCE: "auto-spawn" })).toBe("auto-spawn");
+		expect(readLaunchProvenance({ DAEMON_KIT_LAUNCH_PROVENANCE: "service" })).toBe("service");
+		expect(readLaunchProvenance({ DAEMON_KIT_LAUNCH_PROVENANCE: "garbage" })).toBe("unknown");
+		expect(readLaunchProvenance({})).toBe("unknown");
+	});
+
+	it("an explicit value always wins over provenance", () => {
+		expect(resolveIdleBudgetMs(999, "service")).toBe(999);
+		expect(resolveIdleBudgetMs(0, "auto-spawn")).toBe(0);
+	});
+
+	it("service provenance defaults to always-on (0); auto-spawn/unknown default to the bounded budget", () => {
+		expect(resolveIdleBudgetMs(undefined, "service")).toBe(0);
+		expect(resolveIdleBudgetMs(undefined, "auto-spawn")).toBe(DEFAULT_AUTO_SPAWN_IDLE_BUDGET_MS);
+		expect(resolveIdleBudgetMs(undefined, "unknown")).toBe(DEFAULT_AUTO_SPAWN_IDLE_BUDGET_MS);
+	});
+});
 
 describe("startDaemon", () => {
 	it("binds an OS-assigned loopback port and the handle file reflects it exactly", async () => {
@@ -171,6 +191,38 @@ describe("startDaemon", () => {
 		await first.stop();
 		daemon = startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp });
 		expect(daemon.port).toBeGreaterThan(0);
+	});
+
+	it("launch provenance from env drives the default idle budget when the caller doesn't set one explicitly", async () => {
+		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
+		const serviceDaemon = startDaemon({
+			daemonLabel: "Acme",
+			handlePath: join(dir, "service", "handle.json"),
+			buildApp: trivialApp,
+			env: { DAEMON_KIT_LAUNCH_PROVENANCE: "service" },
+		});
+		expect(serviceDaemon.idleBudgetMs).toBe(0);
+		await serviceDaemon.stop();
+
+		daemon = startDaemon({
+			daemonLabel: "Acme",
+			handlePath: join(dir, "auto", "handle.json"),
+			buildApp: trivialApp,
+			env: { DAEMON_KIT_LAUNCH_PROVENANCE: "auto-spawn" },
+		});
+		expect(daemon.idleBudgetMs).toBe(DEFAULT_AUTO_SPAWN_IDLE_BUDGET_MS);
+	});
+
+	it("an explicit idleBudgetMs always overrides the provenance-derived default", async () => {
+		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
+		daemon = startDaemon({
+			daemonLabel: "Acme",
+			handlePath: join(dir, "handle.json"),
+			buildApp: trivialApp,
+			env: { DAEMON_KIT_LAUNCH_PROVENANCE: "service" },
+			idleBudgetMs: 12_345,
+		});
+		expect(daemon.idleBudgetMs).toBe(12_345);
 	});
 
 	it("activity (a real request) resets the idle budget", async () => {

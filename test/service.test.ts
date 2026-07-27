@@ -64,6 +64,10 @@ describe("generateSystemdUnit", () => {
 		expect(unit).toContain("Description=Acme Daemon");
 		expect(unit).not.toContain("Restart=");
 	});
+
+	it("declares DAEMON_KIT_LAUNCH_PROVENANCE=service so startDaemon() defaults to always-on, not the bounded auto-spawn budget", () => {
+		expect(generateSystemdUnit(SPEC)).toContain("Environment=DAEMON_KIT_LAUNCH_PROVENANCE=service");
+	});
 });
 
 describe("generateLaunchdPlist", () => {
@@ -77,6 +81,12 @@ describe("generateLaunchdPlist", () => {
 		expect(plist).toContain("<string>serve</string>");
 		expect(plist).toContain("ACME_TOKEN");
 		expect(plist).not.toContain("KeepAlive");
+	});
+
+	it("declares DAEMON_KIT_LAUNCH_PROVENANCE=service so startDaemon() defaults to always-on", () => {
+		const plist = generateLaunchdPlist(SPEC);
+		expect(plist).toContain("<key>DAEMON_KIT_LAUNCH_PROVENANCE</key>");
+		expect(plist).toContain("<string>service</string>");
 	});
 
 	it("escapes XML-significant characters in values", () => {

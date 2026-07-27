@@ -290,7 +290,7 @@ describe("spawnDetachedDaemon", () => {
 		expect(captured?.detached).toBe(true);
 	});
 
-	it("forwards the provided env through to spawn", () => {
+	it("forwards the provided env through to spawn, alongside the default auto-spawn launch provenance", () => {
 		let capturedEnv: Record<string, string | undefined> | undefined;
 		spawnDetachedDaemon({
 			binPath: "/cli.ts",
@@ -300,7 +300,20 @@ describe("spawnDetachedDaemon", () => {
 				capturedEnv = options.env;
 			},
 		});
-		expect(capturedEnv).toEqual({ FOO: "bar" });
+		expect(capturedEnv).toEqual({ DAEMON_KIT_LAUNCH_PROVENANCE: "auto-spawn", FOO: "bar" });
+	});
+
+	it("lets a caller-supplied DAEMON_KIT_LAUNCH_PROVENANCE override the auto-spawn default", () => {
+		let capturedEnv: Record<string, string | undefined> | undefined;
+		spawnDetachedDaemon({
+			binPath: "/cli.ts",
+			platform: "linux",
+			env: { DAEMON_KIT_LAUNCH_PROVENANCE: "service" },
+			spawn: (_command, _args, options) => {
+				capturedEnv = options.env;
+			},
+		});
+		expect(capturedEnv?.DAEMON_KIT_LAUNCH_PROVENANCE).toBe("service");
 	});
 
 	it("defaults args to an empty array when omitted", () => {

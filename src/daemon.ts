@@ -41,7 +41,42 @@ export interface MaintenanceTask {
 export interface RunningDaemon {
 	host: string;
 	port: number;
+	/** The idle-shutdown budget actually in effect (0 means disabled) -- exposed so a caller/test can observe the provenance-derived default without waiting it out. */
+	idleBudgetMs: number;
 	stop(): Promise<void>;
+}
+
+/**
+ * Read by startDaemon() to pick a default idle-shutdown policy when the
+ * caller doesn't set idleBudgetMs explicitly. Set by the two things that
+ * actually start a daemon process: spawnDetachedDaemon() (pi-client.ts)
+ * sets "auto-spawn" on a lazily-started child; the generated systemd
+ * unit/launchd plist/Windows Run command (service.ts) sets "service". A
+ * daemon started neither way (plain `bun cli.ts serve` during local
+ * development) reports "unknown" and is treated the same as "auto-spawn" --
+ * the safer default is to assume nothing should run forever unless a real
+ * installed service said so.
+ *
+ * Both this file and pi-client.ts/service.ts declare this same string
+ * independently rather than importing a shared constant -- pi-client.ts is
+ * compiled standalone with no imports of its own by design (see its module
+ * doc comment), so it cannot depend on this module.
+ */
+export const LAUNCH_PROVENANCE_ENV_VAR = "DAEMON_KIT_LAUNCH_PROVENANCE";
+export type LaunchProvenance = "auto-spawn" | "service" | "unknown";
+
+export function readLaunchProvenance(env: Record<string, string | undefined> = process.env): LaunchProvenance {
+	const value = env[LAUNCH_PROVENANCE_ENV_VAR];
+	return value === "auto-spawn" || value === "service" ? value : "unknown";
+}
+
+/** Applied to an auto-spawned or provenance-unknown daemon when the caller doesn't set idleBudgetMs explicitly -- long enough to survive a normal idle gap between tool calls, short enough not to leak a process from one stray call for days. */
+export const DEFAULT_AUTO_SPAWN_IDLE_BUDGET_MS = 30 * 60_000;
+
+/** Pure resolution rule, exported for direct testing without waiting out a real idle window. Explicit always wins; "service" provenance means always-on (0/disabled); anything else gets the bounded auto-spawn default. */
+export function resolveIdleBudgetMs(explicit: number | undefined, provenance: LaunchProvenance): number {
+	if (explicit !== undefined) return explicit;
+	return provenance === "service" ? 0 : DEFAULT_AUTO_SPAWN_IDLE_BUDGET_MS;
 }
 
 export interface StartDaemonOptions {
@@ -54,10 +89,16 @@ export interface StartDaemonOptions {
 	/** Defaults to a no-op logger; maintenance-task failures are otherwise silently lost, which was a real gap in two of the four original daemons. */
 	logger?: Logger;
 	maintenanceTasks?: MaintenanceTask[];
-	/** 0 or undefined disables the idle watchdog -- the default for always-on systemd services. */
+	/**
+	 * Explicit override always wins. When omitted, the default is chosen from
+	 * LAUNCH_PROVENANCE_ENV_VAR: "service" gets no idle shutdown (0, always-on);
+	 * "auto-spawn" or "unknown" get DEFAULT_AUTO_SPAWN_IDLE_BUDGET_MS.
+	 */
 	idleBudgetMs?: number;
 	idleTickMs?: number;
 	onShutdown?: () => void | Promise<void>;
+	/** Defaults to process.env. Injectable for tests. */
+	env?: Record<string, string | undefined>;
 }
 
 const NOOP_LOGGER: Logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -110,9 +151,12 @@ export function startDaemon(options: StartDaemonOptions): RunningDaemon {
 		);
 	}
 
+	const provenance = readLaunchProvenance(options.env ?? process.env);
+	const effectiveIdleBudgetMs = resolveIdleBudgetMs(options.idleBudgetMs, provenance);
+
 	let idleTimer: ReturnType<typeof setInterval> | undefined;
-	if (options.idleBudgetMs && options.idleBudgetMs > 0) {
-		const budget = options.idleBudgetMs;
+	if (effectiveIdleBudgetMs > 0) {
+		const budget = effectiveIdleBudgetMs;
 		idleTimer = setInterval(() => {
 			if (Date.now() - lastActive > budget) {
 				logger.info("idle budget exceeded, shutting down", { idleBudgetMs: budget });
@@ -133,7 +177,7 @@ export function startDaemon(options: StartDaemonOptions): RunningDaemon {
 		await server.stop(true);
 	};
 
-	return { host: LOOPBACK_HOST, port: server.port, stop };
+	return { host: LOOPBACK_HOST, port: server.port, idleBudgetMs: effectiveIdleBudgetMs, stop };
 }
 
 export interface RunDaemonProcessOptions extends StartDaemonOptions {
