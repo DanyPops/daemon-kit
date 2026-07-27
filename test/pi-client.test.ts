@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { connectWithPolicy, connectWithVersionCheck, createRetryingClient, type DaemonHandleLike, isLikelyStaleConnectionError, spawnDetachedDaemon, type SpawnPlatformOptions } from "../src/pi-client.ts";
+import { connectWithPolicy, connectWithVersionCheck, createRetryingClient, daemonStatus, type DaemonHandleLike, isLikelyStaleConnectionError, spawnDetachedDaemon, type SpawnPlatformOptions } from "../src/pi-client.ts";
 
 class FakeClient {
 	constructor(public readonly id: number) {}
@@ -313,6 +313,64 @@ describe("spawnDetachedDaemon", () => {
 			},
 		});
 		expect(capturedArgs).toEqual([]);
+	});
+});
+
+describe("daemonStatus", () => {
+	it("reports not-running when no handle exists", async () => {
+		const status = await daemonStatus<DaemonHandleLike, FakeClient>({
+			readHandle: () => null,
+			buildClient: (handle) => new FakeClient(handle.port),
+		});
+		expect(status.state).toBe("not-running");
+		expect(status.summary).toBe("not running");
+	});
+
+	it("reports stale-handle when the handle's pid is not actually alive", async () => {
+		const status = await daemonStatus<DaemonHandleLike, FakeClient>({
+			readHandle: () => FAKE_HANDLE,
+			buildClient: (handle) => new FakeClient(handle.port),
+			isPidAlive: () => false,
+		});
+		expect(status.state).toBe("stale-handle");
+		expect(status.pid).toBe(FAKE_HANDLE.pid);
+		expect(status.summary).toContain("stale handle");
+	});
+
+	it("reports running with version and uptime when the pid is alive and the client responds", async () => {
+		const status = await daemonStatus<DaemonHandleLike, VersionedFakeClient>({
+			readHandle: () => FAKE_HANDLE,
+			buildClient: (handle) => ({ port: handle.port, version: "1.2.0" }),
+			readVersion: async (c) => c.version,
+			isPidAlive: () => true,
+			startedAtMs: () => Date.now() - 5_000,
+		});
+		expect(status.state).toBe("running");
+		expect(status.version).toBe("1.2.0");
+		expect(status.uptimeMs).toBeGreaterThanOrEqual(5_000);
+		expect(status.summary).toContain("v1.2.0");
+	});
+
+	it("reports unreachable when the pid is alive but the client/version read fails", async () => {
+		const status = await daemonStatus<DaemonHandleLike, FakeClient>({
+			readHandle: () => FAKE_HANDLE,
+			buildClient: () => {
+				throw new Error("connection refused");
+			},
+			isPidAlive: () => true,
+		});
+		expect(status.state).toBe("unreachable");
+		expect(status.lastError).toBe("connection refused");
+		expect(status.summary).toContain("not responding");
+	});
+
+	it("includes breaker state inline without needing a separate call", async () => {
+		const status = await daemonStatus<DaemonHandleLike, FakeClient>({
+			readHandle: () => null,
+			buildClient: (handle) => new FakeClient(handle.port),
+			breaker: () => ({ open: true, consecutiveFailures: 3, openedAt: 12345 }),
+		});
+		expect(status.breaker).toEqual({ open: true, consecutiveFailures: 3, openedAt: 12345 });
 	});
 });
 
