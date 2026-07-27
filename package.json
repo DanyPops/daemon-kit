@@ -45,7 +45,9 @@
 		"typescript": "^5"
 	},
 	"peerDependenciesMeta": {
-		"@earendil-works/pi-coding-agent": { "optional": true }
+		"@earendil-works/pi-coding-agent": {
+			"optional": true
+		}
 	},
 	"dependencies": {
 		"pino": "^10.3.1"
@@ -54,6 +56,7 @@
 		"@earendil-works/pi-coding-agent": "0.82.1",
 		"@types/bun": "latest",
 		"@types/node": "^22.0.0",
+		"env-paths": "^4",
 		"jiti": "^2.0.0",
 		"typebox": "1.1.38"
 	},

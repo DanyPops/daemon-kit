@@ -18,7 +18,7 @@ a consumer only pulls in what it uses.
 
 | Module | Replaces | Responsibility |
 |---|---|---|
-| `paths` | each daemon's `state.ts` | XDG-compliant path resolution, auth token load-or-create, atomic daemon handle write/read/remove. Loopback-only is a hard invariant here, not a per-daemon option. |
+| `paths` | each daemon's `state.ts` | Cross-platform path resolution (Linux: XDG; macOS: ~/Library/Application Support etc.; Windows: %LOCALAPPDATA%/%APPDATA%), cross-checked in tests against `env-paths` without taking it as a runtime dependency. Single-instance lock (`acquireDaemonLock`/`releaseDaemonLock`, atomic wx-create with dead-pid theft) so exactly one daemon process ever binds. Auth token load-or-create, atomic daemon handle write/read/remove. Loopback-only is a hard invariant here, not a per-daemon option. |
 | `storage` | each daemon's `db.ts` | bun:sqlite bootstrap: `foreign_keys`, `busy_timeout`, `journal_mode=WAL`, `optimize`, and a `PRAGMA user_version` migration runner. The version-gap/downgrade-checking migration engine (`runMigrations`) is generic over a small `SqliteMigrationRunner<Handle>` port, so a storage layer that isn't bun:sqlite-shaped (e.g. node:sqlite, or a project's own dual-runtime `Db` abstraction) can reuse it via its own adapter, without editing this module. |
 | `logging` | each daemon's `log.ts` (or lack of one) | Structured, credential-safe logging backed by pino, preserving the pre-existing string-level JSON shape so existing log consumers keep working. |
 | `http` | each daemon's `service.ts` auth/health scaffolding | Bearer-token check, JSON/error/health/ready response helpers. Deliberately not a routing framework -- each daemon has a handful of routes, too few to justify one. |

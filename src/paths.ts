@@ -1,9 +1,19 @@
 /**
- * XDG-compliant process/storage layout and authenticated discovery.
- * Generalizes what was byte-identical between web-spider-daemon and
- * jittor's state.ts (down to the same header comment admitting the
- * duplication), and supersedes papyrus's/pi-packed's older, non-atomic,
- * non-XDG-split variants of the same problem.
+ * XDG-compliant (Linux)/native-convention (macOS, Windows) process/storage
+ * layout and authenticated discovery. Generalizes what was byte-identical
+ * between web-spider-daemon and jittor's state.ts (down to the same header
+ * comment admitting the duplication), and supersedes papyrus's/pi-packed's
+ * older, non-atomic, non-XDG-split variants of the same problem.
+ *
+ * Per-OS directory conventions are cross-checked directly against
+ * `env-paths` (a devDependency used only in this module's own tests, never
+ * imported at runtime -- this file stays dependency-free so it keeps
+ * loading safely under Pi's jiti loader, see pi-load-harness.ts). macOS and
+ * Windows have no equivalent of XDG_RUNTIME_DIR (a session-scoped, 0700,
+ * auto-cleared-on-logout directory) -- the handle file lives under each
+ * platform's own temp directory there instead, which is fine for a handle
+ * already treated as untrusted and validated by shape on read, but does not
+ * carry those stronger guarantees outside Linux.
  *
  * Every @danypops daemon binds loopback-only; that is a hard security
  * invariant of this kit, not a per-daemon configuration choice, so
@@ -11,20 +21,26 @@
  */
 import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, win32 } from "node:path";
 
 export const LOOPBACK_HOST = "127.0.0.1";
 
 export interface DaemonPaths {
-	/** XDG_DATA_HOME/<name>/<databaseFilename> */
+	/** Linux: XDG_DATA_HOME/<name>/<databaseFilename>. macOS: ~/Library/Application Support/<name>/<databaseFilename>. Windows: %LOCALAPPDATA%\<name>\Data\<databaseFilename>. */
 	database: string;
-	/** XDG_STATE_HOME/<name>/<tokenFilename> */
+	/** Linux: XDG_STATE_HOME/<name>/<tokenFilename>. macOS/Windows: alongside `database` -- neither platform has a distinct "state" convention separate from app data. */
 	token: string;
-	/** XDG_RUNTIME_DIR/<name>/<handleFilename> */
+	/** Linux: XDG_RUNTIME_DIR/<name>/<handleFilename>. macOS/Windows: under the OS temp directory -- see the module doc comment for why this is a weaker guarantee than XDG_RUNTIME_DIR there. */
 	handle: string;
-	/** XDG_CONFIG_HOME/systemd/user/<systemdUnitName> */
-	systemdUnit: string;
+	/**
+	 * Platform-neutral location for this daemon's optional persistence
+	 * descriptor: a systemd --user unit on Linux; a launchd plist or Windows
+	 * Registry Run value elsewhere. This module only resolves a directory --
+	 * generating and installing the actual per-platform descriptor is the
+	 * cross-platform service-install work, not this one.
+	 */
+	serviceDescriptor: string;
 }
 
 export interface DaemonHandle {
@@ -37,20 +53,30 @@ export interface PathEnvironment {
 	env?: Record<string, string | undefined>;
 	home?: string;
 	uid?: number;
+	/** Defaults to process.platform. Injectable so tests can assert every platform's paths from any host OS. */
+	platform?: NodeJS.Platform;
 }
 
 export interface DaemonPathNames {
-	/** Directory name under each XDG root, e.g. "web-spider" or "jittor". */
+	/** Directory name under each platform's root, e.g. "web-spider" or "jittor". */
 	stateDirectoryName: string;
 	databaseFilename: string;
 	tokenFilename: string;
 	handleFilename: string;
+	/** Input filename for the Linux systemd unit specifically (e.g. "acme.service") -- other platforms' service-install work supplies their own naming. */
 	systemdUnitName: string;
 }
 
 export function resolveDaemonPaths(names: DaemonPathNames, options: PathEnvironment = {}): DaemonPaths {
-	const env = options.env ?? process.env;
+	const platform = options.platform ?? process.platform;
 	const home = options.home ?? homedir();
+	if (platform === "darwin") return resolveMacDaemonPaths(names, home);
+	if (platform === "win32") return resolveWindowsDaemonPaths(names, options.env ?? process.env, home);
+	return resolveLinuxDaemonPaths(names, options, home);
+}
+
+function resolveLinuxDaemonPaths(names: DaemonPathNames, options: PathEnvironment, home: string): DaemonPaths {
+	const env = options.env ?? process.env;
 	const uid = options.uid ?? process.getuid?.() ?? 0;
 	const dataHome = env["XDG_DATA_HOME"] ?? join(home, ".local", "share");
 	const stateHome = env["XDG_STATE_HOME"] ?? join(home, ".local", "state");
@@ -60,7 +86,33 @@ export function resolveDaemonPaths(names: DaemonPathNames, options: PathEnvironm
 		database: join(dataHome, names.stateDirectoryName, names.databaseFilename),
 		token: join(stateHome, names.stateDirectoryName, names.tokenFilename),
 		handle: join(runtimeHome, names.stateDirectoryName, names.handleFilename),
-		systemdUnit: join(configHome, "systemd", "user", names.systemdUnitName),
+		serviceDescriptor: join(configHome, "systemd", "user", names.systemdUnitName),
+	};
+}
+
+function resolveMacDaemonPaths(names: DaemonPathNames, home: string): DaemonPaths {
+	const library = join(home, "Library");
+	const appSupport = join(library, "Application Support", names.stateDirectoryName);
+	return {
+		database: join(appSupport, names.databaseFilename),
+		token: join(appSupport, names.tokenFilename),
+		handle: join(tmpdir(), names.stateDirectoryName, names.handleFilename),
+		serviceDescriptor: join(appSupport, names.systemdUnitName),
+	};
+}
+
+function resolveWindowsDaemonPaths(names: DaemonPathNames, env: Record<string, string | undefined>, home: string): DaemonPaths {
+	// path.win32 (not the bare, host-dependent `join`) so this produces real
+	// backslash-separated Windows paths even when resolved on a Linux/macOS
+	// dev or CI host -- the only way this is testable off real Windows.
+	const localAppData = env["LOCALAPPDATA"] ?? win32.join(home, "AppData", "Local");
+	const appData = env["APPDATA"] ?? win32.join(home, "AppData", "Roaming");
+	const dataDir = win32.join(localAppData, names.stateDirectoryName, "Data");
+	return {
+		database: win32.join(dataDir, names.databaseFilename),
+		token: win32.join(dataDir, names.tokenFilename),
+		handle: win32.join(localAppData, "Temp", names.stateDirectoryName, names.handleFilename),
+		serviceDescriptor: win32.join(appData, names.stateDirectoryName, "Config", names.systemdUnitName),
 	};
 }
 

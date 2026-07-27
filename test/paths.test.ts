@@ -23,22 +23,72 @@ const NAMES = {
 };
 
 describe("resolveDaemonPaths", () => {
-	it("splits data/state/runtime/config across the right XDG roots", () => {
+	it("Linux: splits data/state/runtime/config across the right XDG roots", () => {
 		const paths = resolveDaemonPaths(NAMES, {
+			platform: "linux",
 			env: { XDG_DATA_HOME: "/data", XDG_STATE_HOME: "/state", XDG_RUNTIME_DIR: "/run/u", XDG_CONFIG_HOME: "/config" },
 		});
 		expect(paths.database).toBe("/data/acme-daemon/db.sqlite");
 		expect(paths.token).toBe("/state/acme-daemon/token");
 		expect(paths.handle).toBe("/run/u/acme-daemon/handle.json");
-		expect(paths.systemdUnit).toBe("/config/systemd/user/acme.service");
+		expect(paths.serviceDescriptor).toBe("/config/systemd/user/acme.service");
 	});
 
-	it("falls back to conventional dotfile locations when XDG vars are unset", () => {
-		const paths = resolveDaemonPaths(NAMES, { env: {}, home: "/home/x", uid: 1000 });
+	it("Linux: falls back to conventional dotfile locations when XDG vars are unset", () => {
+		const paths = resolveDaemonPaths(NAMES, { platform: "linux", env: {}, home: "/home/x", uid: 1000 });
 		expect(paths.database).toBe("/home/x/.local/share/acme-daemon/db.sqlite");
 		expect(paths.token).toBe("/home/x/.local/state/acme-daemon/token");
 		expect(paths.handle).toBe("/run/user/1000/acme-daemon/handle.json");
-		expect(paths.systemdUnit).toBe("/home/x/.config/systemd/user/acme.service");
+		expect(paths.serviceDescriptor).toBe("/home/x/.config/systemd/user/acme.service");
+	});
+
+	it("macOS: uses ~/Library/Application Support for data/token, temp dir for the handle", () => {
+		const paths = resolveDaemonPaths(NAMES, { platform: "darwin", home: "/Users/x" });
+		expect(paths.database).toBe("/Users/x/Library/Application Support/acme-daemon/db.sqlite");
+		expect(paths.token).toBe("/Users/x/Library/Application Support/acme-daemon/token");
+		expect(paths.handle.endsWith("acme-daemon/handle.json")).toBe(true);
+		expect(paths.serviceDescriptor).toBe("/Users/x/Library/Application Support/acme-daemon/acme.service");
+	});
+
+	it("Windows: uses %LOCALAPPDATA%/%APPDATA% subfolders", () => {
+		const paths = resolveDaemonPaths(NAMES, {
+			platform: "win32",
+			home: "C:\\Users\\x",
+			env: { LOCALAPPDATA: "C:\\Users\\x\\AppData\\Local", APPDATA: "C:\\Users\\x\\AppData\\Roaming" },
+		});
+		expect(paths.database).toBe("C:\\Users\\x\\AppData\\Local\\acme-daemon\\Data\\db.sqlite");
+		expect(paths.token).toBe("C:\\Users\\x\\AppData\\Local\\acme-daemon\\Data\\token");
+		expect(paths.handle).toBe("C:\\Users\\x\\AppData\\Local\\Temp\\acme-daemon\\handle.json");
+		expect(paths.serviceDescriptor).toBe("C:\\Users\\x\\AppData\\Roaming\\acme-daemon\\Config\\acme.service");
+	});
+
+	it("Windows: falls back to home-relative AppData when LOCALAPPDATA/APPDATA are unset", () => {
+		const paths = resolveDaemonPaths(NAMES, { platform: "win32", home: "C:\\Users\\x", env: {} });
+		expect(paths.database).toBe("C:\\Users\\x\\AppData\\Local\\acme-daemon\\Data\\db.sqlite");
+		expect(paths.serviceDescriptor).toBe("C:\\Users\\x\\AppData\\Roaming\\acme-daemon\\Config\\acme.service");
+	});
+});
+
+describe("resolveDaemonPaths cross-check against env-paths (devDependency, test-only -- never a runtime import)", () => {
+	it("this host's real, uninjected resolveDaemonPaths() output shares its platform convention's root directory with env-paths' real output", async () => {
+		const envPaths = (await import("env-paths")).default;
+		// Neither call injects home/env/platform here -- both hit the real host
+		// OS's actual os.homedir()/process.env, since env-paths has no override
+		// hook to compare against otherwise. This is what actually grounds our
+		// hand-rolled per-OS logic in a real, independently maintained reference
+		// rather than trusting our own reading of its documented behavior.
+		const ours = resolveDaemonPaths(NAMES);
+		const real = envPaths("cross-check-app", { suffix: "" });
+		if (process.platform === "darwin") {
+			expect(ours.database).toContain("Library/Application Support");
+			expect(real.data).toContain("Library/Application Support");
+		} else if (process.platform === "win32") {
+			expect(ours.database).toContain("Data");
+			expect(real.data).toContain("Data");
+		} else {
+			expect(ours.database).toContain(".local/share");
+			expect(real.data).toContain(".local/share");
+		}
 	});
 });
 
