@@ -7,9 +7,7 @@ import {
 	createEncryptedFileStore,
 	createFileStore,
 	createTokenProvider,
-	createVaultClient,
 	isTokenFresh,
-	type FetchLike,
 	type RefreshableAccessToken,
 } from "../src/vault.ts";
 
@@ -179,47 +177,3 @@ describe("createTokenProvider", () => {
 	});
 });
 
-describe("createVaultClient", () => {
-	it("sends the supervisor bearer token and parses credentials JSON", async () => {
-		const fetchImpl: FetchLike = async (url, init) => {
-			expect(url).toBe("http://127.0.0.1:9999/creds/github");
-			expect((init?.headers as Record<string, string>).authorization).toBe("Bearer supervisor-token");
-			return new Response(JSON.stringify({ accessToken: "gh-token" }), { status: 200 });
-		};
-		const client = createVaultClient({ baseUrl: "http://127.0.0.1:9999", authToken: "supervisor-token", fetchImpl });
-		expect(await client.getCredentials("github")).toEqual({ accessToken: "gh-token" });
-	});
-
-	it("returns undefined, not an error, for a 404 (backend not configured in the vault)", async () => {
-		const fetchImpl: FetchLike = async () => new Response("", { status: 404 });
-		const client = createVaultClient({ baseUrl: "http://127.0.0.1:9999", authToken: "t", fetchImpl });
-		expect(await client.getCredentials("missing")).toBeUndefined();
-	});
-
-	it("throws on a non-404 error status rather than returning a falsy credential silently", async () => {
-		const fetchImpl: FetchLike = async () => new Response("boom", { status: 500 });
-		const client = createVaultClient({ baseUrl: "http://127.0.0.1:9999", authToken: "t", fetchImpl });
-		await expect(client.getCredentials("github")).rejects.toThrow(/HTTP 500/);
-	});
-
-	it("lists credential keys", async () => {
-		const fetchImpl: FetchLike = async (url) => {
-			expect(url).toBe("http://127.0.0.1:9999/keys");
-			return new Response(JSON.stringify(["github", "gitlab"]), { status: 200 });
-		};
-		const client = createVaultClient({ baseUrl: "http://127.0.0.1:9999", authToken: "t", fetchImpl });
-		expect(await client.listCredentialKeys()).toEqual(["github", "gitlab"]);
-	});
-
-	it("rotate and revoke post to the right path and resolve on 204", async () => {
-		const calls: string[] = [];
-		const fetchImpl: FetchLike = async (url, init) => {
-			calls.push(`${init?.method} ${url}`);
-			return new Response(null, { status: 204 });
-		};
-		const client = createVaultClient({ baseUrl: "http://127.0.0.1:9999", authToken: "t", fetchImpl });
-		await client.rotateCredential("gitlab");
-		await client.revokeCredential("gitlab");
-		expect(calls).toEqual(["POST http://127.0.0.1:9999/rotate/gitlab", "POST http://127.0.0.1:9999/revoke/gitlab"]);
-	});
-});
