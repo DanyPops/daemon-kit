@@ -72,7 +72,7 @@ export function runProcessSupervisor(units: SupervisedUnitConfig[], options: Run
 		if (entry.stopping || !entry.current) return;
 		logger.info("planned restart", { name: entry.unit.name, reason });
 		entry.refreshing = true;
-		entry.current.kill("SIGTERM");
+		entry.current.requestGracefulShutdown();
 		// The exited-promise handler above launches the replacement once this
 		// process actually exits; not launched here to avoid a double-spawn race.
 	}
@@ -92,7 +92,7 @@ export function runProcessSupervisor(units: SupervisedUnitConfig[], options: Run
 			clearInterval(plannedRestartTimer);
 			for (const entry of managed) {
 				entry.stopping = true;
-				entry.current?.kill("SIGTERM");
+				entry.current?.requestGracefulShutdown();
 			}
 			await Promise.all(managed.map((entry) => entry.current?.exited).filter((p): p is Promise<number> => p !== undefined));
 		},
