@@ -300,9 +300,16 @@ export class LocalVehicleClient implements VehicleClient {
 
 	constructor(private readonly registry: VehicleRegistry) {}
 
-	manifest(): Promise<VehicleManifest> {
+	// async, not a plain function returning Promise.resolve(...) -- ensureOpen()'s
+	// synchronous throw must become a rejected promise like every other
+	// VehicleClient method (invoke() below is already async for the same
+	// reason), not escape as a synchronous exception a caller's .catch()
+	// would never see. Found live via the shared local/HTTP conformance
+	// suite: RemoteVehicleClient's manifest() is async and rejects correctly,
+	// which is what exposed this one not doing the same.
+	async manifest(): Promise<VehicleManifest> {
 		this.ensureOpen();
-		return Promise.resolve(this.registry.manifest());
+		return this.registry.manifest();
 	}
 
 	async invoke<Output = unknown>(
