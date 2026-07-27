@@ -21,6 +21,7 @@
 		"./version": "./src/version.ts",
 		"./vault": "./src/vault.ts",
 		"./supervisor": "./src/supervisor.ts",
+		"./process-supervisor": "./src/process-supervisor.ts",
 		"./service": "./src/service.ts",
 		"./push-channel": "./src/push-channel.ts",
 		"./vehicle-conformance": "./src/vehicle-conformance.ts",
