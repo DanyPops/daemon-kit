@@ -110,3 +110,72 @@ export function readDaemonHandle(handlePath: string): DaemonHandle | null {
 export function removeDaemonHandle(handlePath: string): void {
 	rmSync(handlePath, { force: true });
 }
+
+export type AcquireLockResult = { acquired: true } | { acquired: false; holderPid: number | null };
+
+function defaultIsPidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		// EPERM means the process exists but we lack permission to signal it -- still alive.
+		// Any other error (ESRCH, or an invalid pid) means it is not.
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+function tryCreateLock(lockPath: string): boolean {
+	try {
+		// O_CREAT|O_EXCL ('wx'): a single atomic syscall that fails with EEXIST
+		// if the file already exists -- no check-then-act window, the same
+		// atomicity class as writeDaemonHandle's write-then-rename.
+		writeFileSync(lockPath, `${process.pid}\n`, { mode: 0o600, flag: "wx" });
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+		throw error;
+	}
+}
+
+function readLockPid(lockPath: string): number | null {
+	try {
+		const pid = Number.parseInt(readFileSync(lockPath, "utf8").trim(), 10);
+		return Number.isInteger(pid) ? pid : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Atomically claims the single-instance lock so at most one daemon process
+ * ever proceeds to bind a port, regardless of how many callers race to
+ * start one concurrently (N Pi sessions all auto-spawning at once, or a
+ * human running `serve` twice by hand). A losing caller must not bind a
+ * port or touch the handle file at all -- it should exit(0) as a normal
+ * join, never as an error.
+ *
+ * A lock naming a pid that is no longer alive (crash, -9, OOM-kill left it
+ * behind without running the matching releaseDaemonLock) is detected via a
+ * liveness check and atomically stolen rather than blocking forever --
+ * self-healing without any manual cleanup.
+ */
+export function acquireDaemonLock(lockPath: string, isPidAlive: (pid: number) => boolean = defaultIsPidAlive): AcquireLockResult {
+	mkdirSync(dirname(lockPath), { recursive: true, mode: 0o700 });
+	if (tryCreateLock(lockPath)) return { acquired: true };
+
+	const existing = readLockPid(lockPath);
+	if (existing !== null && isPidAlive(existing)) return { acquired: false, holderPid: existing };
+
+	// Stale (dead pid) or unreadable/corrupt lock -- steal it. A concurrent
+	// stealer could win the race between this rm and the next create; either
+	// way exactly one of them ends up holding the lock afterward, since the
+	// create itself is still atomic.
+	rmSync(lockPath, { force: true });
+	if (tryCreateLock(lockPath)) return { acquired: true };
+	return { acquired: false, holderPid: readLockPid(lockPath) };
+}
+
+/** Releases the single-instance lock. Idempotent -- safe to call even if this process never held it. */
+export function releaseDaemonLock(lockPath: string): void {
+	rmSync(lockPath, { force: true });
+}

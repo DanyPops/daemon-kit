@@ -10,8 +10,27 @@
  * Bun.serve itself and returns a stoppable handle; runDaemonProcess() adds
  * the SIGINT/SIGTERM registration and process.exit for the real binary.
  */
-import { LOOPBACK_HOST, removeDaemonHandle, writeDaemonHandle } from "./paths.ts";
+import { dirname, join } from "node:path";
+import { LOOPBACK_HOST, acquireDaemonLock, releaseDaemonLock, removeDaemonHandle, writeDaemonHandle } from "./paths.ts";
 import type { Logger } from "./logging.ts";
+
+/**
+ * Thrown by startDaemon() when another live process already holds the
+ * single-instance lock. This is a normal join, not a failure -- exactly one
+ * daemon should ever be bound at a time regardless of how many callers
+ * raced to start one, so runDaemonProcess() catches this specifically and
+ * exits 0 rather than crashing.
+ */
+export class DaemonAlreadyRunningError extends Error {
+	constructor(public readonly holderPid: number | null) {
+		super(
+			holderPid === null
+				? "a daemon is already running and holds the single-instance lock"
+				: `a daemon is already running (pid ${holderPid}) and holds the single-instance lock`,
+		);
+		this.name = "DaemonAlreadyRunningError";
+	}
+}
 
 export interface MaintenanceTask {
 	name: string;
@@ -29,6 +48,8 @@ export interface StartDaemonOptions {
 	/** e.g. "Web Spider" -- used only in the bind-failure error message. */
 	daemonLabel: string;
 	handlePath: string;
+	/** Defaults to a `daemon.lock` file beside handlePath. Override only if that would collide with another daemon's own state. */
+	lockPath?: string;
 	buildApp: () => { fetch(request: Request): Promise<Response> };
 	/** Defaults to a no-op logger; maintenance-task failures are otherwise silently lost, which was a real gap in two of the four original daemons. */
 	logger?: Logger;
@@ -44,6 +65,13 @@ const DEFAULT_IDLE_TICK_MS = 30_000;
 
 export function startDaemon(options: StartDaemonOptions): RunningDaemon {
 	const logger = options.logger ?? NOOP_LOGGER;
+	const lockPath = options.lockPath ?? join(dirname(options.handlePath), "daemon.lock");
+
+	// Claimed before anything else -- a losing process must not build the app,
+	// bind a port, or touch the handle file. See DaemonAlreadyRunningError.
+	const lock = acquireDaemonLock(lockPath);
+	if (!lock.acquired) throw new DaemonAlreadyRunningError(lock.holderPid);
+
 	const app = options.buildApp();
 
 	let lastActive = Date.now();
@@ -100,6 +128,7 @@ export function startDaemon(options: StartDaemonOptions): RunningDaemon {
 		for (const timer of timers) clearInterval(timer);
 		if (idleTimer) clearInterval(idleTimer);
 		removeDaemonHandle(options.handlePath);
+		releaseDaemonLock(lockPath);
 		await options.onShutdown?.();
 		await server.stop(true);
 	};
@@ -111,9 +140,24 @@ export interface RunDaemonProcessOptions extends StartDaemonOptions {
 	onListen?: (info: { host: string; port: number }) => void;
 }
 
-/** The real binary's entry point: starts the daemon, wires SIGINT/SIGTERM to a clean stop + exit. */
+/**
+ * The real binary's entry point: starts the daemon, wires SIGINT/SIGTERM to
+ * a clean stop + exit. A DaemonAlreadyRunningError (another live process
+ * already holds the single-instance lock) is a normal join, not a crash --
+ * this process exits 0 without ever having bound a port.
+ */
 export function runDaemonProcess(options: RunDaemonProcessOptions): void {
-	const daemon = startDaemon(options);
+	const logger = options.logger ?? NOOP_LOGGER;
+	let daemon: RunningDaemon;
+	try {
+		daemon = startDaemon(options);
+	} catch (error) {
+		if (error instanceof DaemonAlreadyRunningError) {
+			logger.info(error.message);
+			process.exit(0);
+		}
+		throw error;
+	}
 	options.onListen?.({ host: daemon.host, port: daemon.port });
 	let shuttingDown = false;
 	const shutdown = (): void => {

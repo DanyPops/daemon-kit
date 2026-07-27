@@ -4,12 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	LOOPBACK_HOST,
+	acquireDaemonLock,
 	ensureAuthToken,
 	readDaemonHandle,
+	releaseDaemonLock,
 	removeDaemonHandle,
 	resolveDaemonPaths,
 	writeDaemonHandle,
 } from "../src/paths.ts";
+import { spawnSync } from "node:child_process";
 
 const NAMES = {
 	stateDirectoryName: "acme-daemon",
@@ -59,6 +62,63 @@ describe("ensureAuthToken", () => {
 		writeFileSync(tokenPath, "not-a-real-token\n");
 		try {
 			expect(() => ensureAuthToken(tokenPath, "Acme")).toThrow("invalid Acme authentication token");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("acquireDaemonLock / releaseDaemonLock", () => {
+	it("the first caller acquires the lock; a second concurrent caller is refused and told the real holder's pid", () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			const first = acquireDaemonLock(lockPath, () => true);
+			expect(first).toEqual({ acquired: true });
+			const second = acquireDaemonLock(lockPath, () => true); // pretend the holder pid is alive
+			expect(second).toEqual({ acquired: false, holderPid: process.pid });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("N concurrent acquire attempts against no existing lock result in exactly one winner", () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			const results = Array.from({ length: 8 }, () => acquireDaemonLock(lockPath, () => true));
+			const winners = results.filter((r) => r.acquired);
+			expect(winners.length).toBe(1);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("a stale lock naming a dead pid is detected and atomically stolen, allowing a new acquire to succeed", () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			// A real process that has already exited -- a genuinely dead pid, not a guessed one.
+			const dead = spawnSync(process.execPath, ["-e", "process.exit(0)"]);
+			const deadPid = dead.pid ?? 999_999;
+			writeFileSync(lockPath, `${deadPid}\n`);
+
+			const isPidAlive = (pid: number) => pid !== deadPid;
+			const result = acquireDaemonLock(lockPath, isPidAlive);
+			expect(result).toEqual({ acquired: true });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("releaseDaemonLock is idempotent and lets a subsequent acquire succeed immediately", () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			acquireDaemonLock(lockPath, () => true);
+			releaseDaemonLock(lockPath);
+			releaseDaemonLock(lockPath); // must not throw
+			expect(acquireDaemonLock(lockPath, () => true)).toEqual({ acquired: true });
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
