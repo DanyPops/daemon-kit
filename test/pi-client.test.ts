@@ -1,5 +1,6 @@
-import { describe, expect, it } from "bun:test";
-import { connectWithPolicy, connectWithVersionCheck, createRetryingClient, daemonStatus, type DaemonHandleLike, isLikelyStaleConnectionError, spawnDetachedDaemon, type SpawnPlatformOptions } from "../src/pi-client.ts";
+import { afterEach, describe, expect, it } from "bun:test";
+import { connectPushChannel, connectWithPolicy, connectWithVersionCheck, createRetryingClient, daemonStatus, type DaemonHandleLike, isLikelyStaleConnectionError, spawnDetachedDaemon, type SpawnPlatformOptions } from "../src/pi-client.ts";
+import { PushChannel } from "../src/push-channel.ts";
 
 class FakeClient {
 	constructor(public readonly id: number) {}
@@ -326,6 +327,198 @@ describe("spawnDetachedDaemon", () => {
 			},
 		});
 		expect(capturedArgs).toEqual([]);
+	});
+});
+
+describe("connectPushChannel", () => {
+	let servers: ReturnType<typeof Bun.serve>[] = [];
+	let clients: ReturnType<typeof connectPushChannel>[] = [];
+
+	afterEach(() => {
+		for (const client of clients) client.close();
+		clients = [];
+		for (const server of servers) server.stop(true);
+		servers = [];
+	});
+
+	function startServer(token = "push-token"): { channel: PushChannel; url: string } {
+		const channel = new PushChannel({ token });
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: (request, bunServer) => {
+				if (new URL(request.url).pathname === "/push") return channel.upgrade(request, bunServer) ?? undefined;
+				return new Response("not found", { status: 404 });
+			},
+			websocket: channel.websocketHandlers(),
+		});
+		servers.push(server);
+		return { channel, url: `ws://127.0.0.1:${server.port}/push` };
+	}
+
+	function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+		const deadline = Date.now() + timeoutMs;
+		return new Promise((resolve, reject) => {
+			const tick = (): void => {
+				if (predicate()) return resolve();
+				if (Date.now() > deadline) return reject(new Error("waitFor timed out"));
+				setTimeout(tick, 5);
+			};
+			tick();
+		});
+	}
+
+	it("connects, subscribes, and delivers a real publish() end to end", async () => {
+		const { channel, url } = startServer();
+		const received: Array<{ topic: string; payload: unknown }> = [];
+		const client = connectPushChannel({
+			url,
+			token: "push-token",
+			topics: ["tasks"],
+			onMessage: (topic, payload) => received.push({ topic, payload }),
+			minUptimeMs: 20,
+		});
+		clients.push(client);
+
+		await waitFor(() => client.state() === "open");
+		channel.publish("tasks", { mutated: "task-1" });
+		await waitFor(() => received.length === 1);
+		expect(received).toEqual([{ topic: "tasks", payload: { mutated: "task-1" } }]);
+	});
+
+	it("reconnects and re-subscribes after the daemon restarts on a brand new random port", async () => {
+		const first = startServer();
+		let currentUrl = first.url;
+		const received: Array<{ topic: string; payload: unknown }> = [];
+		const client = connectPushChannel({
+			url: () => currentUrl,
+			token: "push-token",
+			topics: ["tasks"],
+			onMessage: (topic, payload) => received.push({ topic, payload }),
+			minUptimeMs: 20,
+			minReconnectDelayMs: 10,
+			maxReconnectDelayMs: 50,
+		});
+		clients.push(client);
+		await waitFor(() => client.state() === "open");
+
+		// Simulate a full daemon restart: the old server dies, a new one binds an
+		// entirely different random port -- the same situation connectWithPolicy
+		// handles for one-shot RPC by re-reading the handle file on each attempt.
+		servers[0]!.stop(true);
+		const second = startServer();
+		currentUrl = second.url;
+
+		// Confirm the drop is actually detected first -- otherwise the next
+		// waitFor below could trivially "succeed" by observing the stale "open"
+		// state left over from before the restart, never having actually waited
+		// for a real reconnect at all.
+		await waitFor(() => client.state() !== "open", 2_000);
+		await waitFor(() => client.state() === "open", 5_000);
+		second.channel.publish("tasks", { mutated: "after-restart" });
+		await waitFor(() => received.length === 1, 2_000);
+		expect(received).toEqual([{ topic: "tasks", payload: { mutated: "after-restart" } }]);
+	});
+
+	it("a connection that opens then drops before minUptimeMs keeps the backoff climbing instead of resetting on the next attempt (degradation)", async () => {
+		class FakeWebSocket {
+			static instances: FakeWebSocket[] = [];
+			createdAt = Date.now();
+			private readonly listeners: Record<string, Array<(event: unknown) => void>> = {};
+			constructor(public url: string) {
+				FakeWebSocket.instances.push(this);
+			}
+			addEventListener(type: string, handler: (event: unknown) => void): void {
+				(this.listeners[type] ??= []).push(handler);
+			}
+			send(): void {}
+			close(): void {
+				for (const handler of this.listeners.close ?? []) handler({});
+			}
+			simulateOpen(): void {
+				for (const handler of this.listeners.open ?? []) handler({});
+			}
+		}
+
+		const client = connectPushChannel({
+			url: "ws://fake/push",
+			token: "t",
+			topics: [],
+			onMessage: () => {},
+			minUptimeMs: 10_000, // never reached in this test -- every open below counts as premature
+			minReconnectDelayMs: 5,
+			reconnectionDelayGrowFactor: 2,
+			maxReconnectDelayMs: 1_000,
+			WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+		});
+		clients.push(client);
+
+		await waitFor(() => FakeWebSocket.instances.length === 1);
+		FakeWebSocket.instances[0]!.simulateOpen();
+		FakeWebSocket.instances[0]!.close(); // drops immediately -- retryCount becomes 1
+
+		await waitFor(() => FakeWebSocket.instances.length === 2, 1_000);
+		FakeWebSocket.instances[1]!.simulateOpen();
+		FakeWebSocket.instances[1]!.close(); // drops immediately again -- retryCount becomes 2, not reset to 0
+
+		await waitFor(() => FakeWebSocket.instances.length === 3, 1_000);
+
+		const firstDelay = FakeWebSocket.instances[1]!.createdAt - FakeWebSocket.instances[0]!.createdAt;
+		const secondDelay = FakeWebSocket.instances[2]!.createdAt - FakeWebSocket.instances[1]!.createdAt;
+		// growFactor 2 with a +/-20% jitter band: attempt 2's delay is ~4-6ms,
+		// attempt 3's is ~8-12ms if (and only if) retryCount kept climbing rather
+		// than resetting after the first open. The bands don't overlap, so this
+		// is a real, non-flaky assertion of the degradation-gated backoff, not a
+		// coincidence of timing.
+		expect(secondDelay).toBeGreaterThan(firstDelay);
+	});
+
+	it("forces a reconnect via the heartbeat timeout when the socket stays open but stops responding entirely", async () => {
+		class FakeWebSocket {
+			static instances: FakeWebSocket[] = [];
+			closeCalls = 0;
+			private readonly listeners: Record<string, Array<(event: unknown) => void>> = {};
+			constructor(public url: string) {
+				FakeWebSocket.instances.push(this);
+			}
+			addEventListener(type: string, handler: (event: unknown) => void): void {
+				(this.listeners[type] ??= []).push(handler);
+			}
+			send(): void {
+				// A completely unresponsive peer: never answers a ping with a pong,
+				// never sends anything else either -- the socket itself never fires
+				// close or error on its own, which is exactly the case a plain
+				// reconnect-on-close strategy cannot detect.
+			}
+			close(): void {
+				this.closeCalls++;
+				for (const handler of this.listeners.close ?? []) handler({});
+			}
+			simulateOpen(): void {
+				for (const handler of this.listeners.open ?? []) handler({});
+			}
+		}
+
+		const client = connectPushChannel({
+			url: "ws://fake/push",
+			token: "t",
+			topics: [],
+			onMessage: () => {},
+			minUptimeMs: 5,
+			heartbeatIntervalMs: 5,
+			heartbeatTimeoutMs: 20,
+			minReconnectDelayMs: 5,
+			WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+		});
+		clients.push(client);
+
+		await waitFor(() => FakeWebSocket.instances.length === 1);
+		FakeWebSocket.instances[0]!.simulateOpen();
+
+		// Never simulate any incoming message -- the heartbeat timeout must fire
+		// close() on its own once heartbeatTimeoutMs elapses with nothing heard.
+		await waitFor(() => FakeWebSocket.instances[0]!.closeCalls === 1, 1_000);
+		await waitFor(() => FakeWebSocket.instances.length === 2, 1_000);
 	});
 });
 

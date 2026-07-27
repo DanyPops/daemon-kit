@@ -70,6 +70,10 @@ describe("verifyLoadableUnderPi", () => {
 		expectAllPathsOk(await verifyLoadableUnderPi(SRC("service.ts")));
 	});
 
+	it("push-channel.ts loads under every Pi extension load path", async () => {
+		expectAllPathsOk(await verifyLoadableUnderPi(SRC("push-channel.ts")));
+	});
+
 	// Vehicle is shared by agent hosts and tool providers, so its published
 	// artifact must remain loadable through the same Node/jiti paths as pi-client.
 	describe("vehicle (the pre-compiled agent-tool runtime)", () => {

@@ -13,6 +13,7 @@
 import { dirname, join } from "node:path";
 import { LOOPBACK_HOST, acquireDaemonLock, releaseDaemonLock, removeDaemonHandle, writeDaemonHandle } from "./paths.ts";
 import type { Logger } from "./logging.ts";
+import type { PushChannel } from "./push-channel.ts";
 
 /**
  * Thrown by startDaemon() when another live process already holds the
@@ -99,6 +100,10 @@ export interface StartDaemonOptions {
 	onShutdown?: () => void | Promise<void>;
 	/** Defaults to process.env. Injectable for tests. */
 	env?: Record<string, string | undefined>;
+	/** Optional WebSocket push-invalidation channel (see push-channel.ts). Additive to the fetch-based RPC -- requests to `pushPath` are routed to it, everything else still goes to buildApp()'s fetch. */
+	pushChannel?: PushChannel;
+	/** Defaults to "/push". */
+	pushPath?: string;
 }
 
 const NOOP_LOGGER: Logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -114,15 +119,24 @@ export function startDaemon(options: StartDaemonOptions): RunningDaemon {
 	if (!lock.acquired) throw new DaemonAlreadyRunningError(lock.holderPid);
 
 	const app = options.buildApp();
+	const pushPath = options.pushPath ?? "/push";
 
 	let lastActive = Date.now();
 	const server = Bun.serve({
 		hostname: LOOPBACK_HOST,
 		port: 0,
-		fetch: (request) => {
+		fetch: (request, bunServer) => {
 			lastActive = Date.now();
+			if (options.pushChannel && new URL(request.url).pathname === pushPath) {
+				return options.pushChannel.upgrade(request, bunServer) ?? undefined;
+			}
 			return app.fetch(request);
 		},
+		// Bun's own types require `websocket` whenever `fetch`'s server parameter
+		// carries per-connection data (SubscriberData here) -- a no-op fallback
+		// when there is no pushChannel is safe: server.upgrade() is never called
+		// in that case, so these handlers are never invoked.
+		websocket: options.pushChannel?.websocketHandlers() ?? { message() {} },
 	});
 	if (!server.port) {
 		throw new Error(`${options.daemonLabel} daemon failed to bind a listener`);

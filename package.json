@@ -19,6 +19,7 @@
 		"./vault": "./src/vault.ts",
 		"./supervisor": "./src/supervisor.ts",
 		"./service": "./src/service.ts",
+		"./push-channel": "./src/push-channel.ts",
 		"./vehicle-conformance": "./src/vehicle-conformance.ts",
 		"./pi-load-harness": "./src/pi-load-harness.ts",
 		"./pi-client": {
