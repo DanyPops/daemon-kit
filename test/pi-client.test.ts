@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { connectWithPolicy, createRetryingClient, type DaemonHandleLike, isLikelyStaleConnectionError } from "../src/pi-client.ts";
+import { connectWithPolicy, connectWithVersionCheck, createRetryingClient, type DaemonHandleLike, isLikelyStaleConnectionError, spawnDetachedDaemon, type SpawnPlatformOptions } from "../src/pi-client.ts";
 
 class FakeClient {
 	constructor(public readonly id: number) {}
@@ -130,6 +130,107 @@ describe("createRetryingClient", () => {
 		expect(connectCount).toBe(2);
 	});
 
+	it("circuit breaker: short-circuits after sustained connect failures instead of retrying every call", async () => {
+		let connectCount = 0;
+		const client = createRetryingClient<FakeClient>(
+			async () => {
+				connectCount++;
+				throw new Error(`connect ECONNREFUSED attempt ${connectCount}`);
+			},
+			{ circuitBreaker: { failureThreshold: 3, cooldownMs: 10_000 } },
+		);
+
+		await expect(client.call(async (c) => c.id)).rejects.toThrow("attempt 1");
+		await expect(client.call(async (c) => c.id)).rejects.toThrow("attempt 2");
+		await expect(client.call(async (c) => c.id)).rejects.toThrow("attempt 3");
+		expect(connectCount).toBe(3);
+		expect(client.breakerState().open).toBe(true);
+
+		// Breaker is open: the 4th call must fail immediately from the cached
+		// last error, without invoking connect() a 4th time.
+		await expect(client.call(async (c) => c.id)).rejects.toThrow("attempt 3");
+		expect(connectCount).toBe(3);
+	});
+
+	it("circuit breaker: a single transient connect failure does not trip it", async () => {
+		let connectCount = 0;
+		const client = createRetryingClient<FakeClient>(
+			async () => {
+				connectCount++;
+				if (connectCount === 1) throw new Error("connect ECONNREFUSED");
+				return new FakeClient(connectCount);
+			},
+			{ circuitBreaker: { failureThreshold: 3, cooldownMs: 10_000 } },
+		);
+
+		await expect(client.call(async (c) => c.id)).rejects.toThrow("ECONNREFUSED");
+		expect(client.breakerState().open).toBe(false);
+		expect(await client.call(async (c) => c.id)).toBe(2);
+		expect(client.breakerState().consecutiveFailures).toBe(0);
+	});
+
+	it("circuit breaker: allows one probe attempt after cooldown elapses, and recovers on success", async () => {
+		let connectCount = 0;
+		const client = createRetryingClient<FakeClient>(
+			async () => {
+				connectCount++;
+				if (connectCount <= 2) throw new Error(`fail ${connectCount}`);
+				return new FakeClient(connectCount);
+			},
+			{ circuitBreaker: { failureThreshold: 2, cooldownMs: 10 } },
+		);
+
+		await expect(client.call(async (c) => c.id)).rejects.toThrow("fail 1");
+		await expect(client.call(async (c) => c.id)).rejects.toThrow("fail 2");
+		expect(client.breakerState().open).toBe(true);
+
+		// Still within the cooldown window -- short-circuits without a new connect attempt.
+		await expect(client.call(async (c) => c.id)).rejects.toThrow("fail 2");
+		expect(connectCount).toBe(2);
+
+		await new Promise((resolve) => setTimeout(resolve, 15));
+		expect(await client.call(async (c) => c.id)).toBe(3);
+		expect(client.breakerState().open).toBe(false);
+		expect(client.breakerState().consecutiveFailures).toBe(0);
+	});
+
+	it("circuit breaker: reset() clears breaker state immediately, even mid-cooldown", async () => {
+		let connectCount = 0;
+		const client = createRetryingClient<FakeClient>(
+			async () => {
+				connectCount++;
+				if (connectCount <= 2) throw new Error(`fail ${connectCount}`);
+				return new FakeClient(connectCount);
+			},
+			{ circuitBreaker: { failureThreshold: 2, cooldownMs: 10_000 } },
+		);
+
+		await expect(client.call(async (c) => c.id)).rejects.toThrow("fail 1");
+		await expect(client.call(async (c) => c.id)).rejects.toThrow("fail 2");
+		expect(client.breakerState().open).toBe(true);
+
+		client.reset();
+		expect(client.breakerState().open).toBe(false);
+		expect(await client.call(async (c) => c.id)).toBe(3);
+	});
+
+	it("circuit breaker: circuitBreaker:false restores unthrottled retry-every-call behavior", async () => {
+		let connectCount = 0;
+		const client = createRetryingClient<FakeClient>(
+			async () => {
+				connectCount++;
+				throw new Error(`fail ${connectCount}`);
+			},
+			{ circuitBreaker: false },
+		);
+
+		for (let i = 1; i <= 5; i++) {
+			await expect(client.call(async (c) => c.id)).rejects.toThrow(`fail ${i}`);
+		}
+		expect(connectCount).toBe(5);
+		expect(client.breakerState().open).toBe(false);
+	});
+
 	it("a custom isStaleConnectionError predicate overrides the default heuristic", async () => {
 		let connectCount = 0;
 		const client = createRetryingClient(
@@ -151,6 +252,209 @@ describe("createRetryingClient", () => {
 });
 
 const FAKE_HANDLE: DaemonHandleLike = { host: "127.0.0.1", port: 4242, pid: 1 };
+const REPLACEMENT_HANDLE: DaemonHandleLike = { host: "127.0.0.1", port: 5555, pid: 2 };
+
+interface VersionedFakeClient {
+	port: number;
+	version: string;
+}
+
+describe("spawnDetachedDaemon", () => {
+	it("passes detached+ignored stdio on every platform, with no windowsHide on non-Windows", () => {
+		let captured: { command: string; args: string[]; options: SpawnPlatformOptions } | undefined;
+		spawnDetachedDaemon({
+			binPath: "/path/to/cli.ts",
+			args: ["serve"],
+			platform: "linux",
+			spawn: (command, args, options) => {
+				captured = { command, args, options };
+			},
+		});
+		expect(captured?.command).toBe("/path/to/cli.ts");
+		expect(captured?.args).toEqual(["serve"]);
+		expect(captured?.options.detached).toBe(true);
+		expect(captured?.options.stdio).toBe("ignore");
+		expect(captured?.options.windowsHide).toBeUndefined();
+	});
+
+	it("adds windowsHide:true on win32 so a silent auto-spawn does not pop a console window", () => {
+		let captured: SpawnPlatformOptions | undefined;
+		spawnDetachedDaemon({
+			binPath: "C:\\daemon\\cli.js",
+			platform: "win32",
+			spawn: (_command, _args, options) => {
+				captured = options;
+			},
+		});
+		expect(captured?.windowsHide).toBe(true);
+		expect(captured?.detached).toBe(true);
+	});
+
+	it("forwards the provided env through to spawn", () => {
+		let capturedEnv: Record<string, string | undefined> | undefined;
+		spawnDetachedDaemon({
+			binPath: "/cli.ts",
+			platform: "darwin",
+			env: { FOO: "bar" },
+			spawn: (_command, _args, options) => {
+				capturedEnv = options.env;
+			},
+		});
+		expect(capturedEnv).toEqual({ FOO: "bar" });
+	});
+
+	it("defaults args to an empty array when omitted", () => {
+		let capturedArgs: string[] | undefined;
+		spawnDetachedDaemon({
+			binPath: "/cli.ts",
+			platform: "linux",
+			spawn: (_command, args) => {
+				capturedArgs = args;
+			},
+		});
+		expect(capturedArgs).toEqual([]);
+	});
+});
+
+describe("connectWithVersionCheck", () => {
+	it("returns the client unchanged when the running daemon's version already matches -- no kill, no respawn", async () => {
+		let spawnCalls = 0;
+		let killCalls = 0;
+		const client = await connectWithVersionCheck<DaemonHandleLike, VersionedFakeClient>(
+			{
+				readHandle: () => FAKE_HANDLE,
+				buildClient: (handle) => ({ port: handle.port, version: "1.2.0" }),
+				autoStart: true,
+				spawn: () => {
+					spawnCalls++;
+				},
+				fallbackMessage: "unreachable",
+			},
+			{
+				expectedVersion: "1.2.0",
+				readVersion: async (c) => c.version,
+				killStaleProcess: () => {
+					killCalls++;
+				},
+			},
+		);
+		expect(client.port).toBe(4242);
+		expect(spawnCalls).toBe(0);
+		expect(killCalls).toBe(0);
+	});
+
+	it("kills and replaces a version-mismatched daemon transparently, returning the fresh client", async () => {
+		let currentHandle: DaemonHandleLike | null = FAKE_HANDLE;
+		let spawnCalls = 0;
+		let killCalls = 0;
+		let shutdownRequests = 0;
+
+		const client = await connectWithVersionCheck<DaemonHandleLike, VersionedFakeClient>(
+			{
+				readHandle: () => currentHandle,
+				buildClient: (handle) => ({ port: handle.port, version: handle.pid === 1 ? "1.0.0" : "1.2.0" }),
+				autoStart: true,
+				spawn: () => {
+					spawnCalls++;
+					currentHandle = REPLACEMENT_HANDLE;
+				},
+				fallbackMessage: "unreachable",
+			},
+			{
+				expectedVersion: "1.2.0",
+				readVersion: async (c) => c.version,
+				requestShutdown: async () => {
+					shutdownRequests++;
+					currentHandle = null; // graceful shutdown clears the handle immediately
+				},
+				killStaleProcess: () => {
+					killCalls++;
+				},
+				shutdownPollIntervalMs: 1,
+			},
+		);
+
+		expect(client.version).toBe("1.2.0");
+		expect(client.port).toBe(5555);
+		expect(shutdownRequests).toBe(1);
+		expect(spawnCalls).toBe(1);
+	});
+
+	it("falls back to killStaleProcess when requestShutdown is absent or fails, and still replaces the daemon", async () => {
+		let currentHandle: DaemonHandleLike | null = FAKE_HANDLE;
+		let killCalls = 0;
+
+		const client = await connectWithVersionCheck<DaemonHandleLike, VersionedFakeClient>(
+			{
+				readHandle: () => currentHandle,
+				buildClient: (handle) => ({ port: handle.port, version: handle.pid === 1 ? "1.0.0" : "1.2.0" }),
+				autoStart: true,
+				spawn: () => {
+					currentHandle = REPLACEMENT_HANDLE;
+				},
+				fallbackMessage: "unreachable",
+			},
+			{
+				expectedVersion: "1.2.0",
+				readVersion: async (c) => c.version,
+				killStaleProcess: () => {
+					killCalls++;
+					currentHandle = null; // simulates the process actually dying and removing its handle
+				},
+				shutdownPollIntervalMs: 1,
+			},
+		);
+
+		expect(client.version).toBe("1.2.0");
+		expect(killCalls).toBe(1);
+	});
+
+	it("refuses to kill a stale daemon when no spawn() is configured to replace it", async () => {
+		let killCalls = 0;
+		await expect(
+			connectWithVersionCheck<DaemonHandleLike, VersionedFakeClient>(
+				{
+					readHandle: () => FAKE_HANDLE,
+					buildClient: (handle) => ({ port: handle.port, version: "1.0.0" }),
+					fallbackMessage: "daemon not running",
+				},
+				{
+					expectedVersion: "1.2.0",
+					readVersion: async (c) => c.version,
+					killStaleProcess: () => {
+						killCalls++;
+					},
+				},
+			),
+		).rejects.toThrow(/no spawn\(\) is configured/);
+		expect(killCalls).toBe(0);
+	});
+
+	it("propagates a readVersion() failure unchanged -- an inconclusive read never triggers a kill", async () => {
+		let killCalls = 0;
+		await expect(
+			connectWithVersionCheck<DaemonHandleLike, VersionedFakeClient>(
+				{
+					readHandle: () => FAKE_HANDLE,
+					buildClient: (handle) => ({ port: handle.port, version: "1.0.0" }),
+					autoStart: true,
+					spawn: () => {},
+					fallbackMessage: "unreachable",
+				},
+				{
+					expectedVersion: "1.2.0",
+					readVersion: async () => {
+						throw new Error("health endpoint unreachable");
+					},
+					killStaleProcess: () => {
+						killCalls++;
+					},
+				},
+			),
+		).rejects.toThrow("health endpoint unreachable");
+		expect(killCalls).toBe(0);
+	});
+});
 
 describe("connectWithPolicy", () => {
 	it("builds a client directly when a handle is already present -- never calls spawn", async () => {
