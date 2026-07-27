@@ -74,6 +74,21 @@ describe("verifyLoadableUnderPi", () => {
 		expectAllPathsOk(await verifyLoadableUnderPi(SRC("push-channel.ts")));
 	});
 
+	// daemon.ts is shipped compiled for a different reason than pi-client/vehicle
+	// (a real Node/tsc consumer like Alef, not Pi's jiti loader -- daemon.ts was
+	// never meant to run inside a Pi extension) -- checked here anyway since the
+	// artifact exists and the check is cheap.
+	describe("daemon (the pre-compiled Node/tsc-consumable daemon skeleton)", () => {
+		beforeAll(() => {
+			const result = spawnSync("bun", ["run", "build:daemon"], { cwd: ROOT, stdio: "inherit" });
+			if (result.status !== 0) throw new Error("bun run build:daemon failed -- see output above");
+		});
+
+		it("the compiled artifact (dist/daemon.js) loads under every Pi extension load path", async () => {
+			expectAllPathsOk(await verifyLoadableUnderPi(resolve(ROOT, "dist", "daemon.js")));
+		});
+	});
+
 	// Vehicle is shared by agent hosts and tool providers, so its published
 	// artifact must remain loadable through the same Node/jiti paths as pi-client.
 	describe("vehicle (the pre-compiled agent-tool runtime)", () => {

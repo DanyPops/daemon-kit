@@ -13,7 +13,10 @@
 		"./logging": "./src/logging.ts",
 		"./http": "./src/http.ts",
 		"./session-identity": "./src/session-identity.ts",
-		"./daemon": "./src/daemon.ts",
+		"./daemon": {
+			"types": "./dist/daemon.d.ts",
+			"default": "./dist/daemon.js"
+		},
 		"./rpc-client": "./src/rpc-client.ts",
 		"./version": "./src/version.ts",
 		"./vault": "./src/vault.ts",
@@ -41,7 +44,8 @@
 		"build:pi-client": "tsc -p tsconfig.pi-client.json",
 		"build:vehicle": "tsc -p tsconfig.vehicle.json",
 		"build:vehicle-pi": "tsc -p tsconfig.vehicle-pi.json",
-		"build": "bun run build:pi-client && bun run build:vehicle && bun run build:vehicle-pi"
+		"build:daemon": "tsc -p tsconfig.daemon.json",
+		"build": "bun run build:pi-client && bun run build:vehicle && bun run build:vehicle-pi && bun run build:daemon"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
