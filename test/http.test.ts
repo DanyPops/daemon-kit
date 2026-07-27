@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { errorResponse, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "../src/http.ts";
+import { errorResponse, extractBearerToken, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "../src/http.ts";
 
 describe("requireBearerToken", () => {
 	it("accepts an exact Bearer match and rejects everything else", async () => {
@@ -8,6 +8,15 @@ describe("requireBearerToken", () => {
 		expect(requireBearerToken(new Request("http://x", { headers: { authorization: "Bearer wrong" } }), "secret")).toBe(false);
 		expect(requireBearerToken(new Request("http://x"), "secret")).toBe(false);
 		expect(requireBearerToken(new Request("http://x", { headers: { authorization: "secret" } }), "secret")).toBe(false);
+	});
+});
+
+describe("extractBearerToken", () => {
+	it("returns the raw token, or undefined when absent/malformed/empty", () => {
+		expect(extractBearerToken(new Request("http://x", { headers: { authorization: "Bearer abc123" } }))).toBe("abc123");
+		expect(extractBearerToken(new Request("http://x"))).toBeUndefined();
+		expect(extractBearerToken(new Request("http://x", { headers: { authorization: "abc123" } }))).toBeUndefined();
+		expect(extractBearerToken(new Request("http://x", { headers: { authorization: "Bearer " } }))).toBeUndefined();
 	});
 });
 
