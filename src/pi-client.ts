@@ -244,6 +244,14 @@ export interface ConnectPolicyOptions<Handle extends DaemonHandleLike, Client> {
 }
 
 /**
+ * However many callers race to spawn() concurrently with no handle present
+ * (N Pi sessions, or a human running `serve` twice by hand), only one
+ * resulting daemon process ever binds a port and writes a handle -- that is
+ * guaranteed daemon-side by startDaemon()'s single-instance lock (see
+ * daemon.ts), not here. connectWithPolicy() itself needs no coordination:
+ * every caller's poll-for-handle loop converges on whichever single daemon
+ * actually won.
+ *
  * Resolves a connected client from a daemon's handle file, applying one
  * explicit auto-start policy instead of the silent per-daemon fork this
  * house's four Pi extensions each picked independently (web-spider spawns
