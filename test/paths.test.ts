@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
 	LOOPBACK_HOST,
 	acquireDaemonLock,
@@ -187,6 +187,32 @@ describe("daemon handle lifecycle", () => {
 			expect(readDaemonHandle(handlePath)).toBeNull();
 			// Idempotent.
 			expect(() => removeDaemonHandle(handlePath)).not.toThrow();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("defaults to an owner-only file mode, correct for a same-user daemon and consumer", () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-paths-"));
+		const handlePath = join(dir, "run", "handle.json");
+		try {
+			writeDaemonHandle(handlePath, { host: LOOPBACK_HOST, port: 4321, pid: 999 });
+			expect(statSync(handlePath).mode & 0o777).toBe(0o600);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("honors an explicit world-readable mode -- a daemon meant to be discovered across OS users, e.g. a shared credential vault", () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-paths-"));
+		const handlePath = join(dir, "run", "handle.json");
+		try {
+			writeDaemonHandle(handlePath, { host: LOOPBACK_HOST, port: 4321, pid: 999 }, 0o644);
+			expect(statSync(handlePath).mode & 0o777).toBe(0o644);
+			// The containing directory must also be traversable by other users, or the file's own
+			// wider mode is moot.
+			expect(statSync(dirname(handlePath)).mode & 0o777).toBe(0o755);
+			expect(readDaemonHandle(handlePath)).toEqual({ host: LOOPBACK_HOST, port: 4321, pid: 999 });
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

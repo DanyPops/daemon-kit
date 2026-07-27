@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,6 +56,20 @@ describe("startDaemon", () => {
 		await daemon.stop();
 		await daemon.stop(); // must not throw
 		expect(readDaemonHandle(handlePath)).toBeNull();
+	});
+
+	it("defaults the handle file to owner-only (0600)", async () => {
+		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
+		const handlePath = join(dir, "handle.json");
+		daemon = await startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp });
+		expect(statSync(handlePath).mode & 0o777).toBe(0o600);
+	});
+
+	it("honors an explicit handleMode -- a daemon meant to be discovered across OS users", async () => {
+		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
+		const handlePath = join(dir, "handle.json");
+		daemon = await startDaemon({ daemonLabel: "Acme", handlePath, handleMode: 0o644, buildApp: trivialApp });
+		expect(statSync(handlePath).mode & 0o777).toBe(0o644);
 	});
 
 	it("a failing maintenance task does not stop other maintenance tasks from running", async () => {

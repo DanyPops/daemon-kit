@@ -112,6 +112,8 @@ export interface StartDaemonOptions {
 	/** e.g. "Web Spider" -- used only in the bind-failure error message. */
 	daemonLabel: string;
 	handlePath: string;
+	/** Defaults to 0600 (owner-only), correct for a same-user daemon and consumer. Pass 0644 for a daemon meant to be discovered across OS users -- the handle's own content (host/port/pid) is never sensitive. See writeDaemonHandle. */
+	handleMode?: number;
 	/** Defaults to a `daemon.lock` file beside handlePath. Override only if that would collide with another daemon's own state. */
 	lockPath?: string;
 	buildApp: () => { fetch(request: Request): Promise<Response> };
@@ -268,7 +270,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<RunningD
 	if (!listener.port) {
 		throw new Error(`${options.daemonLabel} daemon failed to bind a listener`);
 	}
-	writeDaemonHandle(options.handlePath, { host: LOOPBACK_HOST, port: listener.port, pid: process.pid });
+	writeDaemonHandle(options.handlePath, { host: LOOPBACK_HOST, port: listener.port, pid: process.pid }, options.handleMode);
 
 	const timers: ReturnType<typeof setInterval>[] = [];
 	for (const task of options.maintenanceTasks ?? []) {

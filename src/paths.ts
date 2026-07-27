@@ -133,11 +133,22 @@ export function ensureAuthToken(tokenPath: string, errorLabel: string): string {
 	return token;
 }
 
-/** Atomic write-then-rename so a reader never observes a partial handle file. */
-export function writeDaemonHandle(handlePath: string, handle: DaemonHandle): void {
-	mkdirSync(dirname(handlePath), { recursive: true, mode: 0o700 });
+/**
+ * Atomic write-then-rename so a reader never observes a partial handle file.
+ * mode defaults to 0600 (owner-only) -- correct for the common case of a
+ * same-user daemon and consumer. A daemon meant to be discovered across OS
+ * users (e.g. a system service like a shared credential vault) can pass
+ * 0644: the handle's own content (host/port/pid) is never sensitive, unlike
+ * the daemon's own auth token, which stays owner-only regardless.
+ */
+export function writeDaemonHandle(handlePath: string, handle: DaemonHandle, mode = 0o600): void {
+	// A world-readable handle needs a traversable directory too, or the file mode alone
+	// is moot -- only matters when this call itself creates the directory; a systemd
+	// RuntimeDirectory=/RuntimeDirectoryMode= unit directive typically creates it first.
+	const dirMode = mode & 0o044 ? 0o755 : 0o700;
+	mkdirSync(dirname(handlePath), { recursive: true, mode: dirMode });
 	const temporary = `${handlePath}.${process.pid}.tmp`;
-	writeFileSync(temporary, `${JSON.stringify(handle)}\n`, { mode: 0o600 });
+	writeFileSync(temporary, `${JSON.stringify(handle)}\n`, { mode });
 	renameSync(temporary, handlePath);
 }
 
