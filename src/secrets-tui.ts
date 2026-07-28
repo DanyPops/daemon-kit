@@ -24,8 +24,9 @@ import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-age
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { findServicesUsingSecret, type SecretRecord, type SecretsBackend, type ServiceRecord, type ServicesRegistry } from "./secrets-backend.ts";
 
-const SERVICES_MENU = "__daemon_kit_secrets_services_menu__";
-const SECRETS_MENU = "__daemon_kit_secrets_secrets_menu__";
+/** Top-level menu item values, exported so a consumer's own tests can script navigation through the two-menu split without hardcoding magic strings. */
+export const SERVICES_MENU = "__daemon_kit_secrets_services_menu__";
+export const SECRETS_MENU = "__daemon_kit_secrets_secrets_menu__";
 const BACK = "__daemon_kit_secrets_back__";
 
 export type PickFromList = (ctx: ExtensionCommandContext, title: string, items: SelectItem[], helpText: string) => Promise<string | null>;
