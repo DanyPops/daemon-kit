@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/daemon-kit",
-	"version": "0.15.0",
+	"version": "0.16.0",
 	"description": "Shared substrate for supervised, authenticated, loopback-only Bun daemons: process lifecycle, SQLite storage bootstrap, structured logging, and an HTTP auth/RPC layer",
 	"license": "MIT",
 	"type": "module",
@@ -23,6 +23,10 @@
 		"./supervisor": "./src/supervisor.ts",
 		"./process-supervisor": "./src/process-supervisor.ts",
 		"./service": "./src/service.ts",
+		"./unix-peer-cred": {
+			"types": "./dist/unix-peer-cred.d.ts",
+			"default": "./dist/unix-peer-cred.js"
+		},
 		"./push-channel": {
 			"types": "./dist/push-channel.d.ts",
 			"default": "./dist/push-channel.js"
