@@ -12,5 +12,5 @@
 		"allowImportingTsExtensions": true,
 		"rewriteRelativeImportExtensions": true
 	},
-	"include": ["src/daemon.ts", "src/paths.ts", "src/http.ts", "src/logging.ts", "src/push-channel.ts", "src/unix-peer-cred.ts"]
+	"include": ["src/daemon.ts", "src/paths.ts", "src/http.ts", "src/logging.ts", "src/push-channel.ts", "src/unix-peer-cred.ts", "src/unix-rpc-server.ts"]
 }
