@@ -75,13 +75,48 @@ function describeExpiry(expiresAt: string | undefined): string {
 	return `expires in ${Math.round(hours / 24)}d`;
 }
 
-/** Every backend's records, source-qualified so two backends can each hold a same-named record without colliding in the merged view. */
+export class SecretsBackendListError extends Error {
+	constructor(
+		public readonly source: string,
+		public readonly causeMessage: string,
+	) {
+		super(`${source}: ${causeMessage}`);
+		this.name = "SecretsBackendListError";
+	}
+}
+
+/**
+ * Every backend's records, source-qualified so two backends can each hold a
+ * same-named record without colliding in the merged view. A remote backend's
+ * list() can fail mid-session (the vault daemon restarting, a network blip) --
+ * this always throws SecretsBackendListError naming which backend failed,
+ * rather than a raw error a caller has to inspect to attribute.
+ */
 async function loadAllSecrets(backends: SecretsBackend[]): Promise<{ backend: SecretsBackend; record: SecretRecord }[]> {
 	const all: { backend: SecretsBackend; record: SecretRecord }[] = [];
 	for (const backend of backends) {
-		for (const record of await backend.list()) all.push({ backend, record });
+		let records: SecretRecord[];
+		try {
+			records = await backend.list();
+		} catch (error) {
+			throw new SecretsBackendListError(backend.source, error instanceof Error ? error.message : String(error));
+		}
+		for (const record of records) all.push({ backend, record });
 	}
 	return all;
+}
+
+/** Converts a SecretsBackendListError into a notify("error") and a `true` "stop the caller's loop/menu now" signal, instead of an uncaught throw out of the command. */
+async function loadAllSecretsOrNotify(ctx: ExtensionCommandContext, backends: SecretsBackend[]): Promise<{ backend: SecretsBackend; record: SecretRecord }[] | undefined> {
+	try {
+		return await loadAllSecrets(backends);
+	} catch (error) {
+		if (error instanceof SecretsBackendListError) {
+			ctx.ui.notify(`Could not reach the "${error.source}" backend: ${error.causeMessage}`, "error");
+			return undefined;
+		}
+		throw error;
+	}
 }
 
 async function manageSecret(ctx: ExtensionCommandContext, backend: SecretsBackend, name: string, pick: PickFromList): Promise<void> {
@@ -122,7 +157,8 @@ async function manageSecret(ctx: ExtensionCommandContext, backend: SecretsBacken
 
 async function secretsMenu(ctx: ExtensionCommandContext, backends: SecretsBackend[], pick: PickFromList, extraActions: SecretsMenuAction[]): Promise<void> {
 	for (;;) {
-		const entries = await loadAllSecrets(backends);
+		const entries = await loadAllSecretsOrNotify(ctx, backends);
+		if (!entries) return;
 		if (entries.length === 0 && extraActions.length === 0) {
 			ctx.ui.notify("No secrets known yet across any configured backend.", "info");
 			return;
@@ -160,7 +196,8 @@ function describeService(service: ServiceRecord, allSecretNames: Set<string>): s
 }
 
 async function manageService(ctx: ExtensionCommandContext, service: ServiceRecord, backends: SecretsBackend[], pick: PickFromList): Promise<void> {
-	const allSecrets = await loadAllSecrets(backends);
+	const allSecrets = await loadAllSecretsOrNotify(ctx, backends);
+	if (!allSecrets) return;
 	const byName = new Map(allSecrets.map(({ record }) => [record.name, record]));
 	const items: SelectItem[] = service.backends.map((name) => {
 		const record = byName.get(name);
@@ -177,7 +214,9 @@ async function servicesMenu(ctx: ExtensionCommandContext, registry: ServicesRegi
 			ctx.ui.notify("No services registered yet.", "info");
 			return;
 		}
-		const allSecretNames = new Set((await loadAllSecrets(backends)).map(({ record }) => record.name));
+		const secretsOrUndefined = await loadAllSecretsOrNotify(ctx, backends);
+		if (!secretsOrUndefined) return;
+		const allSecretNames = new Set(secretsOrUndefined.map(({ record }) => record.name));
 		const items: SelectItem[] = services.map((service) => ({ value: service.name, label: service.name, description: describeService(service, allSecretNames) }));
 		const selected = await pick(ctx, "Services", items, "\u2191\u2193 navigate \u2022 enter select \u2022 esc back");
 		if (!selected) return;

@@ -105,6 +105,40 @@ describe("runSecretsCommand: no ServicesRegistry -- [secrets]-only mode", () => 
 	});
 });
 
+describe("runSecretsCommand: a backend's list() failing mid-session", () => {
+	it("[secrets] menu: notifies which backend failed and returns, instead of an uncaught throw", async () => {
+		const { ctx, notifications } = fakeCtx();
+		const failing: SecretsBackend = {
+			source: "enigma",
+			list: async () => {
+				throw new Error("vault request failed: GET /keys: HTTP 500");
+			},
+			get: async () => undefined,
+			rotate: async () => {},
+			revoke: async () => {},
+		};
+		await expect(runSecretsCommand(ctx, { backends: [failing], pick: scriptedPick() })).resolves.toBeUndefined();
+		expect(notifications).toEqual([{ text: 'Could not reach the "enigma" backend: vault request failed: GET /keys: HTTP 500', level: "error" }]);
+	});
+
+	it("[services] menu: same failure while resolving cross-referenced secret status also notifies and returns cleanly", async () => {
+		const { ctx, notifications } = fakeCtx();
+		const failing: SecretsBackend = {
+			source: "local",
+			list: async () => {
+				throw new Error("ENOENT");
+			},
+			get: async () => undefined,
+			rotate: async () => {},
+			revoke: async () => {},
+		};
+		const registry: ServicesRegistry = { list: async () => [{ name: "pipes", backends: ["github"] }] };
+		const pick = scriptedPick("__daemon_kit_secrets_services_menu__", null);
+		await expect(runSecretsCommand(ctx, { backends: [failing], servicesRegistry: registry, pick })).resolves.toBeUndefined();
+		expect(notifications).toEqual([{ text: 'Could not reach the "local" backend: ENOENT', level: "error" }]);
+	});
+});
+
 describe("runSecretsCommand: extraActions", () => {
 	it("appends a caller-supplied action to the [secrets] menu and runs it on selection, distinct from any real secret", async () => {
 		const { ctx } = fakeCtx();
