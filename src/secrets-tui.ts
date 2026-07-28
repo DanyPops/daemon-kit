@@ -18,16 +18,23 @@
  * (already known: ServiceRecord.backends) and, new, which secrets have NO
  * service referencing them at all -- the reverse direction the flat
  * Enigma-only /secrets command never exposed.
+ *
+ * Deliberately decomposed per this project's TUI-testing rule (Lexicon
+ * practices/tui-testing.md): every menu's item list and every mutating
+ * action is its own pure/injectable function, testable by asserting on its
+ * return value or its effect directly -- never by scripting a pick()
+ * sequence through the whole command. The pick()-driven loops below exist
+ * only to wire those pieces together; they carry no logic of their own
+ * worth testing beyond a couple of thin end-to-end smoke checks.
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { findServicesUsingSecret, type SecretRecord, type SecretsBackend, type ServiceRecord, type ServicesRegistry } from "./secrets-backend.ts";
 
-/** Top-level menu item values, exported so a consumer's own tests can script navigation through the two-menu split without hardcoding magic strings. */
+/** Top-level menu item values, exported so a consumer's own tests can recognize navigation through the two-menu split without hardcoding magic strings. */
 export const SERVICES_MENU = "__daemon_kit_secrets_services_menu__";
 export const SECRETS_MENU = "__daemon_kit_secrets_secrets_menu__";
-const BACK = "__daemon_kit_secrets_back__";
 
 export type PickFromList = (ctx: ExtensionCommandContext, title: string, items: SelectItem[], helpText: string) => Promise<string | null>;
 
@@ -57,14 +64,9 @@ async function defaultPick(ctx: ExtensionCommandContext, title: string, items: S
 	});
 }
 
-function describeSecret(record: SecretRecord): string {
-	if (!record.configured) return "not configured";
-	const parts: string[] = [describeExpiry(record.expiresAt)];
-	if (record.scope) parts.push(`scope: ${record.scope}`);
-	return parts.join(" \u2022 ");
-}
+// ── Pure descriptions (state -> string, no I/O, no pick) ───────────────────
 
-function describeExpiry(expiresAt: string | undefined): string {
+export function describeExpiry(expiresAt: string | undefined): string {
 	if (!expiresAt) return "no expiry";
 	const target = new Date(expiresAt).getTime();
 	if (Number.isNaN(target)) return "no expiry";
@@ -75,6 +77,80 @@ function describeExpiry(expiresAt: string | undefined): string {
 	if (hours < 48) return `expires in ${hours}h`;
 	return `expires in ${Math.round(hours / 24)}d`;
 }
+
+export function describeSecret(record: SecretRecord | undefined): string {
+	if (!record?.configured) return "not configured";
+	const parts: string[] = [describeExpiry(record.expiresAt)];
+	if (record.scope) parts.push(`scope: ${record.scope}`);
+	return parts.join(" \u2022 ");
+}
+
+export function describeService(service: ServiceRecord, allSecretNames: Set<string>): string {
+	const missing = service.backends.filter((b) => !allSecretNames.has(b));
+	const uidPart = service.uid !== undefined ? `uid ${service.uid}` : undefined;
+	const parts = [`${service.backends.length} backend${service.backends.length === 1 ? "" : "s"}`];
+	if (missing.length > 0) parts.push(`${missing.length} unconfigured`);
+	if (uidPart) parts.push(uidPart);
+	return parts.join(" \u2022 ");
+}
+
+// ── Pure menu-value encoding (a same-named record from two backends must not collide) ──
+
+const VALUE_SEPARATOR = "\u0000";
+
+export function encodeSecretMenuValue(source: string, name: string): string {
+	return `${source}${VALUE_SEPARATOR}${name}`;
+}
+
+export function decodeSecretMenuValue(value: string): { source: string; name: string } | undefined {
+	const [source, name] = value.split(VALUE_SEPARATOR);
+	return source && name ? { source, name } : undefined;
+}
+
+// ── Pure item builders (state -> SelectItem[], no I/O, no pick) ────────────
+
+export type SecretEntry = { backend: SecretsBackend; record: SecretRecord };
+
+/** An action appended to the [secrets] menu that isn't a SecretRecord at all -- e.g. Enigma's own "+ Log in a backend", whose OAuth-device-flow/static-token registration is too vendor-specific for the generic SecretsBackend port to model. */
+export interface SecretsMenuAction {
+	value: string;
+	label: string;
+	description?: string;
+	run: (ctx: ExtensionCommandContext) => Promise<void>;
+}
+
+export function buildSecretsMenuItems(entries: SecretEntry[], extraActions: SecretsMenuAction[]): SelectItem[] {
+	return [
+		...entries.map(({ backend, record }) => ({
+			value: encodeSecretMenuValue(backend.source, record.name),
+			label: `${record.name} (${backend.source})`,
+			description: describeSecret(record),
+		})),
+		...extraActions.map((action) => ({ value: action.value, label: action.label, description: action.description })),
+	];
+}
+
+export function buildServicesMenuItems(services: ServiceRecord[], allSecretNames: Set<string>): SelectItem[] {
+	return services.map((service) => ({ value: service.name, label: service.name, description: describeService(service, allSecretNames) }));
+}
+
+export function buildServiceDetailItems(service: ServiceRecord, secretsByName: Map<string, SecretRecord>): SelectItem[] {
+	return [
+		...service.backends.map((name) => {
+			const record = secretsByName.get(name);
+			return { value: name, label: name, description: record ? describeSecret(record) : "not configured anywhere" };
+		}),
+		{ value: "back", label: "Back" },
+	];
+}
+
+export const SECRET_ACTION_ITEMS: SelectItem[] = [
+	{ value: "rotate", label: "Rotate", description: "Refresh this credential in place" },
+	{ value: "revoke", label: "Revoke", description: "Delete the stored credential" },
+	{ value: "back", label: "Back" },
+];
+
+// ── Backend aggregation ─────────────────────────────────────────────────────
 
 export class SecretsBackendListError extends Error {
 	constructor(
@@ -87,14 +163,13 @@ export class SecretsBackendListError extends Error {
 }
 
 /**
- * Every backend's records, source-qualified so two backends can each hold a
- * same-named record without colliding in the merged view. A remote backend's
- * list() can fail mid-session (the vault daemon restarting, a network blip) --
- * this always throws SecretsBackendListError naming which backend failed,
- * rather than a raw error a caller has to inspect to attribute.
+ * Every backend's records. A remote backend's list() can fail mid-session
+ * (the vault daemon restarting, a network blip) -- this always throws
+ * SecretsBackendListError naming which backend failed, rather than a raw
+ * error a caller has to inspect to attribute.
  */
-async function loadAllSecrets(backends: SecretsBackend[]): Promise<{ backend: SecretsBackend; record: SecretRecord }[]> {
-	const all: { backend: SecretsBackend; record: SecretRecord }[] = [];
+export async function loadAllSecrets(backends: SecretsBackend[]): Promise<SecretEntry[]> {
+	const all: SecretEntry[] = [];
 	for (const backend of backends) {
 		let records: SecretRecord[];
 		try {
@@ -107,8 +182,8 @@ async function loadAllSecrets(backends: SecretsBackend[]): Promise<{ backend: Se
 	return all;
 }
 
-/** Converts a SecretsBackendListError into a notify("error") and a `true` "stop the caller's loop/menu now" signal, instead of an uncaught throw out of the command. */
-async function loadAllSecretsOrNotify(ctx: ExtensionCommandContext, backends: SecretsBackend[]): Promise<{ backend: SecretsBackend; record: SecretRecord }[] | undefined> {
+/** Converts a SecretsBackendListError into a notify("error") and `undefined`, instead of an uncaught throw out of the command. */
+async function loadAllSecretsOrNotify(ctx: ExtensionCommandContext, backends: SecretsBackend[]): Promise<SecretEntry[] | undefined> {
 	try {
 		return await loadAllSecrets(backends);
 	} catch (error) {
@@ -120,39 +195,43 @@ async function loadAllSecretsOrNotify(ctx: ExtensionCommandContext, backends: Se
 	}
 }
 
+// ── Mutating actions (I/O, but directly callable/testable without any pick()) ──
+
+export async function performRotate(ctx: ExtensionCommandContext, backend: SecretsBackend, name: string): Promise<void> {
+	try {
+		await backend.rotate(name);
+		ctx.ui.notify(`${name}: rotated.`, "info");
+	} catch (error) {
+		ctx.ui.notify(`${name}: rotate failed (${error instanceof Error ? error.message : String(error)})`, "error");
+	}
+}
+
+/** Resolves true if the credential was actually revoked (confirmed and no error), false if declined or failed. */
+export async function performRevoke(ctx: ExtensionCommandContext, backend: SecretsBackend, name: string): Promise<boolean> {
+	const confirmed = ctx.hasUI ? await ctx.ui.confirm(`Revoke ${name}?`, "This deletes the stored credential. Re-authenticate to restore it.") : false;
+	if (!confirmed) return false;
+	try {
+		await backend.revoke(name);
+		ctx.ui.notify(`${name}: revoked.`, "info");
+		return true;
+	} catch (error) {
+		ctx.ui.notify(`${name}: revoke failed (${error instanceof Error ? error.message : String(error)})`, "error");
+		return false;
+	}
+}
+
+// ── Thin navigation loops: wire the pieces above to a real pick(); no logic of their own ──
+
 async function manageSecret(ctx: ExtensionCommandContext, backend: SecretsBackend, name: string, pick: PickFromList): Promise<void> {
 	for (;;) {
 		const record = await backend.get(name);
-		const status = record ? describeSecret(record) : "not configured";
-		const items: SelectItem[] = [
-			{ value: "rotate", label: "Rotate", description: "Refresh this credential in place" },
-			{ value: "revoke", label: "Revoke", description: "Delete the stored credential" },
-			{ value: "back", label: "Back" },
-		];
-		const action = await pick(ctx, `${name} (${backend.source}) \u2014 ${status}`, items, "\u2191\u2193 navigate \u2022 enter select \u2022 esc back");
+		const action = await pick(ctx, `${name} (${backend.source}) \u2014 ${describeSecret(record)}`, SECRET_ACTION_ITEMS, "\u2191\u2193 navigate \u2022 enter select \u2022 esc back");
 		if (!action || action === "back") return;
-
 		if (action === "rotate") {
-			try {
-				await backend.rotate(name);
-				ctx.ui.notify(`${name}: rotated.`, "info");
-			} catch (error) {
-				ctx.ui.notify(`${name}: rotate failed (${error instanceof Error ? error.message : String(error)})`, "error");
-			}
+			await performRotate(ctx, backend, name);
 			continue;
 		}
-
-		if (action === "revoke") {
-			const confirmed = ctx.hasUI ? await ctx.ui.confirm(`Revoke ${name}?`, "This deletes the stored credential. Re-authenticate to restore it.") : false;
-			if (!confirmed) continue;
-			try {
-				await backend.revoke(name);
-				ctx.ui.notify(`${name}: revoked.`, "info");
-			} catch (error) {
-				ctx.ui.notify(`${name}: revoke failed (${error instanceof Error ? error.message : String(error)})`, "error");
-			}
-			return;
-		}
+		if (action === "revoke" && (await performRevoke(ctx, backend, name))) return; // nothing left to manage once revoked
 	}
 }
 
@@ -164,14 +243,7 @@ async function secretsMenu(ctx: ExtensionCommandContext, backends: SecretsBacken
 			ctx.ui.notify("No secrets known yet across any configured backend.", "info");
 			return;
 		}
-		const items: SelectItem[] = [
-			...entries.map(({ backend, record }) => ({
-				value: `${backend.source}\u0000${record.name}`,
-				label: `${record.name} (${backend.source})`,
-				description: describeSecret(record),
-			})),
-			...extraActions.map((action) => ({ value: action.value, label: action.label, description: action.description })),
-		];
+		const items = buildSecretsMenuItems(entries, extraActions);
 		const selected = await pick(ctx, "All secrets", items, "\u2191\u2193 navigate \u2022 enter select \u2022 esc back");
 		if (!selected) return;
 		const extraAction = extraActions.find((action) => action.value === selected);
@@ -179,33 +251,19 @@ async function secretsMenu(ctx: ExtensionCommandContext, backends: SecretsBacken
 			await extraAction.run(ctx);
 			continue;
 		}
-		const [source, name] = selected.split("\u0000");
-		if (!source || !name) continue;
-		const backend = backends.find((b) => b.source === source);
+		const decoded = decodeSecretMenuValue(selected);
+		if (!decoded) continue;
+		const backend = backends.find((b) => b.source === decoded.source);
 		if (!backend) continue;
-		await manageSecret(ctx, backend, name, pick);
+		await manageSecret(ctx, backend, decoded.name, pick);
 	}
-}
-
-function describeService(service: ServiceRecord, allSecretNames: Set<string>): string {
-	const missing = service.backends.filter((b) => !allSecretNames.has(b));
-	const uidPart = service.uid !== undefined ? `uid ${service.uid}` : undefined;
-	const parts = [`${service.backends.length} backend${service.backends.length === 1 ? "" : "s"}`];
-	if (missing.length > 0) parts.push(`${missing.length} unconfigured`);
-	if (uidPart) parts.push(uidPart);
-	return parts.join(" \u2022 ");
 }
 
 async function manageService(ctx: ExtensionCommandContext, service: ServiceRecord, backends: SecretsBackend[], pick: PickFromList): Promise<void> {
 	const allSecrets = await loadAllSecretsOrNotify(ctx, backends);
 	if (!allSecrets) return;
 	const byName = new Map(allSecrets.map(({ record }) => [record.name, record]));
-	const items: SelectItem[] = service.backends.map((name) => {
-		const record = byName.get(name);
-		return { value: name, label: name, description: record ? describeSecret(record) : "not configured anywhere" };
-	});
-	items.push({ value: "back", label: "Back" });
-	await pick(ctx, `${service.name} \u2014 secrets in use`, items, "\u2191\u2193 navigate \u2022 esc back");
+	await pick(ctx, `${service.name} \u2014 secrets in use`, buildServiceDetailItems(service, byName), "\u2191\u2193 navigate \u2022 esc back");
 }
 
 async function servicesMenu(ctx: ExtensionCommandContext, registry: ServicesRegistry, backends: SecretsBackend[], pick: PickFromList): Promise<void> {
@@ -215,23 +273,14 @@ async function servicesMenu(ctx: ExtensionCommandContext, registry: ServicesRegi
 			ctx.ui.notify("No services registered yet.", "info");
 			return;
 		}
-		const secretsOrUndefined = await loadAllSecretsOrNotify(ctx, backends);
-		if (!secretsOrUndefined) return;
-		const allSecretNames = new Set(secretsOrUndefined.map(({ record }) => record.name));
-		const items: SelectItem[] = services.map((service) => ({ value: service.name, label: service.name, description: describeService(service, allSecretNames) }));
-		const selected = await pick(ctx, "Services", items, "\u2191\u2193 navigate \u2022 enter select \u2022 esc back");
+		const entries = await loadAllSecretsOrNotify(ctx, backends);
+		if (!entries) return;
+		const allSecretNames = new Set(entries.map(({ record }) => record.name));
+		const selected = await pick(ctx, "Services", buildServicesMenuItems(services, allSecretNames), "\u2191\u2193 navigate \u2022 enter select \u2022 esc back");
 		if (!selected) return;
 		const service = services.find((s) => s.name === selected);
 		if (service) await manageService(ctx, service, backends, pick);
 	}
-}
-
-/** An action appended to the [secrets] menu that isn't a SecretRecord at all -- e.g. Enigma's own "+ Log in a backend", whose OAuth-device-flow/static-token registration is too vendor-specific for the generic SecretsBackend port to model. */
-export interface SecretsMenuAction {
-	value: string;
-	label: string;
-	description?: string;
-	run: (ctx: ExtensionCommandContext) => Promise<void>;
 }
 
 export interface RunSecretsCommandOptions {
@@ -243,6 +292,11 @@ export interface RunSecretsCommandOptions {
 	pick?: PickFromList;
 }
 
+export const TOP_LEVEL_MENU_ITEMS: SelectItem[] = [
+	{ value: SERVICES_MENU, label: "[services]", description: "Consumers and which secrets each one uses" },
+	{ value: SECRETS_MENU, label: "[secrets]", description: "Named credentials: status, rotate, revoke" },
+];
+
 export async function runSecretsCommand(ctx: ExtensionCommandContext, options: RunSecretsCommandOptions): Promise<void> {
 	const pick = options.pick ?? defaultPick;
 	const extraActions = options.extraActions ?? [];
@@ -252,11 +306,7 @@ export async function runSecretsCommand(ctx: ExtensionCommandContext, options: R
 	}
 
 	for (;;) {
-		const items: SelectItem[] = [
-			{ value: SERVICES_MENU, label: "[services]", description: "Consumers and which secrets each one uses" },
-			{ value: SECRETS_MENU, label: "[secrets]", description: "Named credentials: status, rotate, revoke" },
-		];
-		const selected = await pick(ctx, "Secrets", items, "\u2191\u2193 navigate \u2022 enter select \u2022 esc close");
+		const selected = await pick(ctx, "Secrets", TOP_LEVEL_MENU_ITEMS, "\u2191\u2193 navigate \u2022 enter select \u2022 esc close");
 		if (!selected) return;
 		if (selected === SERVICES_MENU) await servicesMenu(ctx, options.servicesRegistry, options.backends, pick);
 		else await secretsMenu(ctx, options.backends, pick, extraActions);

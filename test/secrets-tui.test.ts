@@ -1,17 +1,182 @@
 import { describe, expect, it } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { registerSecretsCommand, runSecretsCommand, type PickFromList } from "../src/secrets-tui.ts";
-import type { SecretRecord, SecretsBackend, ServiceRecord, ServicesRegistry } from "../src/secrets-backend.ts";
+import {
+	buildSecretsMenuItems,
+	buildServiceDetailItems,
+	buildServicesMenuItems,
+	decodeSecretMenuValue,
+	describeExpiry,
+	describeSecret,
+	describeService,
+	encodeSecretMenuValue,
+	loadAllSecrets,
+	performRevoke,
+	performRotate,
+	registerSecretsCommand,
+	runSecretsCommand,
+	SecretsBackendListError,
+	SECRETS_MENU,
+	SERVICES_MENU,
+	type PickFromList,
+	type SecretsMenuAction,
+} from "../src/secrets-tui.ts";
+import type { SecretRecord, SecretsBackend, ServiceRecord } from "../src/secrets-backend.ts";
 
-function fakePi(): { pi: ExtensionAPI; registered: Array<{ name: string; description: string }> } {
-	const registered: Array<{ name: string; description: string }> = [];
-	const pi = {
-		registerCommand: (name: string, def: { description: string }) => {
-			registered.push({ name, description: def.description });
-		},
-	} as unknown as ExtensionAPI;
-	return { pi, registered };
+// ── Pure descriptions -- state in, string out, no I/O, no pick ─────────────
+
+describe("describeExpiry", () => {
+	it("no expiresAt at all", () => {
+		expect(describeExpiry(undefined)).toBe("no expiry");
+	});
+
+	it("an unparseable date string", () => {
+		expect(describeExpiry("not-a-date")).toBe("no expiry");
+	});
+
+	it("already expired", () => {
+		expect(describeExpiry(new Date(Date.now() - 1000).toISOString())).toBe("expired");
+	});
+
+	it("under an hour away", () => {
+		expect(describeExpiry(new Date(Date.now() + 30_000).toISOString())).toBe("expires in <1h");
+	});
+
+	it("hours away", () => {
+		expect(describeExpiry(new Date(Date.now() + 5 * 3_600_000).toISOString())).toBe("expires in 5h");
+	});
+
+	it("days away", () => {
+		expect(describeExpiry(new Date(Date.now() + 5 * 86_400_000).toISOString())).toBe("expires in 5d");
+	});
+});
+
+describe("describeSecret", () => {
+	it("undefined record", () => {
+		expect(describeSecret(undefined)).toBe("not configured");
+	});
+
+	it("not configured", () => {
+		expect(describeSecret({ name: "github", source: "local", configured: false })).toBe("not configured");
+	});
+
+	it("configured, no expiry, no scope", () => {
+		expect(describeSecret({ name: "github", source: "local", configured: true })).toBe("no expiry");
+	});
+
+	it("configured with a scope appends it", () => {
+		expect(describeSecret({ name: "github", source: "local", configured: true, scope: "repo" })).toBe("no expiry \u2022 scope: repo");
+	});
+});
+
+describe("describeService", () => {
+	it("every backend configured", () => {
+		const service: ServiceRecord = { name: "pipes", backends: ["github", "jenkins-ci"] };
+		expect(describeService(service, new Set(["github", "jenkins-ci"]))).toBe("2 backends");
+	});
+
+	it("singular 'backend' for exactly one", () => {
+		expect(describeService({ name: "pipes", backends: ["github"] }, new Set(["github"]))).toBe("1 backend");
+	});
+
+	it("flags unconfigured backends by count", () => {
+		expect(describeService({ name: "pipes", backends: ["github", "jenkins-ci"] }, new Set(["github"]))).toBe("2 backends \u2022 1 unconfigured");
+	});
+
+	it("appends a bound uid when present", () => {
+		expect(describeService({ name: "tickets", backends: ["github"], uid: 1001 }, new Set(["github"]))).toBe("1 backend \u2022 uid 1001");
+	});
+});
+
+// ── Pure menu-value encoding ─────────────────────────────────────────────
+
+describe("encodeSecretMenuValue / decodeSecretMenuValue", () => {
+	it("round-trips source and name", () => {
+		expect(decodeSecretMenuValue(encodeSecretMenuValue("local", "github"))).toEqual({ source: "local", name: "github" });
+	});
+
+	it("decodes undefined for a value with no separator at all", () => {
+		expect(decodeSecretMenuValue("garbage")).toBeUndefined();
+	});
+
+	it("decodes undefined for a value missing its name half", () => {
+		expect(decodeSecretMenuValue(encodeSecretMenuValue("local", ""))).toBeUndefined();
+	});
+});
+
+// ── Pure item builders -- state in, SelectItem[] out ────────────────────────
+
+function record(name: string, source: string, overrides: Partial<SecretRecord> = {}): SecretRecord {
+	return { name, source, configured: true, ...overrides };
 }
+
+function backendStub(source: string): SecretsBackend {
+	return { source, list: async () => [], get: async () => undefined, rotate: async () => {}, revoke: async () => {} };
+}
+
+describe("buildSecretsMenuItems", () => {
+	it("one item per entry, keyed by source+name, labeled '<name> (<source>)'", () => {
+		const items = buildSecretsMenuItems([{ backend: backendStub("local"), record: record("github", "local") }], []);
+		expect(items).toEqual([{ value: "local\u0000github", label: "github (local)", description: "no expiry" }]);
+	});
+
+	it("appends extraActions after every real entry, in order", () => {
+		const action: SecretsMenuAction = { value: "__login__", label: "+ Log in", run: async () => {} };
+		const items = buildSecretsMenuItems([], [action]);
+		expect(items).toEqual([{ value: "__login__", label: "+ Log in", description: undefined }]);
+	});
+
+	it("two backends holding the same record name don't collide -- distinct encoded values", () => {
+		const items = buildSecretsMenuItems(
+			[
+				{ backend: backendStub("local"), record: record("github", "local") },
+				{ backend: backendStub("enigma"), record: record("github", "enigma") },
+			],
+			[],
+		);
+		expect(items.map((i) => i.value)).toEqual(["local\u0000github", "enigma\u0000github"]);
+	});
+});
+
+describe("buildServicesMenuItems", () => {
+	it("one item per service, described against the given secret-name set", () => {
+		const items = buildServicesMenuItems([{ name: "pipes", backends: ["github"] }], new Set(["github"]));
+		expect(items).toEqual([{ value: "pipes", label: "pipes", description: "1 backend" }]);
+	});
+});
+
+describe("buildServiceDetailItems", () => {
+	it("one item per backend the service references, plus a trailing Back", () => {
+		const service: ServiceRecord = { name: "pipes", backends: ["github", "jenkins-ci"] };
+		const items = buildServiceDetailItems(service, new Map([["github", record("github", "local")]]));
+		expect(items).toEqual([
+			{ value: "github", label: "github", description: "no expiry" },
+			{ value: "jenkins-ci", label: "jenkins-ci", description: "not configured anywhere" },
+			{ value: "back", label: "Back" },
+		]);
+	});
+});
+
+// ── loadAllSecrets: aggregation + error attribution, no pick involved ──────
+
+describe("loadAllSecrets", () => {
+	it("flattens every backend's records, source paired with each", async () => {
+		const a: SecretsBackend = { ...backendStub("local"), list: async () => [record("github", "local")] };
+		const b: SecretsBackend = { ...backendStub("env"), list: async () => [record("github", "env")] };
+		const entries = await loadAllSecrets([a, b]);
+		expect(entries.map((e) => [e.backend.source, e.record.name])).toEqual([
+			["local", "github"],
+			["env", "github"],
+		]);
+	});
+
+	it("wraps a backend's list() failure in SecretsBackendListError naming that backend", async () => {
+		const failing: SecretsBackend = { ...backendStub("enigma"), list: async () => Promise.reject(new Error("HTTP 500")) };
+		await expect(loadAllSecrets([failing])).rejects.toThrow(SecretsBackendListError);
+		await expect(loadAllSecrets([failing])).rejects.toThrow("enigma: HTTP 500");
+	});
+});
+
+// ── Mutating actions -- directly callable, no pick() sequence needed at all ──
 
 function fakeCtx(overrides: { confirm?: boolean; hasUI?: boolean } = {}): { ctx: ExtensionCommandContext; notifications: Array<{ text: string; level: string }> } {
 	const notifications: Array<{ text: string; level: string }> = [];
@@ -19,220 +184,131 @@ function fakeCtx(overrides: { confirm?: boolean; hasUI?: boolean } = {}): { ctx:
 		hasUI: overrides.hasUI ?? true,
 		mode: "tui",
 		ui: {
-			notify: (text: string, level: string) => {
-				notifications.push({ text, level });
-			},
+			notify: (text: string, level: string) => notifications.push({ text, level }),
 			confirm: async () => overrides.confirm ?? true,
 		},
 	} as unknown as ExtensionCommandContext;
 	return { ctx, notifications };
 }
 
-/** Scripted `pick`: returns each queued value in order, then null forever after. */
-function scriptedPick(...values: Array<string | null>): PickFromList {
-	const queue = [...values];
-	return async () => (queue.length > 0 ? queue.shift()! : null);
-}
-
-function fakeBackend(source: string, records: Record<string, SecretRecord>): SecretsBackend & { rotated: string[]; revoked: string[] } {
-	const backend = {
-		source,
-		rotated: [] as string[],
-		revoked: [] as string[],
-		list: async () => Object.values(records),
-		get: async (name: string) => records[name],
-		rotate: async (name: string) => {
-			backend.rotated.push(name);
-		},
-		revoke: async (name: string) => {
-			backend.revoked.push(name);
-			delete records[name];
-		},
-	};
-	return backend;
-}
-
-describe("runSecretsCommand: no ServicesRegistry -- [secrets]-only mode", () => {
-	it("notifies instead of opening a menu when there are no secrets across any backend", async () => {
+describe("performRotate", () => {
+	it("calls backend.rotate and notifies success", async () => {
 		const { ctx, notifications } = fakeCtx();
-		await runSecretsCommand(ctx, { backends: [fakeBackend("local", {})], pick: scriptedPick() });
-		expect(notifications[0]?.text).toContain("No secrets known");
+		const rotated: string[] = [];
+		const backend: SecretsBackend = { ...backendStub("local"), rotate: async (name) => void rotated.push(name) };
+		await performRotate(ctx, backend, "github");
+		expect(rotated).toEqual(["github"]);
+		expect(notifications).toEqual([{ text: "github: rotated.", level: "info" }]);
 	});
 
-	it("lists every record from every backend in one merged menu", async () => {
-		const { ctx } = fakeCtx();
-		const local = fakeBackend("local", { github: { name: "github", source: "local", configured: true } });
-		const env = fakeBackend("env", { jira: { name: "jira", source: "env", configured: false } });
-		const seen: string[][] = [];
+	it("notifies an error, never throwing, when rotate() rejects", async () => {
+		const { ctx, notifications } = fakeCtx();
+		const backend: SecretsBackend = { ...backendStub("local"), rotate: async () => Promise.reject(new Error("no refresh configured")) };
+		await performRotate(ctx, backend, "github");
+		expect(notifications).toEqual([{ text: "github: rotate failed (no refresh configured)", level: "error" }]);
+	});
+});
+
+describe("performRevoke", () => {
+	it("returns false and never calls revoke() when the confirmation is declined", async () => {
+		const { ctx } = fakeCtx({ confirm: false });
+		const revoked: string[] = [];
+		const backend: SecretsBackend = { ...backendStub("local"), revoke: async (name) => void revoked.push(name) };
+		expect(await performRevoke(ctx, backend, "github")).toBe(false);
+		expect(revoked).toEqual([]);
+	});
+
+	it("returns true, calls revoke(), and notifies success when confirmed", async () => {
+		const { ctx, notifications } = fakeCtx({ confirm: true });
+		const revoked: string[] = [];
+		const backend: SecretsBackend = { ...backendStub("local"), revoke: async (name) => void revoked.push(name) };
+		expect(await performRevoke(ctx, backend, "github")).toBe(true);
+		expect(revoked).toEqual(["github"]);
+		expect(notifications).toEqual([{ text: "github: revoked.", level: "info" }]);
+	});
+
+	it("returns false and notifies an error when revoke() rejects", async () => {
+		const { ctx, notifications } = fakeCtx({ confirm: true });
+		const backend: SecretsBackend = { ...backendStub("local"), revoke: async () => Promise.reject(new Error("disk full")) };
+		expect(await performRevoke(ctx, backend, "github")).toBe(false);
+		expect(notifications).toEqual([{ text: "github: revoke failed (disk full)", level: "error" }]);
+	});
+
+	it("skips confirm() entirely and returns false when ctx.hasUI is false", async () => {
+		const { ctx } = fakeCtx({ hasUI: false });
+		const backend: SecretsBackend = { ...backendStub("local") };
+		expect(await performRevoke(ctx, backend, "github")).toBe(false);
+	});
+});
+
+// ── Thin wiring smoke tests -- one or two per shape, not exhaustive chains ──
+
+describe("runSecretsCommand: wiring smoke tests", () => {
+	it("[secrets]-only mode (no ServicesRegistry): shows the merged item list built by buildSecretsMenuItems", async () => {
+		const backend: SecretsBackend = { ...backendStub("local"), list: async () => [record("github", "local")] };
+		let seenItems: unknown;
 		const pick: PickFromList = async (_ctx, _title, items) => {
-			seen.push(items.map((i) => i.label));
+			seenItems = items;
 			return null;
 		};
-		await runSecretsCommand(ctx, { backends: [local, env], pick });
-		expect(seen[0]).toEqual(["github (local)", "jira (env)"]);
-	});
-
-	it("rotate calls through to the owning backend, keyed by source -- not just by name", async () => {
-		const { ctx, notifications } = fakeCtx();
-		const local = fakeBackend("local", { github: { name: "github", source: "local", configured: true } });
-		const pick = scriptedPick("local\u0000github", "rotate", "back", null);
-		await runSecretsCommand(ctx, { backends: [local], pick });
-		expect(local.rotated).toEqual(["github"]);
-		expect(notifications.some((n) => n.text.includes("rotated"))).toBe(true);
-	});
-
-	it("revoke asks for confirmation and calls through on yes", async () => {
-		const { ctx, notifications } = fakeCtx({ confirm: true });
-		const local = fakeBackend("local", { github: { name: "github", source: "local", configured: true } });
-		const pick = scriptedPick("local\u0000github", "revoke");
-		await runSecretsCommand(ctx, { backends: [local], pick });
-		expect(local.revoked).toEqual(["github"]);
-		expect(notifications.some((n) => n.text.includes("revoked"))).toBe(true);
-	});
-
-	it("revoke does nothing when confirmation is declined", async () => {
-		const { ctx } = fakeCtx({ confirm: false });
-		const local = fakeBackend("local", { github: { name: "github", source: "local", configured: true } });
-		const pick = scriptedPick("local\u0000github", "revoke", "back", null);
-		await runSecretsCommand(ctx, { backends: [local], pick });
-		expect(local.revoked).toEqual([]);
-	});
-
-	it("surfaces a rotate failure via notify instead of throwing out of the command", async () => {
-		const { ctx, notifications } = fakeCtx();
-		const failing: SecretsBackend = {
-			source: "local",
-			list: async () => [{ name: "github", source: "local", configured: true }],
-			get: async () => ({ name: "github", source: "local", configured: true }),
-			rotate: async () => {
-				throw new Error("network unreachable");
-			},
-			revoke: async () => {},
-		};
-		const pick = scriptedPick("local\u0000github", "rotate", "back", null);
-		await runSecretsCommand(ctx, { backends: [failing], pick });
-		expect(notifications.some((n) => n.level === "error" && n.text.includes("network unreachable"))).toBe(true);
-	});
-});
-
-describe("runSecretsCommand: a backend's list() failing mid-session", () => {
-	it("[secrets] menu: notifies which backend failed and returns, instead of an uncaught throw", async () => {
-		const { ctx, notifications } = fakeCtx();
-		const failing: SecretsBackend = {
-			source: "enigma",
-			list: async () => {
-				throw new Error("vault request failed: GET /keys: HTTP 500");
-			},
-			get: async () => undefined,
-			rotate: async () => {},
-			revoke: async () => {},
-		};
-		await expect(runSecretsCommand(ctx, { backends: [failing], pick: scriptedPick() })).resolves.toBeUndefined();
-		expect(notifications).toEqual([{ text: 'Could not reach the "enigma" backend: vault request failed: GET /keys: HTTP 500', level: "error" }]);
-	});
-
-	it("[services] menu: same failure while resolving cross-referenced secret status also notifies and returns cleanly", async () => {
-		const { ctx, notifications } = fakeCtx();
-		const failing: SecretsBackend = {
-			source: "local",
-			list: async () => {
-				throw new Error("ENOENT");
-			},
-			get: async () => undefined,
-			rotate: async () => {},
-			revoke: async () => {},
-		};
-		const registry: ServicesRegistry = { list: async () => [{ name: "pipes", backends: ["github"] }] };
-		const pick = scriptedPick("__daemon_kit_secrets_services_menu__", null);
-		await expect(runSecretsCommand(ctx, { backends: [failing], servicesRegistry: registry, pick })).resolves.toBeUndefined();
-		expect(notifications).toEqual([{ text: 'Could not reach the "local" backend: ENOENT', level: "error" }]);
-	});
-});
-
-describe("runSecretsCommand: extraActions", () => {
-	it("appends a caller-supplied action to the [secrets] menu and runs it on selection, distinct from any real secret", async () => {
 		const { ctx } = fakeCtx();
-		const local = fakeBackend("local", { github: { name: "github", source: "local", configured: true } });
+		await runSecretsCommand(ctx, { backends: [backend], pick });
+		expect(seenItems).toEqual(buildSecretsMenuItems([{ backend, record: record("github", "local") }], []));
+	});
+
+	it("with a ServicesRegistry: top-level menu is exactly TOP_LEVEL_MENU_ITEMS, selecting [services] enters buildServicesMenuItems' output", async () => {
+		const { ctx } = fakeCtx();
+		const registry = { list: async () => [{ name: "pipes", backends: ["github"] }] };
+		const seenMenus: unknown[] = [];
+		let calls = 0;
+		const pick: PickFromList = async (_ctx, _title, items) => {
+			seenMenus.push(items);
+			calls += 1;
+			return calls === 1 ? SERVICES_MENU : null;
+		};
+		await runSecretsCommand(ctx, { backends: [], servicesRegistry: registry, pick });
+		expect(seenMenus[1]).toEqual(buildServicesMenuItems([{ name: "pipes", backends: ["github"] }], new Set()));
+	});
+
+	it("a backend's list() failing mid-session notifies which backend failed, without an uncaught throw", async () => {
+		const { ctx, notifications } = fakeCtx();
+		const failing: SecretsBackend = { ...backendStub("enigma"), list: async () => Promise.reject(new Error("HTTP 500")) };
+		await expect(runSecretsCommand(ctx, { backends: [failing], pick: async () => null })).resolves.toBeUndefined();
+		expect(notifications).toEqual([{ text: 'Could not reach the "enigma" backend: HTTP 500', level: "error" }]);
+	});
+
+	it("extraActions run() is invoked when its value is selected from the [secrets] menu", async () => {
+		const { ctx } = fakeCtx();
 		const ran: string[] = [];
-		const pick = scriptedPick("__login__", null);
-		await runSecretsCommand(ctx, {
-			backends: [local],
-			extraActions: [{ value: "__login__", label: "+ Log in a backend", run: async () => void ran.push("login") }],
-			pick,
-		});
+		const action: SecretsMenuAction = { value: "__login__", label: "+ Log in", run: async () => void ran.push("login") };
+		let calls = 0;
+		const pick: PickFromList = async () => {
+			calls += 1;
+			return calls === 1 ? "__login__" : null;
+		};
+		await runSecretsCommand(ctx, { backends: [], extraActions: [action], pick });
 		expect(ran).toEqual(["login"]);
 	});
 
-	it("shows extraActions even when there are zero real secrets, instead of short-circuiting to a notify", async () => {
+	it("notifies instead of opening a menu when there are no secrets and no extraActions", async () => {
 		const { ctx, notifications } = fakeCtx();
-		const empty = fakeBackend("local", {});
-		const seen: string[][] = [];
-		const pick: PickFromList = async (_ctx, _title, items) => {
-			seen.push(items.map((i) => i.label));
-			return null;
-		};
-		await runSecretsCommand(ctx, { backends: [empty], extraActions: [{ value: "__login__", label: "+ Log in a backend", run: async () => {} }], pick });
-		expect(seen[0]).toEqual(["+ Log in a backend"]);
-		expect(notifications).toEqual([]);
-	});
-});
-
-describe("runSecretsCommand: with a ServicesRegistry -- two-menu mode", () => {
-	function fakeRegistry(services: ServiceRecord[]): ServicesRegistry {
-		return { list: async () => services };
-	}
-
-	it("shows [services] and [secrets] as the top-level menu", async () => {
-		const { ctx } = fakeCtx();
-		const seen: string[][] = [];
-		const pick: PickFromList = async (_ctx, _title, items) => {
-			seen.push(items.map((i) => i.label));
-			return null;
-		};
-		await runSecretsCommand(ctx, { backends: [], servicesRegistry: fakeRegistry([]), pick });
-		expect(seen[0]).toEqual(["[services]", "[secrets]"]);
-	});
-
-	it("a service's own submenu shows which secrets it references, each with real configured status", async () => {
-		const { ctx } = fakeCtx();
-		const local = fakeBackend("local", { github: { name: "github", source: "local", configured: true } });
-		const registry = fakeRegistry([{ name: "pipes", backends: ["github", "jenkins-ci"] }]);
-		// Sequence: top menu -> [services], services list -> "pipes", service submenu -> back, services list -> back, top menu -> back.
-		const pick = scriptedPick("__daemon_kit_secrets_services_menu__", "pipes", "back", null, null);
-		let serviceSubmenuDescriptions: string[] = [];
-		const spyPick: PickFromList = async (c, title, items, help) => {
-			if (items.some((i) => i.value === "github")) serviceSubmenuDescriptions = items.map((i) => i.description ?? "");
-			return pick(c, title, items, help);
-		};
-		await runSecretsCommand(ctx, { backends: [local], servicesRegistry: registry, pick: spyPick });
-		expect(serviceSubmenuDescriptions).toEqual(["no expiry", "not configured anywhere", ""]); // trailing "" is the submenu's own "Back" entry
-	});
-
-	it("flags a service backend with no matching secret anywhere as unconfigured in its own description", async () => {
-		const { ctx } = fakeCtx();
-		const registry = fakeRegistry([{ name: "pipes", backends: ["github"] }]);
-		// Navigate into [services] first -- the top-level menu's own items don't carry per-service descriptions.
-		const pick = scriptedPick("__daemon_kit_secrets_services_menu__", null, null);
-		const seen: string[][] = [];
-		const spyPick: PickFromList = async (c, title, items, help) => {
-			if (items.some((i) => i.value === "pipes")) seen.push(items.map((i) => i.description ?? ""));
-			return pick(c, title, items, help);
-		};
-		await runSecretsCommand(ctx, { backends: [], servicesRegistry: registry, pick: spyPick });
-		expect(seen.some((descs) => descs.some((d) => d.includes("1 unconfigured")))).toBe(true);
+		await runSecretsCommand(ctx, { backends: [backendStub("local")], pick: async () => null });
+		expect(notifications[0]?.text).toContain("No secrets known");
 	});
 });
 
 describe("registerSecretsCommand", () => {
 	it("registers under 'secrets' by default", () => {
-		const { pi, registered } = fakePi();
+		const registered: Array<{ name: string; description: string }> = [];
+		const pi = { registerCommand: (name: string, def: { description: string }) => registered.push({ name, description: def.description }) } as unknown as ExtensionAPI;
 		registerSecretsCommand(pi, () => ({ backends: [] }));
 		expect(registered).toEqual([{ name: "secrets", description: "Manage credentials: view status, rotate, or revoke, across every configured backend" }]);
 	});
 
 	it("registers under a caller-supplied name instead, so a second daemon-kit consumer in the same Pi session doesn't collide with an existing /secrets", () => {
-		const { pi, registered } = fakePi();
+		const registered: string[] = [];
+		const pi = { registerCommand: (name: string) => registered.push(name) } as unknown as ExtensionAPI;
 		registerSecretsCommand(pi, () => ({ backends: [] }), "tickets-secrets");
-		expect(registered.map((r) => r.name)).toEqual(["tickets-secrets"]);
+		expect(registered).toEqual(["tickets-secrets"]);
 	});
 });
