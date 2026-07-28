@@ -12,6 +12,8 @@
  * newline-delimited JSON request per connection, one newline-delimited JSON
  * response, then close.
  */
+import { chmodSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { getPeerCredential, rawSocketFd, type PeerCredential } from "./unix-peer-cred.ts";
 
 interface WireRequest {
@@ -66,6 +68,10 @@ async function frameResponse(response: Response): Promise<WireResponse> {
 }
 
 export function serveUnixRpc(options: UnixRpcServerOptions): UnixRpcServer {
+	// Matches daemon-kit's other file-writing helpers (writeDaemonHandle, ensureAuthToken):
+	// a caller shouldn't need to separately ensure the parent directory exists first.
+	mkdirSync(dirname(options.path), { recursive: true, mode: 0o700 });
+
 	const server = Bun.listen({
 		unix: options.path,
 		socket: {
@@ -114,7 +120,7 @@ export function serveUnixRpc(options: UnixRpcServerOptions): UnixRpcServer {
 	});
 
 	try {
-		require("node:fs").chmodSync(options.path, options.mode ?? 0o600);
+		chmodSync(options.path, options.mode ?? 0o600);
 	} catch (err) {
 		options.onError?.(err);
 	}

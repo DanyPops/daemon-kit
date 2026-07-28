@@ -1,11 +1,16 @@
 import { describe, expect, it } from "bun:test";
-import { statSync, unlinkSync } from "node:fs";
+import { rmSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { serveUnixRpc } from "../src/unix-rpc-server.ts";
 
 function socketPath(): string {
 	return join(tmpdir(), `daemon-kit-unix-rpc-${process.pid}-${Math.random().toString(36).slice(2)}.sock`);
+}
+
+/** A path whose parent directory doesn't exist yet -- proves serveUnixRpc creates it, matching daemon-kit's other file-writing helpers (writeDaemonHandle, ensureAuthToken). */
+function socketPathInMissingDir(): string {
+	return join(tmpdir(), `daemon-kit-unix-rpc-missing-dir-${process.pid}-${Math.random().toString(36).slice(2)}`, "admin.sock");
 }
 
 const realUid = process.getuid?.();
@@ -36,6 +41,21 @@ async function sendRequest(path: string, request: unknown): Promise<unknown> {
 	client.end();
 	return result;
 }
+
+describe("serveUnixRpc: creates its own parent directory", () => {
+	it("binds successfully even when the socket's parent directory does not exist yet", async () => {
+		const path = socketPathInMissingDir();
+		const server = serveUnixRpc({ path, handler: async () => new Response(null, { status: 204 }) });
+		try {
+			expect(statSync(path).isSocket()).toBe(true);
+		} finally {
+			server.stop();
+			try {
+				rmSync(dirname(path), { recursive: true, force: true });
+			} catch {}
+		}
+	});
+});
 
 describe("serveUnixRpc: socket file permissions", () => {
 	it("defaults to owner-only (0600) -- an internal RPC socket has no reason to be group/world-accessible", async () => {
