@@ -105,6 +105,34 @@ describe("runSecretsCommand: no ServicesRegistry -- [secrets]-only mode", () => 
 	});
 });
 
+describe("runSecretsCommand: extraActions", () => {
+	it("appends a caller-supplied action to the [secrets] menu and runs it on selection, distinct from any real secret", async () => {
+		const { ctx } = fakeCtx();
+		const local = fakeBackend("local", { github: { name: "github", source: "local", configured: true } });
+		const ran: string[] = [];
+		const pick = scriptedPick("__login__", null);
+		await runSecretsCommand(ctx, {
+			backends: [local],
+			extraActions: [{ value: "__login__", label: "+ Log in a backend", run: async () => void ran.push("login") }],
+			pick,
+		});
+		expect(ran).toEqual(["login"]);
+	});
+
+	it("shows extraActions even when there are zero real secrets, instead of short-circuiting to a notify", async () => {
+		const { ctx, notifications } = fakeCtx();
+		const empty = fakeBackend("local", {});
+		const seen: string[][] = [];
+		const pick: PickFromList = async (_ctx, _title, items) => {
+			seen.push(items.map((i) => i.label));
+			return null;
+		};
+		await runSecretsCommand(ctx, { backends: [empty], extraActions: [{ value: "__login__", label: "+ Log in a backend", run: async () => {} }], pick });
+		expect(seen[0]).toEqual(["+ Log in a backend"]);
+		expect(notifications).toEqual([]);
+	});
+});
+
 describe("runSecretsCommand: with a ServicesRegistry -- two-menu mode", () => {
 	function fakeRegistry(services: ServiceRecord[]): ServicesRegistry {
 		return { list: async () => services };

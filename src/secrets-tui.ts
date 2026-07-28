@@ -120,20 +120,28 @@ async function manageSecret(ctx: ExtensionCommandContext, backend: SecretsBacken
 	}
 }
 
-async function secretsMenu(ctx: ExtensionCommandContext, backends: SecretsBackend[], pick: PickFromList): Promise<void> {
+async function secretsMenu(ctx: ExtensionCommandContext, backends: SecretsBackend[], pick: PickFromList, extraActions: SecretsMenuAction[]): Promise<void> {
 	for (;;) {
 		const entries = await loadAllSecrets(backends);
-		if (entries.length === 0) {
+		if (entries.length === 0 && extraActions.length === 0) {
 			ctx.ui.notify("No secrets known yet across any configured backend.", "info");
 			return;
 		}
-		const items: SelectItem[] = entries.map(({ backend, record }) => ({
-			value: `${backend.source}\u0000${record.name}`,
-			label: `${record.name} (${backend.source})`,
-			description: describeSecret(record),
-		}));
+		const items: SelectItem[] = [
+			...entries.map(({ backend, record }) => ({
+				value: `${backend.source}\u0000${record.name}`,
+				label: `${record.name} (${backend.source})`,
+				description: describeSecret(record),
+			})),
+			...extraActions.map((action) => ({ value: action.value, label: action.label, description: action.description })),
+		];
 		const selected = await pick(ctx, "All secrets", items, "\u2191\u2193 navigate \u2022 enter select \u2022 esc back");
 		if (!selected) return;
+		const extraAction = extraActions.find((action) => action.value === selected);
+		if (extraAction) {
+			await extraAction.run(ctx);
+			continue;
+		}
 		const [source, name] = selected.split("\u0000");
 		if (!source || !name) continue;
 		const backend = backends.find((b) => b.source === source);
@@ -178,17 +186,28 @@ async function servicesMenu(ctx: ExtensionCommandContext, registry: ServicesRegi
 	}
 }
 
+/** An action appended to the [secrets] menu that isn't a SecretRecord at all -- e.g. Enigma's own "+ Log in a backend", whose OAuth-device-flow/static-token registration is too vendor-specific for the generic SecretsBackend port to model. */
+export interface SecretsMenuAction {
+	value: string;
+	label: string;
+	description?: string;
+	run: (ctx: ExtensionCommandContext) => Promise<void>;
+}
+
 export interface RunSecretsCommandOptions {
 	backends: SecretsBackend[];
 	/** Omit to skip the [services] menu entirely -- a consumer with nothing service-registry-shaped still gets a working [secrets] view. */
 	servicesRegistry?: ServicesRegistry;
+	/** Appended to the [secrets] menu below every real secret record. */
+	extraActions?: SecretsMenuAction[];
 	pick?: PickFromList;
 }
 
 export async function runSecretsCommand(ctx: ExtensionCommandContext, options: RunSecretsCommandOptions): Promise<void> {
 	const pick = options.pick ?? defaultPick;
+	const extraActions = options.extraActions ?? [];
 	if (!options.servicesRegistry) {
-		await secretsMenu(ctx, options.backends, pick);
+		await secretsMenu(ctx, options.backends, pick, extraActions);
 		return;
 	}
 
@@ -200,7 +219,7 @@ export async function runSecretsCommand(ctx: ExtensionCommandContext, options: R
 		const selected = await pick(ctx, "Secrets", items, "\u2191\u2193 navigate \u2022 enter select \u2022 esc close");
 		if (!selected) return;
 		if (selected === SERVICES_MENU) await servicesMenu(ctx, options.servicesRegistry, options.backends, pick);
-		else await secretsMenu(ctx, options.backends, pick);
+		else await secretsMenu(ctx, options.backends, pick, extraActions);
 	}
 }
 
