@@ -12,7 +12,18 @@
  * holds, reads, or presents any secret at all. Opening the socket is
  * itself the proof of identity; the server resolves who's calling from
  * the connection, never from anything this module sends.
+ *
+ * Built on `node:net` rather than `Bun.connect`, unlike unix-rpc-server.ts's
+ * `Bun.listen` (which genuinely needs Bun for SO_PEERCRED's raw fd access):
+ * this side has no such requirement, and every real consumer of a vault's
+ * Unix-socket transport (a Pi extension) runs under Pi's own Node process,
+ * never Bun. `node:net` connects a Unix socket identically under both
+ * runtimes, so one implementation covers both instead of a Bun-only path
+ * that silently threw "Bun is not defined" the first time a Node-side
+ * caller (Enigma's pi extension, reaching Enigma's SO_PEERCRED transport)
+ * actually exercised it.
  */
+import { createConnection } from "node:net";
 
 export interface UnixRpcClientOptions {
 	path: string;
@@ -59,39 +70,38 @@ export function connectUnixRpc(options: UnixRpcClientOptions): (request: Request
 				fn();
 			};
 
+			const socket = createConnection({ path: options.path });
+
 			const timer = setTimeout(() => {
 				settle(() => reject(new Error(`unix RPC call to ${options.path} timed out after ${timeoutMs}ms`)));
+				socket.destroy();
 			}, timeoutMs);
 
-			Bun.connect({
-				unix: options.path,
-				socket: {
-					open(socket) {
-						socket.write(wireLine);
-					},
-					data(socket, chunk) {
-						buffered += chunk.toString("utf8");
-						const newlineIndex = buffered.indexOf("\n");
-						if (newlineIndex === -1) return;
-						settle(() => {
-							try {
-								const wireResponse = JSON.parse(buffered.slice(0, newlineIndex)) as WireResponse;
-								resolve(new Response(wireResponse.body ?? null, { status: wireResponse.status, headers: wireResponse.headers }));
-							} catch (err) {
-								reject(err instanceof Error ? err : new Error(String(err)));
-							}
-						});
-						socket.end();
-					},
-					close() {
-						settle(() => reject(new Error(`unix RPC connection to ${options.path} closed before a response was received`)));
-					},
-					error(_socket, err) {
-						settle(() => reject(err));
-					},
-				},
-			}).catch((err: unknown) => {
-				settle(() => reject(err instanceof Error ? err : new Error(String(err))));
+			socket.on("connect", () => {
+				socket.write(wireLine);
+			});
+
+			socket.on("data", (chunk) => {
+				buffered += chunk.toString("utf8");
+				const newlineIndex = buffered.indexOf("\n");
+				if (newlineIndex === -1) return;
+				settle(() => {
+					try {
+						const wireResponse = JSON.parse(buffered.slice(0, newlineIndex)) as WireResponse;
+						resolve(new Response(wireResponse.body ?? null, { status: wireResponse.status, headers: wireResponse.headers }));
+					} catch (err) {
+						reject(err instanceof Error ? err : new Error(String(err)));
+					}
+				});
+				socket.end();
+			});
+
+			socket.on("close", () => {
+				settle(() => reject(new Error(`unix RPC connection to ${options.path} closed before a response was received`)));
+			});
+
+			socket.on("error", (err) => {
+				settle(() => reject(err));
 			});
 		});
 	};
