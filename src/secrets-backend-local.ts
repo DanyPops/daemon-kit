@@ -54,5 +54,9 @@ export function createLocalSecretsBackend(options: LocalSecretsBackendOptions): 
 			if (!existsSync(path)) return;
 			unlinkSync(path);
 		},
+		async reveal(name) {
+			const token = storeFor(options, name).load();
+			return token ? (token as unknown as Record<string, unknown>) : undefined;
+		},
 	};
 }

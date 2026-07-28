@@ -34,6 +34,16 @@ export interface SecretsBackend {
 	rotate(name: string): Promise<void>;
 	/** Throws SecretsBackendUnsupportedOperationError for a backend with no delete mechanism. */
 	revoke(name: string): Promise<void>;
+	/**
+	 * The real, unredacted record -- accessToken/refreshToken/extra, whatever
+	 * the backend actually holds. Deliberately a real port member (not an
+	 * afterthought bolted onto the UI): every backend either supports it
+	 * genuinely or throws SecretsBackendUnsupportedOperationError, the same
+	 * contract rotate/revoke already use. The caller (secrets-tui.ts's
+	 * performReveal) is responsible for only ever invoking this from a real
+	 * interactive terminal session, never a scripted/RPC one.
+	 */
+	reveal(name: string): Promise<Record<string, unknown> | undefined>;
 }
 
 /**

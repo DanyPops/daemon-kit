@@ -30,7 +30,14 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
-import { findServicesUsingSecret, type SecretRecord, type SecretsBackend, type ServiceRecord, type ServicesRegistry } from "./secrets-backend.ts";
+import {
+	findServicesUsingSecret,
+	type SecretRecord,
+	type SecretsBackend,
+	SecretsBackendUnsupportedOperationError,
+	type ServiceRecord,
+	type ServicesRegistry,
+} from "./secrets-backend.ts";
 import {
 	claimSecretsCommandName,
 	listSecretsContributors,
@@ -154,6 +161,7 @@ export function buildServiceDetailItems(service: ServiceRecord, secretsByName: M
 export const SECRET_ACTION_ITEMS: SelectItem[] = [
 	{ value: "rotate", label: "Rotate", description: "Refresh this credential in place" },
 	{ value: "revoke", label: "Revoke", description: "Delete the stored credential" },
+	{ value: "reveal", label: "Reveal", description: "Show the real, unredacted value -- audit-logged where the backend supports it" },
 	{ value: "back", label: "Back" },
 ];
 
@@ -227,6 +235,37 @@ export async function performRevoke(ctx: ExtensionCommandContext, backend: Secre
 	}
 }
 
+/**
+ * Refuses outside a real interactive TUI session -- `/secrets` is one
+ * command definition shared across tui/rpc/print/json modes (see
+ * runSecretsCommand's own defaultPick), and RPC specifically supports a
+ * non-human caller driving the same picks a human would in TUI (pi's own
+ * "Extension UI Protocol"). Gating on ctx.mode (not ctx.hasUI, which is
+ * also true in RPC mode) is what actually closes that gap: a human at a
+ * real terminal can still reveal a secret, exactly as they already could
+ * via a backend's own CLI reveal command; a scripted/RPC driver cannot.
+ */
+export async function performReveal(ctx: ExtensionCommandContext, backend: SecretsBackend, name: string): Promise<void> {
+	if (ctx.mode !== "tui") {
+		ctx.ui.notify(`${name}: reveal requires an interactive terminal session, not available over RPC/print/JSON.`, "error");
+		return;
+	}
+	try {
+		const revealed = await backend.reveal(name);
+		if (!revealed) {
+			ctx.ui.notify(`${name}: no credential stored.`, "info");
+			return;
+		}
+		ctx.ui.notify(`${name}: ${JSON.stringify(revealed)}`, "info");
+	} catch (error) {
+		if (error instanceof SecretsBackendUnsupportedOperationError) {
+			ctx.ui.notify(`${name}: reveal is not supported by the "${backend.source}" backend.`, "error");
+			return;
+		}
+		ctx.ui.notify(`${name}: reveal failed (${error instanceof Error ? error.message : String(error)})`, "error");
+	}
+}
+
 // ── Thin navigation loops: wire the pieces above to a real pick(); no logic of their own ──
 
 async function manageSecret(ctx: ExtensionCommandContext, backend: SecretsBackend, name: string, pick: PickFromList): Promise<void> {
@@ -236,6 +275,10 @@ async function manageSecret(ctx: ExtensionCommandContext, backend: SecretsBacken
 		if (!action || action === "back") return;
 		if (action === "rotate") {
 			await performRotate(ctx, backend, name);
+			continue;
+		}
+		if (action === "reveal") {
+			await performReveal(ctx, backend, name);
 			continue;
 		}
 		if (action === "revoke" && (await performRevoke(ctx, backend, name))) return; // nothing left to manage once revoked

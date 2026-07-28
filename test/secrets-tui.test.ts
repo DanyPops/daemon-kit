@@ -11,6 +11,7 @@ import {
 	encodeSecretMenuValue,
 	loadAllSecrets,
 	mergeSecretsContributions,
+	performReveal,
 	performRevoke,
 	performRotate,
 	registerSecretsCommand,
@@ -22,7 +23,7 @@ import {
 	type PickFromList,
 	type SecretsMenuAction,
 } from "../src/secrets-tui.ts";
-import type { SecretRecord, SecretsBackend, ServiceRecord } from "../src/secrets-backend.ts";
+import { SecretsBackendUnsupportedOperationError, type SecretRecord, type SecretsBackend, type ServiceRecord } from "../src/secrets-backend.ts";
 import { __resetSecretsRegistryForTests, listSecretsContributors } from "../src/secrets-registry.ts";
 
 // ── Pure descriptions -- state in, string out, no I/O, no pick ─────────────
@@ -113,7 +114,7 @@ function record(name: string, source: string, overrides: Partial<SecretRecord> =
 }
 
 function backendStub(source: string): SecretsBackend {
-	return { source, list: async () => [], get: async () => undefined, rotate: async () => {}, revoke: async () => {} };
+	return { source, list: async () => [], get: async () => undefined, rotate: async () => {}, revoke: async () => {}, reveal: async () => undefined };
 }
 
 describe("buildSecretsMenuItems", () => {
@@ -181,11 +182,11 @@ describe("loadAllSecrets", () => {
 
 // ── Mutating actions -- directly callable, no pick() sequence needed at all ──
 
-function fakeCtx(overrides: { confirm?: boolean; hasUI?: boolean } = {}): { ctx: ExtensionCommandContext; notifications: Array<{ text: string; level: string }> } {
+function fakeCtx(overrides: { confirm?: boolean; hasUI?: boolean; mode?: string } = {}): { ctx: ExtensionCommandContext; notifications: Array<{ text: string; level: string }> } {
 	const notifications: Array<{ text: string; level: string }> = [];
 	const ctx = {
 		hasUI: overrides.hasUI ?? true,
-		mode: "tui",
+		mode: overrides.mode ?? "tui",
 		ui: {
 			notify: (text: string, level: string) => notifications.push({ text, level }),
 			confirm: async () => overrides.confirm ?? true,
@@ -241,6 +242,59 @@ describe("performRevoke", () => {
 		const { ctx } = fakeCtx({ hasUI: false });
 		const backend: SecretsBackend = { ...backendStub("local") };
 		expect(await performRevoke(ctx, backend, "github")).toBe(false);
+	});
+});
+
+describe("performReveal", () => {
+	it("in a real TUI session, calls backend.reveal and notifies the unredacted value", async () => {
+		const { ctx, notifications } = fakeCtx({ mode: "tui" });
+		const backend: SecretsBackend = { ...backendStub("local"), reveal: async () => ({ accessToken: "real-value" }) };
+		await performReveal(ctx, backend, "github");
+		expect(notifications).toEqual([{ text: 'github: {"accessToken":"real-value"}', level: "info" }]);
+	});
+
+	it("notifies 'no credential stored' without calling anything further when reveal() resolves undefined", async () => {
+		const { ctx, notifications } = fakeCtx({ mode: "tui" });
+		const backend: SecretsBackend = { ...backendStub("local"), reveal: async () => undefined };
+		await performReveal(ctx, backend, "github");
+		expect(notifications).toEqual([{ text: "github: no credential stored.", level: "info" }]);
+	});
+
+	it("notifies an unsupported-backend error, distinct from a generic failure, for SecretsBackendUnsupportedOperationError", async () => {
+		const { ctx, notifications } = fakeCtx({ mode: "tui" });
+		const backend: SecretsBackend = {
+			...backendStub("env"),
+			reveal: async () => {
+				throw new SecretsBackendUnsupportedOperationError("env", "reveal");
+			},
+		};
+		await performReveal(ctx, backend, "github");
+		expect(notifications).toEqual([{ text: 'github: reveal is not supported by the "env" backend.', level: "error" }]);
+	});
+
+	it("notifies a generic failure for any other error, without throwing", async () => {
+		const { ctx, notifications } = fakeCtx({ mode: "tui" });
+		const backend: SecretsBackend = {
+			...backendStub("enigma"),
+			reveal: async () => Promise.reject(new Error("vault unreachable")),
+		};
+		await performReveal(ctx, backend, "github");
+		expect(notifications).toEqual([{ text: "github: reveal failed (vault unreachable)", level: "error" }]);
+	});
+
+	it.each(["rpc", "print", "json"])("refuses outright in '%s' mode, never calling backend.reveal at all", async (mode) => {
+		const { ctx, notifications } = fakeCtx({ mode });
+		let called = false;
+		const backend: SecretsBackend = {
+			...backendStub("enigma"),
+			reveal: async () => {
+				called = true;
+				return { accessToken: "real-value" };
+			},
+		};
+		await performReveal(ctx, backend, "github");
+		expect(called).toBe(false);
+		expect(notifications).toEqual([{ text: "github: reveal requires an interactive terminal session, not available over RPC/print/JSON.", level: "error" }]);
 	});
 });
 
@@ -318,8 +372,8 @@ describe("registerSecretsCommand", () => {
 
 describe("mergeSecretsContributions", () => {
 	it("concatenates backends and extraActions across every contribution", () => {
-		const a: SecretsBackend = { source: "a", list: async () => [], get: async () => undefined, rotate: async () => {}, revoke: async () => {} };
-		const b: SecretsBackend = { source: "b", list: async () => [], get: async () => undefined, rotate: async () => {}, revoke: async () => {} };
+		const a: SecretsBackend = { source: "a", list: async () => [], get: async () => undefined, rotate: async () => {}, revoke: async () => {}, reveal: async () => undefined };
+		const b: SecretsBackend = { source: "b", list: async () => [], get: async () => undefined, rotate: async () => {}, revoke: async () => {}, reveal: async () => undefined };
 		const action: SecretsMenuAction = { value: "login", label: "+ Log in", run: async () => {} };
 		const merged = mergeSecretsContributions([{ backends: [a], extraActions: [action] }, { backends: [b] }]);
 		expect(merged.backends).toEqual([a, b]);
@@ -381,6 +435,7 @@ describe("registerSharedSecretsCommand", () => {
 			get: async () => enigmaRecord,
 			rotate: async () => {},
 			revoke: async () => {},
+			reveal: async () => undefined,
 		};
 		const ticketsBackend: SecretsBackend = {
 			source: "tickets",
@@ -388,6 +443,7 @@ describe("registerSharedSecretsCommand", () => {
 			get: async () => ticketsRecord,
 			rotate: async () => {},
 			revoke: async () => {},
+			reveal: async () => undefined,
 		};
 		registerSharedSecretsCommand(pi, { source: "enigma", resolve: () => ({ backends: [enigmaBackend] }) });
 		registerSharedSecretsCommand(pi, { source: "tickets", resolve: () => ({ backends: [ticketsBackend] }) });

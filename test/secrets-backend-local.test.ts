@@ -88,6 +88,25 @@ describe("createLocalSecretsBackend: plaintext", () => {
 	it("source is 'local'", () => {
 		expect(createLocalSecretsBackend({ dir: tmpDir() }).source).toBe("local");
 	});
+
+	it("reveal() returns the full stored token, unredacted", async () => {
+		const dir = tmpDir();
+		try {
+			createFileStore(dir, "github").save({ accessToken: "gh_real_value", refreshToken: "refresh_real_value", scope: "repo" });
+			expect(await createLocalSecretsBackend({ dir }).reveal("github")).toEqual({ accessToken: "gh_real_value", refreshToken: "refresh_real_value", scope: "repo" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("reveal() resolves undefined for a name with no backing file", async () => {
+		const dir = tmpDir();
+		try {
+			expect(await createLocalSecretsBackend({ dir }).reveal("nonexistent")).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("createLocalSecretsBackend: encrypted", () => {
@@ -98,6 +117,18 @@ describe("createLocalSecretsBackend: encrypted", () => {
 			const { createEncryptedFileStore } = await import("../src/vault.ts");
 			createEncryptedFileStore({ dir, masterKey }, "jira").save({ accessToken: "j", extra: { cloudId: "x" } });
 			expect(await createLocalSecretsBackend({ dir, masterKey }).get("jira")).toEqual({ name: "jira", source: "local", configured: true });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("reveal() decrypts and returns the full stored token, transparent to the port's caller", async () => {
+		const dir = tmpDir();
+		try {
+			const masterKey = randomBytes(32);
+			const { createEncryptedFileStore } = await import("../src/vault.ts");
+			createEncryptedFileStore({ dir, masterKey }, "jira").save({ accessToken: "j_real_value", extra: { cloudId: "x" } });
+			expect(await createLocalSecretsBackend({ dir, masterKey }).reveal("jira")).toEqual({ accessToken: "j_real_value", extra: { cloudId: "x" } });
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

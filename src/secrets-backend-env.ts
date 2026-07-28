@@ -32,5 +32,11 @@ export function createEnvSecretsBackend(mapping: Record<string, string>, env: No
 		async revoke() {
 			throw new SecretsBackendUnsupportedOperationError(SOURCE, "revoke");
 		},
+		async reveal(name) {
+			const envVarName = mapping[name];
+			if (!envVarName) return undefined;
+			const value = env[envVarName];
+			return value ? { accessToken: value } : undefined;
+		},
 	};
 }

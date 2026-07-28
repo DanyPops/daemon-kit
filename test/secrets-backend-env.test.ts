@@ -31,4 +31,15 @@ describe("createEnvSecretsBackend", () => {
 	it("source is 'env'", () => {
 		expect(createEnvSecretsBackend({}).source).toBe("env");
 	});
+
+	it("reveal() returns the raw env var value for a configured name", async () => {
+		const backend = createEnvSecretsBackend({ github: "GITHUB_TOKEN" }, { GITHUB_TOKEN: "ghp_real_value" });
+		expect(await backend.reveal("github")).toEqual({ accessToken: "ghp_real_value" });
+	});
+
+	it("reveal() resolves undefined for an unconfigured or undeclared name, never throwing", async () => {
+		const backend = createEnvSecretsBackend({ github: "GITHUB_TOKEN" }, {});
+		expect(await backend.reveal("github")).toBeUndefined();
+		expect(await backend.reveal("unknown")).toBeUndefined();
+	});
 });

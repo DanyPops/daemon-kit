@@ -15,6 +15,7 @@ function fakeBackend(source: string): SecretsBackend {
 		get: async () => undefined,
 		rotate: async () => {},
 		revoke: async () => {},
+		reveal: async () => undefined,
 	};
 }
 
