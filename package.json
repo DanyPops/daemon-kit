@@ -23,7 +23,10 @@
 		"./supervisor": "./src/supervisor.ts",
 		"./process-supervisor": "./src/process-supervisor.ts",
 		"./service": "./src/service.ts",
-		"./push-channel": "./src/push-channel.ts",
+		"./push-channel": {
+			"types": "./dist/push-channel.d.ts",
+			"default": "./dist/push-channel.js"
+		},
 		"./vehicle-conformance": "./src/vehicle-conformance.ts",
 		"./pi-load-harness": "./src/pi-load-harness.ts",
 		"./pi-client": {

@@ -74,6 +74,21 @@ describe("verifyLoadableUnderPi", () => {
 		expectAllPathsOk(await verifyLoadableUnderPi(SRC("push-channel.ts")));
 	});
 
+	// ./push-channel's public export now resolves to the same dist/ build
+	// daemon.ts's own PushChannel type is anchored to (see "PushChannel has two
+	// nominally-incompatible identities") -- checked here for the same reason
+	// as daemon's own compiled-artifact check below.
+	describe("push-channel (compiled to share one type identity with daemon.ts)", () => {
+		beforeAll(() => {
+			const result = spawnSync("bun", ["run", "build:daemon"], { cwd: ROOT, stdio: "inherit" });
+			if (result.status !== 0) throw new Error("bun run build:daemon failed -- see output above");
+		});
+
+		it("the compiled artifact (dist/push-channel.js) loads under every Pi extension load path", async () => {
+			expectAllPathsOk(await verifyLoadableUnderPi(resolve(ROOT, "dist", "push-channel.js")));
+		});
+	});
+
 	// daemon.ts is shipped compiled for a different reason than pi-client/vehicle
 	// (a real Node/tsc consumer like Alef, not Pi's jiti loader -- daemon.ts was
 	// never meant to run inside a Pi extension) -- checked here anyway since the
