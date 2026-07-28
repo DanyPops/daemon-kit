@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/daemon-kit",
-	"version": "0.19.0",
+	"version": "0.20.0",
 	"description": "Shared substrate for supervised, authenticated, loopback-only Bun daemons: process lifecycle, SQLite storage bootstrap, structured logging, and an HTTP auth/RPC layer",
 	"license": "MIT",
 	"type": "module",
@@ -56,7 +56,11 @@
 		"./pi-tool-availability": {
 			"types": "./dist/pi-tool-availability.d.ts",
 			"default": "./dist/pi-tool-availability.js"
-		}
+		},
+		"./secrets-backend": "./src/secrets-backend.ts",
+		"./secrets-backend-env": "./src/secrets-backend-env.ts",
+		"./secrets-backend-local": "./src/secrets-backend-local.ts",
+		"./secrets-tui": "./src/secrets-tui.ts"
 	},
 	"scripts": {
 		"test": "bun test",
@@ -69,10 +73,14 @@
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
 		"typescript": "^5"
 	},
 	"peerDependenciesMeta": {
 		"@earendil-works/pi-coding-agent": {
+			"optional": true
+		},
+		"@earendil-works/pi-tui": {
 			"optional": true
 		}
 	},
@@ -81,6 +89,7 @@
 	},
 	"devDependencies": {
 		"@earendil-works/pi-coding-agent": "0.82.1",
+		"@earendil-works/pi-tui": "*",
 		"@types/bun": "latest",
 		"@types/node": "^22.0.0",
 		"env-paths": "^4",
