@@ -12,7 +12,7 @@
  * newline-delimited JSON request per connection, one newline-delimited JSON
  * response, then close.
  */
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { getPeerCredential, rawSocketFd, type PeerCredential } from "./unix-peer-cred.ts";
 
@@ -71,6 +71,12 @@ export function serveUnixRpc(options: UnixRpcServerOptions): UnixRpcServer {
 	// Matches daemon-kit's other file-writing helpers (writeDaemonHandle, ensureAuthToken):
 	// a caller shouldn't need to separately ensure the parent directory exists first.
 	mkdirSync(dirname(options.path), { recursive: true, mode: 0o700 });
+	// A leftover file at this path can only be a dead listener's stale socket: daemon-kit's own
+	// PID-based daemon lock (acquireDaemonLock) already guarantees no second live instance of
+	// this daemon exists by the time serveUnixRpc runs, so an unclean previous shutdown (crash,
+	// SIGKILL, OOM) is the only realistic way this path is occupied -- safe to clear before bind
+	// rather than fail every future restart.
+	if (existsSync(options.path)) unlinkSync(options.path);
 
 	const server = Bun.listen({
 		unix: options.path,

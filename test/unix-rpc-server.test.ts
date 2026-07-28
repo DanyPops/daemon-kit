@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { rmSync, statSync, unlinkSync } from "node:fs";
+import { rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { serveUnixRpc } from "../src/unix-rpc-server.ts";
@@ -52,6 +52,20 @@ describe("serveUnixRpc: creates its own parent directory", () => {
 			server.stop();
 			try {
 				rmSync(dirname(path), { recursive: true, force: true });
+			} catch {}
+		}
+	});
+
+	it("binds successfully over a stale leftover socket file from an unclean previous shutdown (crash, SIGKILL, OOM)", async () => {
+		const path = socketPath();
+		writeFileSync(path, ""); // a plain leftover file at this path, not a live listener -- the realistic post-crash state
+		const server = serveUnixRpc({ path, handler: async () => new Response(null, { status: 204 }) });
+		try {
+			expect(statSync(path).isSocket()).toBe(true);
+		} finally {
+			server.stop();
+			try {
+				unlinkSync(path);
 			} catch {}
 		}
 	});
