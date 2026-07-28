@@ -1,7 +1,17 @@
 import { describe, expect, it } from "bun:test";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { runSecretsCommand, type PickFromList } from "../src/secrets-tui.ts";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { registerSecretsCommand, runSecretsCommand, type PickFromList } from "../src/secrets-tui.ts";
 import type { SecretRecord, SecretsBackend, ServiceRecord, ServicesRegistry } from "../src/secrets-backend.ts";
+
+function fakePi(): { pi: ExtensionAPI; registered: Array<{ name: string; description: string }> } {
+	const registered: Array<{ name: string; description: string }> = [];
+	const pi = {
+		registerCommand: (name: string, def: { description: string }) => {
+			registered.push({ name, description: def.description });
+		},
+	} as unknown as ExtensionAPI;
+	return { pi, registered };
+}
 
 function fakeCtx(overrides: { confirm?: boolean; hasUI?: boolean } = {}): { ctx: ExtensionCommandContext; notifications: Array<{ text: string; level: string }> } {
 	const notifications: Array<{ text: string; level: string }> = [];
@@ -210,5 +220,19 @@ describe("runSecretsCommand: with a ServicesRegistry -- two-menu mode", () => {
 		};
 		await runSecretsCommand(ctx, { backends: [], servicesRegistry: registry, pick: spyPick });
 		expect(seen.some((descs) => descs.some((d) => d.includes("1 unconfigured")))).toBe(true);
+	});
+});
+
+describe("registerSecretsCommand", () => {
+	it("registers under 'secrets' by default", () => {
+		const { pi, registered } = fakePi();
+		registerSecretsCommand(pi, () => ({ backends: [] }));
+		expect(registered).toEqual([{ name: "secrets", description: "Manage credentials: view status, rotate, or revoke, across every configured backend" }]);
+	});
+
+	it("registers under a caller-supplied name instead, so a second daemon-kit consumer in the same Pi session doesn't collide with an existing /secrets", () => {
+		const { pi, registered } = fakePi();
+		registerSecretsCommand(pi, () => ({ backends: [] }), "tickets-secrets");
+		expect(registered.map((r) => r.name)).toEqual(["tickets-secrets"]);
 	});
 });

@@ -262,9 +262,22 @@ export async function runSecretsCommand(ctx: ExtensionCommandContext, options: R
 	}
 }
 
-/** Registers `/secrets` on the given extension. `resolveOptions` is called fresh on every invocation, so a caller can rebuild backends against the current daemon state instead of capturing one snapshot at extension-load time. */
-export function registerSecretsCommand(pi: ExtensionAPI, resolveOptions: () => RunSecretsCommandOptions | Promise<RunSecretsCommandOptions>): void {
-	pi.registerCommand("secrets", {
+/**
+ * Registers the command on the given extension -- `/secrets` by default,
+ * but Pi has no per-extension command namespacing: two extensions calling
+ * this with the default name collide (whichever registers last silently
+ * wins pi's own dispatch table). A consumer sharing a Pi session with
+ * another daemon-kit-based /secrets registration (e.g. pi-enigma) must
+ * pass a distinct commandName instead. `resolveOptions` is called fresh on
+ * every invocation, so a caller can rebuild backends against the current
+ * daemon state instead of capturing one snapshot at extension-load time.
+ */
+export function registerSecretsCommand(
+	pi: ExtensionAPI,
+	resolveOptions: () => RunSecretsCommandOptions | Promise<RunSecretsCommandOptions>,
+	commandName = "secrets",
+): void {
+	pi.registerCommand(commandName, {
 		description: "Manage credentials: view status, rotate, or revoke, across every configured backend",
 		handler: async (_args, ctx) => runSecretsCommand(ctx, await resolveOptions()),
 	});
