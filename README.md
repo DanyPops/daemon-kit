@@ -32,10 +32,11 @@ a consumer only pulls in what it uses.
 | `pi-load-harness` | ad hoc, per-consumer jiti test setups (new) | Verifies a module loads under every path Pi's own extension loader can take (native ESM, jiti tryNative:false, jiti tryNative:true), so a Pi-facing module or its test suite can assert load-safety directly instead of discovering a loader failure in a live session. |
 | `pi-client` | each Pi extension's own retrying-client copy (lector's `lectorClient()`, web-spider's `callWebSpider()`, papyrus's `callService()`, pi-packed's `createNatives()`) and their independently-forked auto-start policy | `createRetryingClient()`: caches a connected client and retries exactly once against a freshly reconnected one on a stale-connection error (the daemon rebinds a random port on every restart), and fails fast via a circuit breaker after sustained connect failures instead of paying a full connect timeout on every call. `connectWithPolicy()`: one explicit `autoStart` flag (default false, fail closed) instead of a silent per-daemon fork between failing closed and transparently spawning the daemon. `connectWithVersionCheck()`: detects a daemon left running from before an extension upgrade and transparently replaces it. `spawnDetachedDaemon()`: platform-correct spawn options (Windows console-hiding) for the four independent `spawn()` callbacks. `connectPushChannel()`: subscribes to a daemon's push-invalidation channel (see `push-channel`) with real reconnection -- exponential backoff gated by a minimum-uptime window so a connection that opens then drops again immediately keeps backing off instead of resetting on every brief open (degradation, not just down/up), jittered to avoid a reconnect storm when several Pi sessions reconnect to the same restarted daemon at once, plus a heartbeat ping/timeout to catch a socket that stays open while the daemon itself is hung. Re-subscribes every topic after each reconnect. Uses only the global `WebSocket` (Node 22+/Bun). Shipped pre-compiled via `bun run build:pi-client`. |
 | `push-channel` | nothing -- Papyrus's Task widget could previously only poll on a fixed interval (new) | `PushChannel` wires an optional authenticated WebSocket upgrade into `startDaemon()` (`GET /push?token=...`, query-string token since the WebSocket constructor cannot set an Authorization header) alongside the existing fetch-based RPC. `publish(topic, payload)` broadcasts to every subscriber of that topic the moment a mutation happens, instead of every client waiting out a poll interval. Bounded connection count and topics-per-connection. Pairs with `pi-client`'s `connectPushChannel()`. Shipped pre-compiled (`./push-channel` -> `dist/push-channel.js`, built together with `daemon` via `bun run build:daemon`) so a `PushChannel` built through this export shares one type identity with `startDaemon()`'s own `pushChannel` option -- a class with private fields is nominally distinct per declaration site even when structurally identical, so two separately-compiled copies (the prior raw-source export vs. daemon's own compiled dist) required a cast at the call site; consumers no longer need one. |
-| `vehicle` | agent hosts' and tool providers' local command runtimes | Runtime-neutral operation descriptors and schema codecs, executable bindings, unique provider ownership, `LocalVehicleClient`, `RemoteVehicleClient` (authenticated HTTP, same semantics as local), structured failures, permissions, idempotency requirements, execution policy, deadlines, cancellation, progress, and request/response bounds. The serializable descriptor stays separate from executable code. Shipped pre-compiled via `bun run build:vehicle`. |
+| `vehicle` | agent hosts' and tool providers' local command runtimes | Runtime-neutral operation descriptors and schema codecs, executable bindings, unique provider ownership, `LocalVehicleClient`, `RemoteVehicleClient` (authenticated HTTP, same semantics as local), structured failures, permissions, idempotency requirements, execution policy, deadlines, cancellation, progress, and request/response bounds. The serializable descriptor stays separate from executable code. `VehicleRegistry.setAvailability(name, version, available, reason?)` toggles a registered operation's usability at runtime (e.g. a credential got configured or removed) -- there's no unregister, an operation's shape is permanent once registered, only whether `manifest()` reports it `available` and whether `invoke()` accepts it. Shipped pre-compiled via `bun run build:vehicle`. |
 | `vehicle-http-provider` | daemon-side hand-rolled Vehicle HTTP routes (new) | `createVehicleHttpApp()` exposes a `VehicleRegistry` over `GET /vehicle/manifest`, `POST /vehicle/invoke` (JSON by default, Server-Sent Events when `Accept: text/event-stream` -- needed for progress), and `POST /vehicle/cancel`. Bearer-authenticated via `http.ts`. Daemon-side raw TypeScript, pairs with `vehicle`'s `RemoteVehicleClient` on the other end. |
 | `vehicle-conformance` | ad hoc, independently hand-written per-implementation Vehicle tests that could silently drift apart (new) | `runVehicleClientConformance()` runs one shared assertion suite -- manifest accuracy, input validation, permissions, real handler failures, keyed idempotency, byte bounds, not-found, progress-before-result ordering, cancellation, deadlines, close() -- against any `VehicleClient` a fixture supplies. Caught a real bug live: `LocalVehicleClient.manifest()` threw synchronously instead of rejecting after `close()`, unlike its own `invoke()` and `RemoteVehicleClient.manifest()` -- exactly the kind of drift a shared suite catches and two separate test files wouldn't. |
-| `vehicle-pi` | hand-written `pi.registerTool()` wrappers around service clients | Projects a `VehicleClient` manifest into native Pi tools. It preserves exact operation versions, schemas, cancellation, Pi call/session identity, explicit permissions and principals, keyed idempotency, progress, and structured failures. Destructive and open-world operations require a real approval capability. Shipped pre-compiled via `bun run build:vehicle-pi`. |
+| `vehicle-pi` | hand-written `pi.registerTool()` wrappers around service clients | Projects a `VehicleClient` manifest into native Pi tools. It preserves exact operation versions, schemas, cancellation, Pi call/session identity, explicit permissions and principals, keyed idempotency, progress, and structured failures. Destructive and open-world operations require a real approval capability. A currently-unavailable operation (per the manifest's `available` flag) is still registered as a Pi tool -- Pi has no `unregisterTool()` -- but curated out of the LLM's active/callable set from the very first `registerVehicleTools()` call via `pi-tool-availability`. `refreshVehicleToolAvailability()` re-fetches the manifest on whatever cadence the caller chooses (a maintenance-task interval, a push notification, a session_start recheck) and re-syncs active/inactive state for known tools, registering any genuinely new operation for the first time. Shipped pre-compiled via `bun run build:vehicle-pi`. |
+| `pi-tool-availability` | ad hoc per-extension `setActiveTools()` calls that risk clobbering other extensions' active tools (new) | `syncManagedActiveTools(pi, managedToolNames, desiredActiveToolNames)`: Pi's `setActiveTools()` replaces the *whole* active set, so a naive "hide my tool" call would silently disable every other extension's tools and the user's own `--tools` flag along with it. This reads the current active set first and only adds/removes names within the caller's own `managedToolNames`, leaving everything else untouched; skips the call entirely when nothing would actually change. Generic and Vehicle-agnostic -- usable by any Pi extension curating its own tool visibility, not just `vehicle-pi`. |
 
 ## Use a Vehicle from a Pi extension
 
@@ -61,6 +62,26 @@ projected name collisions fail before any tool is registered. Supply
 `resolveInvocation` when an operation needs per-call revisions, delegated
 permissions, or an approval capability minted by an authority.
 
+An operation the provider currently can't service (e.g. `jira_search` before
+any Jira credential is configured) is still registered, so it can be revealed
+later without Pi's missing `unregisterTool()` getting in the way, but it starts
+*inactive* -- invisible to the LLM's tool-calling surface from turn one, not a
+call that fails. Reflect a later change (a credential got configured or
+removed) with `refreshVehicleToolAvailability()`:
+
+```ts
+import { refreshVehicleToolAvailability } from "@danypops/daemon-kit/vehicle-pi";
+
+let registered = await registerVehicleTools(pi, client, { permissions: ["issues:read"] });
+setInterval(async () => {
+  registered = await refreshVehicleToolAvailability(pi, client, registered, { permissions: ["issues:read"] });
+}, 30_000);
+```
+
+On the provider side, mark an operation unavailable (or available again) on
+`VehicleRegistry` directly -- `registry.setAvailability("jira.search", 1, false, "no Jira credential configured")`
+-- and the next `refreshVehicleToolAvailability()` call picks it up.
+
 ## What this deliberately does not include
 
 - A routing framework (Hono, itty-router, tRPC): the auth/health/ops routing
@@ -74,5 +95,8 @@ permissions, or an approval capability minted by an authority.
 
 The daemon walking skeleton in `test/walking-skeleton.test.ts` covers bind,
 auth, migration, dispatch, maintenance, and shutdown. `test/vehicle.test.ts`
-covers the runtime-neutral local Vehicle path; `test/vehicle-pi.test.ts` covers
-its Pi-native tool projection.
+covers the runtime-neutral local Vehicle path, including `setAvailability()`;
+`test/vehicle-pi.test.ts` covers its Pi-native tool projection, including
+initial active-set curation and `refreshVehicleToolAvailability()`;
+`test/pi-tool-availability.test.ts` covers the underlying `setActiveTools()`
+union/diff primitive in isolation.

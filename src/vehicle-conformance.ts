@@ -164,6 +164,11 @@ export function runVehicleClientConformance(fixture: VehicleConformanceFixture):
 				const echo = manifest.operations.find((op) => op.name === "conformance.echo");
 				expect(echo?.permissions).toEqual(["conformance:echo"]);
 				expect(echo?.idempotency).toEqual({ mode: "safe" });
+				// available defaults to true for every operation, and must survive
+				// the wire round trip identically for a remote (HTTP/JSON) client,
+				// not just the in-process local one.
+				expect(manifest.operations.every((op) => op.available === true)).toBe(true);
+				expect(echo?.unavailableReason).toBeUndefined();
 			} finally {
 				await cleanup();
 			}

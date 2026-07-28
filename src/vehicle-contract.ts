@@ -124,8 +124,22 @@ export interface VehicleManifestIdentity {
 	readonly guidance?: readonly string[];
 }
 
+/**
+ * A manifest's own view of an operation: the static descriptor plus
+ * whether it's currently usable on this particular server instance right
+ * now. Availability is a runtime property of a live registry (a
+ * credential got configured or removed), never baked into the static
+ * descriptor defineVehicleOperation() produces -- two manifest() calls
+ * against the same registry can report different availability for the
+ * exact same descriptor.
+ */
+export interface VehicleManifestOperation extends VehicleOperationDescriptor {
+	readonly available: boolean;
+	readonly unavailableReason?: string;
+}
+
 export interface VehicleManifest extends VehicleManifestIdentity {
-	readonly operations: readonly VehicleOperationDescriptor[];
+	readonly operations: readonly VehicleManifestOperation[];
 }
 
 export interface VehicleClient {

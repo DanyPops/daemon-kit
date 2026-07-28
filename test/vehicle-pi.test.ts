@@ -3,6 +3,7 @@ import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-age
 import { Check } from "typebox/value";
 import {
 	PiVehicleInvocationError,
+	refreshVehicleToolAvailability,
 	registerVehicleTools,
 	type PiVehicleToolDetails,
 } from "../src/vehicle-pi.ts";
@@ -10,7 +11,7 @@ import type {
 	VehicleClient,
 	VehicleInvocationOptions,
 	VehicleManifest,
-	VehicleOperationDescriptor,
+	VehicleManifestOperation,
 } from "../src/vehicle.ts";
 import { VehicleError } from "../src/vehicle.ts";
 
@@ -24,8 +25,8 @@ const limits = {
 function operation(
 	name: string,
 	version = 1,
-	overrides: Partial<VehicleOperationDescriptor> = {},
-): VehicleOperationDescriptor {
+	overrides: Partial<VehicleManifestOperation> = {},
+): VehicleManifestOperation {
 	return {
 		name,
 		version,
@@ -44,6 +45,7 @@ function operation(
 		longRunning: false,
 		limits,
 		errors: [],
+		available: true,
 		...overrides,
 	};
 }
@@ -59,7 +61,7 @@ class FakeClient implements VehicleClient {
 	result: unknown = { ok: true };
 	error?: unknown;
 
-	constructor(readonly value: VehicleManifest) {}
+	constructor(public value: VehicleManifest) {}
 
 	manifest(): Promise<VehicleManifest> {
 		return Promise.resolve(this.value);
@@ -83,25 +85,35 @@ class FakeClient implements VehicleClient {
 	}
 }
 
-function manifest(operations: readonly VehicleOperationDescriptor[]): VehicleManifest {
+function manifest(operations: readonly VehicleManifestOperation[]): VehicleManifest {
 	return { name: "test-vehicle", version: "1.0.0", description: "Test Vehicle.", operations };
 }
 
 function fakePi(existingNames: string[] = []) {
 	const tools: ToolDefinition[] = [];
 	const handlers = new Map<string, (...args: never[]) => unknown>();
+	let active = [...existingNames];
+	let setCalls = 0;
 	const pi = {
 		registerTool(tool: ToolDefinition) {
 			tools.push(tool);
+			active.push(tool.name);
 		},
 		getAllTools() {
 			return existingNames.map((name) => ({ name }));
+		},
+		getActiveTools() {
+			return [...active];
+		},
+		setActiveTools(names: string[]) {
+			setCalls++;
+			active = [...names];
 		},
 		on(name: string, handler: (...args: never[]) => unknown) {
 			handlers.set(name, handler);
 		},
 	} as unknown as ExtensionAPI;
-	return { pi, tools, handlers };
+	return { pi, tools, handlers, activeTools: () => [...active], setCallCount: () => setCalls };
 }
 
 async function execute(
@@ -124,7 +136,7 @@ describe("registerVehicleTools", () => {
 		const registered = await registerVehicleTools(pi, client);
 
 		expect(registered.tools).toEqual([
-			{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1 },
+			{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1, available: true },
 		]);
 		expect(tools).toHaveLength(1);
 		expect(tools[0]?.description).toBe(descriptor.description);
@@ -267,5 +279,87 @@ describe("registerVehicleTools", () => {
 
 		await handlers.get("session_shutdown")?.();
 		expect(client.closed).toBe(true);
+	});
+
+	it("registers a currently-unavailable operation's tool but never activates it, so the LLM never sees it", async () => {
+		const client = new FakeClient(
+			manifest([
+				operation("issues.search"),
+				operation("jira.search", 1, { available: false, unavailableReason: "no Jira credential configured" }),
+			]),
+		);
+		const { pi, tools, activeTools } = fakePi();
+
+		const registered = await registerVehicleTools(pi, client);
+
+		expect(tools.map((tool) => tool.name).sort()).toEqual(["issues_search", "jira_search"]);
+		expect(activeTools().sort()).toEqual(["issues_search"]);
+		expect(registered.tools).toEqual([
+			{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1, available: true },
+			{ toolName: "jira_search", operationName: "jira.search", operationVersion: 1, available: false },
+		]);
+	});
+
+	it("never disables an unrelated already-active tool while curating its own", async () => {
+		const client = new FakeClient(manifest([operation("issues.search", 1, { available: false })]));
+		const { pi, activeTools } = fakePi(["read", "edit"]);
+
+		await registerVehicleTools(pi, client);
+
+		expect(activeTools().sort()).toEqual(["edit", "read"]);
+	});
+});
+
+describe("refreshVehicleToolAvailability", () => {
+	it("activates a tool whose operation just became available, without re-registering it", async () => {
+		const client = new FakeClient(manifest([operation("jira.search", 1, { available: false })]));
+		const { pi, tools, activeTools } = fakePi();
+		const registered = await registerVehicleTools(pi, client);
+		expect(activeTools()).toEqual([]);
+
+		client.value = manifest([operation("jira.search", 1, { available: true })]);
+		const refreshed = await refreshVehicleToolAvailability(pi, client, registered);
+
+		expect(tools).toHaveLength(1); // still exactly one registerTool call ever
+		expect(activeTools()).toEqual(["jira_search"]);
+		expect(refreshed.tools).toEqual([
+			{ toolName: "jira_search", operationName: "jira.search", operationVersion: 1, available: true },
+		]);
+	});
+
+	it("deactivates a tool whose operation just became unavailable", async () => {
+		const client = new FakeClient(manifest([operation("jira.search", 1, { available: true })]));
+		const { pi, activeTools } = fakePi();
+		const registered = await registerVehicleTools(pi, client);
+		expect(activeTools()).toEqual(["jira_search"]);
+
+		client.value = manifest([operation("jira.search", 1, { available: false, unavailableReason: "credential removed" })]);
+		const refreshed = await refreshVehicleToolAvailability(pi, client, registered);
+
+		expect(activeTools()).toEqual([]);
+		expect(refreshed.tools[0]?.available).toBe(false);
+	});
+
+	it("registers a genuinely new operation that appeared in a later manifest", async () => {
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		const { pi, tools, activeTools } = fakePi();
+		const registered = await registerVehicleTools(pi, client);
+
+		client.value = manifest([operation("issues.search"), operation("issues.create")]);
+		const refreshed = await refreshVehicleToolAvailability(pi, client, registered);
+
+		expect(tools.map((tool) => tool.name).sort()).toEqual(["issues_create", "issues_search"]);
+		expect(activeTools().sort()).toEqual(["issues_create", "issues_search"]);
+		expect(refreshed.tools.map((tool) => tool.operationName).sort()).toEqual(["issues.create", "issues.search"]);
+	});
+
+	it("a no-op refresh (nothing changed) never calls setActiveTools", async () => {
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		const { pi, setCallCount } = fakePi();
+		const registered = await registerVehicleTools(pi, client);
+
+		const before = setCallCount();
+		await refreshVehicleToolAvailability(pi, client, registered);
+		expect(setCallCount()).toBe(before);
 	});
 });

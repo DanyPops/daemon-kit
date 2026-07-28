@@ -9,10 +9,12 @@ import type {
 	VehicleFailure,
 	VehicleInvocationOptions,
 	VehicleManifest,
+	VehicleManifestOperation,
 	VehicleOperationDescriptor,
 	VehiclePrincipal,
 } from "./vehicle.js";
 import { VehicleError } from "./vehicle.js";
+import { syncManagedActiveTools } from "./pi-tool-availability.js";
 
 export interface PiVehicleIdentity {
 	readonly name: string;
@@ -53,6 +55,8 @@ export interface RegisteredPiVehicleTool {
 	readonly toolName: string;
 	readonly operationName: string;
 	readonly operationVersion: number;
+	/** This operation's availability as of the manifest fetch that produced this entry -- see refreshVehicleToolAvailability for keeping it current. */
+	readonly available: boolean;
 }
 
 export interface RegisteredPiVehicle {
@@ -79,7 +83,7 @@ function defaultToolName(descriptor: VehicleOperationDescriptor, versioned: bool
 	return versioned ? `${base}_v${descriptor.version}` : base;
 }
 
-function operationKey(descriptor: VehicleOperationDescriptor): string {
+function operationKey(descriptor: Pick<VehicleOperationDescriptor, "name" | "version">): string {
 	return `${descriptor.name}@${descriptor.version}`;
 }
 
@@ -125,7 +129,7 @@ function sanitizedFailure(error: unknown): VehicleFailure {
 function projectedNames(
 	manifest: VehicleManifest,
 	nameProjector: NonNullable<RegisterVehicleToolsOptions["toolName"]>,
-): Array<{ descriptor: VehicleOperationDescriptor; toolName: string }> {
+): Array<{ descriptor: VehicleManifestOperation; toolName: string }> {
 	const versionCounts = new Map<string, number>();
 	for (const descriptor of manifest.operations) {
 		versionCounts.set(descriptor.name, (versionCounts.get(descriptor.name) ?? 0) + 1);
@@ -138,7 +142,7 @@ function projectedNames(
 
 function assertNamesAvailable(
 	pi: ExtensionAPI,
-	projected: readonly { descriptor: VehicleOperationDescriptor; toolName: string }[],
+	projected: readonly { descriptor: VehicleManifestOperation; toolName: string }[],
 ): void {
 	const owners = new Map<string, string>();
 	for (const { descriptor, toolName } of projected) {
@@ -240,12 +244,71 @@ export async function registerVehicleTools(
 		});
 	}
 
-	return {
-		manifest,
-		tools: projected.map(({ descriptor, toolName }) => ({
+	const tools = projected.map(({ descriptor, toolName }) => ({
+		toolName,
+		operationName: descriptor.name,
+		operationVersion: descriptor.version,
+		available: descriptor.available,
+	}));
+	// Registered tools whose operation is currently unavailable (e.g. a
+	// missing credential) are hidden from the LLM from the very first
+	// registration -- registering them at all (rather than skipping) keeps
+	// them ready to flip active later via refreshVehicleToolAvailability,
+	// since Pi has no unregisterTool() to add them back with afterward.
+	syncManagedActiveTools(
+		pi,
+		tools.map((tool) => tool.toolName),
+		tools.filter((tool) => tool.available).map((tool) => tool.toolName),
+	);
+
+	return { manifest, tools };
+}
+
+/**
+ * Re-fetches the manifest and re-syncs which of this Vehicle's Pi tools are
+ * currently active, without ever re-registering a tool this call has
+ * already seen (Pi has no way to re-register under the same name). Any
+ * operation present in the fresh manifest but not in `registered` is a
+ * genuinely new operation and gets registered for the first time; every
+ * previously-known tool just has its active/inactive state re-synced
+ * against the operation's current `available` flag.
+ *
+ * Callers decide their own refresh cadence (a maintenance-task-style
+ * interval, a push notification, a session_start recheck); this function
+ * only does one refresh pass and returns the updated bookkeeping to pass
+ * into the next call.
+ */
+export async function refreshVehicleToolAvailability(
+	pi: ExtensionAPI,
+	client: VehicleClient,
+	registered: RegisteredPiVehicle,
+	options: RegisterVehicleToolsOptions = {},
+): Promise<RegisteredPiVehicle> {
+	const manifest = await client.manifest();
+	const projected = projectedNames(manifest, options.toolName ?? defaultToolName);
+	const known = new Set(registered.tools.map((tool) => operationKey({ name: tool.operationName, version: tool.operationVersion })));
+
+	const newlyProjected = projected.filter(({ descriptor }) => !known.has(operationKey(descriptor)));
+	if (newlyProjected.length > 0) assertNamesAvailable(pi, newlyProjected);
+
+	const tools: RegisteredPiVehicleTool[] = [];
+	for (const { descriptor, toolName } of projected) {
+		if (!known.has(operationKey(descriptor))) {
+			pi.registerTool(createTool(client, manifest, descriptor, toolName, options));
+		}
+		tools.push({
 			toolName,
 			operationName: descriptor.name,
 			operationVersion: descriptor.version,
-		})),
-	};
+			available: descriptor.available,
+		});
+	}
+
+	syncManagedActiveTools(
+		pi,
+		tools.map((tool) => tool.toolName),
+		tools.filter((tool) => tool.available).map((tool) => tool.toolName),
+	);
+
+	return { manifest, tools };
 }

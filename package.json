@@ -52,6 +52,10 @@
 		"./vehicle-pi": {
 			"types": "./dist/vehicle-pi.d.ts",
 			"default": "./dist/vehicle-pi.js"
+		},
+		"./pi-tool-availability": {
+			"types": "./dist/pi-tool-availability.d.ts",
+			"default": "./dist/pi-tool-availability.js"
 		}
 	},
 	"scripts": {

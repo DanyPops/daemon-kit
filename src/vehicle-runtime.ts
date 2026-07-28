@@ -140,8 +140,14 @@ function enforcePayloadSize(
 	}
 }
 
+interface AvailabilityState {
+	readonly available: boolean;
+	readonly reason?: string;
+}
+
 export class VehicleRegistry {
 	private readonly registrations = new Map<string, Registration>();
+	private readonly availability = new Map<string, AvailabilityState>();
 	private readonly identity: VehicleManifestIdentity;
 
 	constructor(identity: VehicleManifestIdentity, private executionPolicy?: VehicleExecutionPolicy) {
@@ -188,10 +194,34 @@ export class VehicleRegistry {
 		return this.registrations.get(operationKey(name, version))?.owner;
 	}
 
+	/**
+	 * Marks a registered operation available or unavailable on this running
+	 * instance -- e.g. a provider whose credential just got configured or
+	 * removed. There is no unregister(): an operation's shape is permanent
+	 * once registered (mirroring Pi's own tool model, which has no
+	 * unregisterTool() either), only its usability toggles. invoke() refuses
+	 * an unavailable operation; manifest() reports it with available:false so
+	 * a client-side projection (see vehicle-pi.ts) can hide it from the LLM
+	 * before ever attempting a call.
+	 */
+	setAvailability(name: string, version: number, available: boolean, reason?: string): void {
+		const key = operationKey(name, version);
+		if (!this.registrations.has(key)) throw new Error(`Cannot set availability for unregistered Vehicle operation ${key}`);
+		this.availability.set(key, { available, reason });
+	}
+
 	manifest(): VehicleManifest {
 		return {
 			...this.identity,
-			operations: [...this.registrations.values()].map((registration) => registration.descriptor),
+			operations: [...this.registrations.values()].map((registration) => {
+				const key = operationKey(registration.descriptor.name, registration.descriptor.version);
+				const state = this.availability.get(key);
+				return {
+					...registration.descriptor,
+					available: state?.available ?? true,
+					...(state?.reason ? { unavailableReason: state.reason } : {}),
+				};
+			}),
 		};
 	}
 
@@ -203,6 +233,14 @@ export class VehicleRegistry {
 			throw new VehicleError("not-found", `No Vehicle operation is registered for ${key}`, {
 				category: "not_found",
 				operationId,
+			});
+		}
+		const availability = this.availability.get(key);
+		if (availability?.available === false) {
+			throw new VehicleError("operation-unavailable", availability.reason ?? `${key} is currently unavailable`, {
+				category: "unavailable",
+				operationId,
+				retryable: true,
 			});
 		}
 

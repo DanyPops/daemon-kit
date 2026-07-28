@@ -24,7 +24,8 @@ export type VehicleCoreErrorCode =
 	| "handler-failed"
 	| "policy-failed"
 	| "idempotency-key-required"
-	| "client-closed";
+	| "client-closed"
+	| "operation-unavailable";
 
 export interface VehicleRecovery {
 	readonly operation?: string;

@@ -83,7 +83,7 @@ describe("Vehicle operation contracts", () => {
 		expect("safeParse" in binding.operation.descriptor.inputSchema).toBe(false);
 
 		const manifest = await clientWith(binding).manifest();
-		expect(manifest.operations).toEqual([binding.operation.descriptor]);
+		expect(manifest.operations).toEqual([{ ...binding.operation.descriptor, available: true }]);
 	});
 
 	it("rejects invalid operation metadata before registration", () => {
@@ -113,6 +113,42 @@ describe("VehicleRegistry and LocalVehicleClient", () => {
 		const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
 		registry.register("first", echoBinding());
 		expect(() => registry.register("second", echoBinding())).toThrow("already owned by first");
+	});
+
+	it("reports every registered operation as available by default", async () => {
+		const client = clientWith();
+		const manifest = await client.manifest();
+		expect(manifest.operations[0]?.available).toBe(true);
+		expect(manifest.operations[0]?.unavailableReason).toBeUndefined();
+	});
+
+	it("setAvailability(false) hides an operation from the manifest and refuses invocation, without unregistering it", async () => {
+		const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
+		registry.register("echo-provider", echoBinding());
+		const client = new LocalVehicleClient(registry);
+
+		registry.setAvailability("test.echo", 1, false, "credential not configured");
+
+		const manifest = await client.manifest();
+		expect(manifest.operations[0]).toMatchObject({ available: false, unavailableReason: "credential not configured" });
+		expect(registry.ownerOf("test.echo", 1)).toBe("echo-provider"); // still registered, just hidden
+
+		await expect(
+			client.invoke("test.echo", 1, { value: "hello" }, { permissions: ["test:echo"] }),
+		).rejects.toMatchObject({ code: "operation-unavailable", category: "unavailable", retryable: true });
+
+		registry.setAvailability("test.echo", 1, true);
+		const manifestAgain = await client.manifest();
+		expect(manifestAgain.operations[0]).toMatchObject({ available: true });
+		expect(manifestAgain.operations[0]?.unavailableReason).toBeUndefined();
+		await expect(
+			client.invoke("test.echo", 1, { value: "hello" }, { permissions: ["test:echo"] }),
+		).resolves.toEqual({ echoed: "hello" });
+	});
+
+	it("setAvailability throws for an operation that was never registered", () => {
+		const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
+		expect(() => registry.setAvailability("nope", 1, false)).toThrow("unregistered");
 	});
 
 	it("validates both input and output with bounded structured details", async () => {

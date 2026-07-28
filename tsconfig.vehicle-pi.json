@@ -15,6 +15,7 @@
 		"src/vehicle.ts",
 		"src/vehicle-contract.ts",
 		"src/vehicle-errors.ts",
-		"src/vehicle-runtime.ts"
+		"src/vehicle-runtime.ts",
+		"src/pi-tool-availability.ts"
 	]
 }
