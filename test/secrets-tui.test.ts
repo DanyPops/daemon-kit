@@ -10,9 +10,11 @@ import {
 	describeService,
 	encodeSecretMenuValue,
 	loadAllSecrets,
+	mergeSecretsContributions,
 	performRevoke,
 	performRotate,
 	registerSecretsCommand,
+	registerSharedSecretsCommand,
 	runSecretsCommand,
 	SecretsBackendListError,
 	SECRETS_MENU,
@@ -21,6 +23,7 @@ import {
 	type SecretsMenuAction,
 } from "../src/secrets-tui.ts";
 import type { SecretRecord, SecretsBackend, ServiceRecord } from "../src/secrets-backend.ts";
+import { __resetSecretsRegistryForTests, listSecretsContributors } from "../src/secrets-registry.ts";
 
 // ── Pure descriptions -- state in, string out, no I/O, no pick ─────────────
 
@@ -305,10 +308,100 @@ describe("registerSecretsCommand", () => {
 		expect(registered).toEqual([{ name: "secrets", description: "Manage credentials: view status, rotate, or revoke, across every configured backend" }]);
 	});
 
-	it("registers under a caller-supplied name instead, so a second daemon-kit consumer in the same Pi session doesn't collide with an existing /secrets", () => {
+	it("registers under a caller-supplied name instead, for a consumer that genuinely wants its own standalone command", () => {
 		const registered: string[] = [];
 		const pi = { registerCommand: (name: string) => registered.push(name) } as unknown as ExtensionAPI;
 		registerSecretsCommand(pi, () => ({ backends: [] }), "tickets-secrets");
 		expect(registered).toEqual(["tickets-secrets"]);
+	});
+});
+
+describe("mergeSecretsContributions", () => {
+	it("concatenates backends and extraActions across every contribution", () => {
+		const a: SecretsBackend = { source: "a", list: async () => [], get: async () => undefined, rotate: async () => {}, revoke: async () => {} };
+		const b: SecretsBackend = { source: "b", list: async () => [], get: async () => undefined, rotate: async () => {}, revoke: async () => {} };
+		const action: SecretsMenuAction = { value: "login", label: "+ Log in", run: async () => {} };
+		const merged = mergeSecretsContributions([{ backends: [a], extraActions: [action] }, { backends: [b] }]);
+		expect(merged.backends).toEqual([a, b]);
+		expect(merged.extraActions).toEqual([action]);
+	});
+
+	it("omits servicesRegistry entirely when no contribution supplied one", () => {
+		const merged = mergeSecretsContributions([{ backends: [] }, { backends: [] }]);
+		expect(merged.servicesRegistry).toBeUndefined();
+	});
+
+	it("concatenates list() results across every contribution that supplied a servicesRegistry", async () => {
+		const merged = mergeSecretsContributions([
+			{ backends: [], servicesRegistry: { list: async () => [{ name: "enigma-client-a", backends: ["github"] }] } },
+			{ backends: [] }, // no registry -- must not break the merge or contribute anything
+			{ backends: [], servicesRegistry: { list: async () => [{ name: "tickets", backends: ["github", "gitlab", "jira"] }] } },
+		]);
+		expect(await merged.servicesRegistry?.list()).toEqual([
+			{ name: "enigma-client-a", backends: ["github"] },
+			{ name: "tickets", backends: ["github", "gitlab", "jira"] },
+		]);
+	});
+});
+
+describe("registerSharedSecretsCommand", () => {
+	const resetAll = () => __resetSecretsRegistryForTests();
+
+	it("the first caller claims the real Pi command registration", () => {
+		resetAll();
+		const registered: string[] = [];
+		const pi = { registerCommand: (name: string) => registered.push(name) } as unknown as ExtensionAPI;
+		registerSharedSecretsCommand(pi, { source: "enigma", resolve: () => ({ backends: [] }) });
+		expect(registered).toEqual(["secrets"]);
+	});
+
+	it("a second caller contributes without registering a second Pi command", () => {
+		resetAll();
+		const registered: string[] = [];
+		const pi = { registerCommand: (name: string) => registered.push(name) } as unknown as ExtensionAPI;
+		registerSharedSecretsCommand(pi, { source: "enigma", resolve: () => ({ backends: [] }) });
+		registerSharedSecretsCommand(pi, { source: "tickets", resolve: () => ({ backends: [] }) });
+		expect(registered).toEqual(["secrets"]); // only one real registration, ever
+		expect(
+			listSecretsContributors()
+				.map((c) => c.source)
+				.sort(),
+		).toEqual(["enigma", "tickets"]);
+	});
+
+	it("invoking the claimed command merges every registered contributor's current resolve(), not just the claimer's own", async () => {
+		resetAll();
+		let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+		const pi = { registerCommand: (_name: string, def: { handler: typeof handler }) => (handler = def.handler) } as unknown as ExtensionAPI;
+		const enigmaRecord: SecretRecord = { name: "github", source: "enigma", configured: true };
+		const ticketsRecord: SecretRecord = { name: "jira", source: "tickets", configured: true };
+		const enigmaBackend: SecretsBackend = {
+			source: "enigma",
+			list: async () => [enigmaRecord],
+			get: async () => enigmaRecord,
+			rotate: async () => {},
+			revoke: async () => {},
+		};
+		const ticketsBackend: SecretsBackend = {
+			source: "tickets",
+			list: async () => [ticketsRecord],
+			get: async () => ticketsRecord,
+			rotate: async () => {},
+			revoke: async () => {},
+		};
+		registerSharedSecretsCommand(pi, { source: "enigma", resolve: () => ({ backends: [enigmaBackend] }) });
+		registerSharedSecretsCommand(pi, { source: "tickets", resolve: () => ({ backends: [ticketsBackend] }) });
+
+		const notifications: string[] = [];
+		const ctx = {
+			mode: "print",
+			ui: { notify: (text: string) => notifications.push(text) },
+		} as unknown as ExtensionCommandContext;
+		await handler?.("", ctx);
+		// print mode's defaultPick notifies the merged item list instead of opening a real menu --
+		// proves both backends' records reached the single shared command, sight unseen by either
+		// contributor of the other's existence.
+		expect(notifications[0]).toContain("github (enigma)");
+		expect(notifications[0]).toContain("jira (tickets)");
 	});
 });

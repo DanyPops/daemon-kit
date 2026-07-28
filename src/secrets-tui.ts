@@ -31,6 +31,13 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { DynamicBorder, getSelectListTheme } from "@earendil-works/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { findServicesUsingSecret, type SecretRecord, type SecretsBackend, type ServiceRecord, type ServicesRegistry } from "./secrets-backend.ts";
+import {
+	claimSecretsCommandName,
+	listSecretsContributors,
+	registerSecretsContributor,
+	type SecretsContribution,
+	type SecretsContributor,
+} from "./secrets-registry.ts";
 
 /** Top-level menu item values, exported so a consumer's own tests can recognize navigation through the two-menu split without hardcoding magic strings. */
 export const SERVICES_MENU = "__daemon_kit_secrets_services_menu__";
@@ -334,5 +341,53 @@ export function registerSecretsCommand(
 	});
 }
 
+/**
+ * Merges every contributor's freshly-resolved SecretsContribution into one
+ * RunSecretsCommandOptions -- backends and extraActions concatenate;
+ * ServicesRegistry.list() results concatenate across every contributor
+ * that supplied one (Enigma's real vault clients alongside tickets' own
+ * self-declared entry both show up in the same [services] menu). Exported
+ * directly (not just used inside registerSharedSecretsCommand) so a test
+ * can assert on the merge itself without touching the process-wide
+ * registry at all.
+ */
+export function mergeSecretsContributions(contributions: SecretsContribution[]): RunSecretsCommandOptions {
+	const backends = contributions.flatMap((c) => c.backends);
+	const extraActions = contributions.flatMap((c) => c.extraActions ?? []);
+	const registries = contributions.map((c) => c.servicesRegistry).filter((r): r is ServicesRegistry => r !== undefined);
+	const servicesRegistry: ServicesRegistry | undefined =
+		registries.length === 0 ? undefined : { list: async () => (await Promise.all(registries.map((r) => r.list()))).flat() };
+	return { backends, extraActions, servicesRegistry };
+}
+
+/**
+ * Registers this consumer as a contributor to the shared `/secrets`
+ * namespace (default commandName) instead of a standalone command of its
+ * own. Every consumer calling this -- Enigma, pipes, tickets, whichever
+ * order they load in -- lands in the same `/secrets` command: exactly one
+ * of them (whichever gets here first) actually calls pi.registerCommand,
+ * per claimSecretsCommandName's contract; every other one still shows up
+ * because the command handler re-reads every registered contributor fresh
+ * on each invocation, not just the claiming one's own.
+ *
+ * Use registerSecretsCommand instead when a consumer genuinely wants its
+ * own standalone command, unrelated to any other daemon-kit consumer's
+ * secrets (rare -- most consumers sharing a Pi session want the same
+ * `/secrets` surface).
+ */
+export function registerSharedSecretsCommand(pi: ExtensionAPI, contributor: SecretsContributor, commandName = "secrets"): void {
+	registerSecretsContributor(contributor);
+	if (!claimSecretsCommandName(commandName)) return; // another consumer already owns the actual command registration -- my contribution above still merges in
+	pi.registerCommand(commandName, {
+		description: "Manage credentials: view status, rotate, or revoke, across every configured backend",
+		handler: async (_args, ctx) => {
+			const resolved = await Promise.all(listSecretsContributors().map((c) => c.resolve()));
+			await runSecretsCommand(ctx, mergeSecretsContributions(resolved));
+		},
+	});
+}
+
 export { findServicesUsingSecret };
 export type { SecretRecord, SecretsBackend, ServiceRecord, ServicesRegistry };
+export type { SecretsContribution, SecretsContributor } from "./secrets-registry.ts";
+export { registerSecretsContributor, unregisterSecretsContributor, listSecretsContributors, claimSecretsCommandName } from "./secrets-registry.ts";
