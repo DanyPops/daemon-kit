@@ -1,0 +1,37 @@
+{
+	"name": "@danypops/vehicle-server",
+	"version": "0.1.0",
+	"description": "Vehicle's execution engine: VehicleRegistry (registration, permission/deadline/payload enforcement, availability, execution policy) and its authenticated HTTP hosting surface. Two real, independent subpaths -- a consumer that only builds/tests a registry never pulls in HTTP plumbing.",
+	"license": "MIT",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./dist/vehicle-registry.d.ts",
+			"default": "./dist/vehicle-registry.js"
+		},
+		"./http": {
+			"types": "./dist/vehicle-http-provider.d.ts",
+			"default": "./dist/vehicle-http-provider.js"
+		}
+	},
+	"scripts": {
+		"build": "rm -rf dist && tsc -p tsconfig.build.json",
+		"test": "bun run build && bun test test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@danypops/vehicle-core": "workspace:*",
+		"@danypops/daemon-kit": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"typescript": "latest"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/DanyPops/daemon-kit.git",
+		"directory": "packages/vehicle-server"
+	},
+	"keywords": ["vehicle", "agent-tools"],
+	"files": ["src", "dist", "README.md"]
+}

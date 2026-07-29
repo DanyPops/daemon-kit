@@ -1,0 +1,39 @@
+name: Publish vehicle-conformance
+
+# Trusted publishing (OIDC), same shape as publish-daemon-kit.yml. Configure
+# the trusted publisher on npmjs.com: org=DanyPops repo=daemon-kit
+# workflow=publish-vehicle-conformance.yml
+
+on:
+  push:
+    tags:
+      - "vehicle-conformance-v*"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
+      # Full workspace build -- vehicle-conformance's own tests exercise both
+      # @danypops/vehicle-client's local and http transports against a real
+      # @danypops/vehicle-server registry.
+      - run: bun run build
+      - run: bun run --cwd packages/vehicle-conformance test
+      - run: bun run --cwd packages/vehicle-conformance typecheck
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - run: npm install -g npm@latest && npm --version
+
+      - run: npm publish --access public
+        working-directory: packages/vehicle-conformance

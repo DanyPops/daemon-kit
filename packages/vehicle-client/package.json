@@ -1,0 +1,37 @@
+{
+	"name": "@danypops/vehicle-client",
+	"version": "0.1.0",
+	"description": "Vehicle clients: a same-process LocalVehicleClient (./local) and an authenticated-HTTP RemoteVehicleClient (./http). No root export -- each is a real, independent way to reach a VehicleClient, and importing one must never pull the other in.",
+	"license": "MIT",
+	"type": "module",
+	"exports": {
+		"./local": {
+			"types": "./dist/vehicle-local-client.d.ts",
+			"default": "./dist/vehicle-local-client.js"
+		},
+		"./http": {
+			"types": "./dist/vehicle-http-client.d.ts",
+			"default": "./dist/vehicle-http-client.js"
+		}
+	},
+	"scripts": {
+		"build": "rm -rf dist && tsc -p tsconfig.build.json",
+		"test": "bun run build && bun test test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@danypops/vehicle-core": "workspace:*",
+		"@danypops/vehicle-server": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"typescript": "latest"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/DanyPops/daemon-kit.git",
+		"directory": "packages/vehicle-client"
+	},
+	"keywords": ["vehicle", "agent-tools"],
+	"files": ["src", "dist", "README.md"]
+}

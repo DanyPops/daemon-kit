@@ -1,0 +1,38 @@
+name: Publish vehicle-client
+
+# Trusted publishing (OIDC), same shape as publish-daemon-kit.yml. Configure
+# the trusted publisher on npmjs.com: org=DanyPops repo=daemon-kit
+# workflow=publish-vehicle-client.yml
+
+on:
+  push:
+    tags:
+      - "vehicle-client-v*"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
+      # Full workspace build -- vehicle-client depends on @danypops/vehicle-core
+      # and @danypops/vehicle-server (LocalVehicleClient's VehicleRegistry type).
+      - run: bun run build
+      - run: bun run --cwd packages/vehicle-client test
+      - run: bun run --cwd packages/vehicle-client typecheck
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - run: npm install -g npm@latest && npm --version
+
+      - run: npm publish --access public
+        working-directory: packages/vehicle-client

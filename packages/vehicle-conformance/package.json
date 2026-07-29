@@ -1,0 +1,32 @@
+{
+	"name": "@danypops/vehicle-conformance",
+	"version": "0.1.0",
+	"description": "Host-neutral conformance suite for any VehicleClient implementation: one shared bun:test assertion set that LocalVehicleClient, RemoteVehicleClient, and any future transport must satisfy identically. A Bun-only devDependency for testing, not a runtime library -- ships raw TypeScript, never precompiled.",
+	"license": "MIT",
+	"type": "module",
+	"main": "./src/vehicle-conformance.ts",
+	"types": "./src/vehicle-conformance.ts",
+	"exports": {
+		".": "./src/vehicle-conformance.ts"
+	},
+	"scripts": {
+		"test": "bun test test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@danypops/vehicle-core": "workspace:*",
+		"@danypops/vehicle-server": "workspace:*"
+	},
+	"devDependencies": {
+		"@danypops/vehicle-client": "workspace:*",
+		"@types/node": "^22.0.0",
+		"typescript": "latest"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/DanyPops/daemon-kit.git",
+		"directory": "packages/vehicle-conformance"
+	},
+	"keywords": ["vehicle", "agent-tools", "testing"],
+	"files": ["src", "README.md"]
+}

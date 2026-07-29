@@ -1,0 +1,94 @@
+{
+	"name": "@danypops/daemon-kit",
+	"version": "0.23.0",
+	"description": "Shared substrate for supervised, authenticated, loopback-only Bun daemons: process lifecycle, SQLite storage bootstrap, structured logging, and an HTTP auth/RPC layer",
+	"license": "MIT",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts",
+		"./paths": "./src/paths.ts",
+		"./storage": "./src/storage.ts",
+		"./logging": "./src/logging.ts",
+		"./http": "./src/http.ts",
+		"./session-identity": "./src/session-identity.ts",
+		"./daemon": {
+			"types": "./dist/daemon.d.ts",
+			"default": "./dist/daemon.js"
+		},
+		"./rpc-client": "./src/rpc-client.ts",
+		"./version": "./src/version.ts",
+		"./vault": "./src/vault.ts",
+		"./supervisor": "./src/supervisor.ts",
+		"./process-supervisor": "./src/process-supervisor.ts",
+		"./service": "./src/service.ts",
+		"./unix-peer-cred": {
+			"types": "./dist/unix-peer-cred.d.ts",
+			"default": "./dist/unix-peer-cred.js"
+		},
+		"./unix-rpc-server": {
+			"types": "./dist/unix-rpc-server.d.ts",
+			"default": "./dist/unix-rpc-server.js"
+		},
+		"./unix-rpc-client": {
+			"types": "./dist/unix-rpc-client.d.ts",
+			"default": "./dist/unix-rpc-client.js"
+		},
+		"./push-channel": {
+			"types": "./dist/push-channel.d.ts",
+			"default": "./dist/push-channel.js"
+		},
+		"./pi-load-harness": "./src/pi-load-harness.ts",
+		"./pi-client": {
+			"types": "./dist/pi-client.d.ts",
+			"default": "./dist/pi-client.js"
+		},
+		"./pi-tool-availability": {
+			"types": "./dist/pi-tool-availability.d.ts",
+			"default": "./dist/pi-tool-availability.js"
+		},
+		"./secrets-backend": "./src/secrets-backend.ts",
+		"./secrets-backend-env": "./src/secrets-backend-env.ts",
+		"./secrets-backend-local": "./src/secrets-backend-local.ts",
+		"./secrets-registry": "./src/secrets-registry.ts",
+		"./secrets-tui": "./src/secrets-tui.ts"
+	},
+	"scripts": {
+		"build:pi-client": "tsc -p tsconfig.build-pi-client.json",
+		"build:pi-tool-availability": "tsc -p tsconfig.build-pi-tool-availability.json",
+		"build:daemon": "tsc -p tsconfig.build-daemon.json",
+		"build": "bun run build:pi-client && bun run build:pi-tool-availability && bun run build:daemon",
+		"test": "bun run build && bun test test",
+		"typecheck": "tsc --noEmit"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"typescript": "^5"
+	},
+	"peerDependenciesMeta": {
+		"@earendil-works/pi-coding-agent": {
+			"optional": true
+		},
+		"@earendil-works/pi-tui": {
+			"optional": true
+		}
+	},
+	"dependencies": {
+		"pino": "^10.3.1"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"@types/node": "^22.0.0",
+		"env-paths": "^4",
+		"jiti": "^2.0.0",
+		"typebox": "1.1.38"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/DanyPops/daemon-kit.git",
+		"directory": "packages/daemon-kit"
+	},
+	"files": ["src", "dist", "README.md"]
+}

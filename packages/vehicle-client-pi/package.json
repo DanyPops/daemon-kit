@@ -1,0 +1,39 @@
+{
+	"name": "@danypops/vehicle-client-pi",
+	"version": "0.1.0",
+	"description": "Projects any VehicleClient's manifest into native Pi tools -- one specific client host, alongside @danypops/vehicle-client's transport-agnostic ./local and ./http. Preserves operation versions, schemas, cancellation, Pi call/session identity, permissions, keyed idempotency, progress, and structured failures; curates tool visibility by live operation availability.",
+	"license": "MIT",
+	"type": "module",
+	"main": "./dist/vehicle-pi.js",
+	"types": "./dist/vehicle-pi.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/vehicle-pi.d.ts",
+			"default": "./dist/vehicle-pi.js"
+		}
+	},
+	"scripts": {
+		"build": "rm -rf dist && tsc -p tsconfig.build.json",
+		"test": "bun run build && bun test test",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@danypops/vehicle-core": "workspace:*",
+		"@danypops/daemon-kit": "workspace:*"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"typebox": "*"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"typescript": "latest"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/DanyPops/daemon-kit.git",
+		"directory": "packages/vehicle-client-pi"
+	},
+	"keywords": ["vehicle", "agent-tools", "pi-extension"],
+	"files": ["src", "dist", "README.md"]
+}

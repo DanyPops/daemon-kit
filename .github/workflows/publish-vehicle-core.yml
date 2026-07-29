@@ -1,0 +1,39 @@
+name: Publish vehicle-core
+
+# Trusted publishing (OIDC), same shape as publish-daemon-kit.yml. Configure
+# the trusted publisher on npmjs.com: org=DanyPops repo=daemon-kit
+# workflow=publish-vehicle-core.yml
+
+on:
+  push:
+    tags:
+      - "vehicle-core-v*"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
+      # Full workspace build: vehicle-core has no workspace dependency of its
+      # own, but the shared root build keeps every publish workflow uniform
+      # regardless of which package moves through it.
+      - run: bun run build
+      - run: bun run --cwd packages/vehicle-core test
+      - run: bun run --cwd packages/vehicle-core typecheck
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - run: npm install -g npm@latest && npm --version
+
+      - run: npm publish --access public
+        working-directory: packages/vehicle-core
