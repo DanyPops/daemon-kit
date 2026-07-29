@@ -18,14 +18,14 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@danypops/vehicle-core": "workspace:*",
-		"@danypops/daemon-kit": "workspace:*"
+		"@danypops/vehicle-core": "workspace:*"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
 		"typebox": "*"
 	},
 	"devDependencies": {
+		"@danypops/daemon-kit": "workspace:*",
 		"@types/node": "^22.0.0",
 		"typescript": "latest"
 	},

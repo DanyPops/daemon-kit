@@ -60,10 +60,10 @@
       "name": "@danypops/vehicle-client-pi",
       "version": "0.1.0",
       "dependencies": {
-        "@danypops/daemon-kit": "workspace:*",
         "@danypops/vehicle-core": "workspace:*",
       },
       "devDependencies": {
+        "@danypops/daemon-kit": "workspace:*",
         "@types/node": "^22.0.0",
         "typescript": "latest",
       },
@@ -97,7 +97,6 @@
       "name": "@danypops/vehicle-server",
       "version": "0.1.0",
       "dependencies": {
-        "@danypops/daemon-kit": "workspace:*",
         "@danypops/vehicle-core": "workspace:*",
       },
       "devDependencies": {

@@ -14,7 +14,7 @@ import type {
 	VehiclePrincipal,
 } from "@danypops/vehicle-core";
 import { VehicleError } from "@danypops/vehicle-core";
-import { syncManagedActiveTools } from "@danypops/daemon-kit/pi-tool-availability";
+import { syncManagedActiveTools } from "./pi-tool-availability.js";
 
 export interface PiVehicleIdentity {
 	readonly name: string;

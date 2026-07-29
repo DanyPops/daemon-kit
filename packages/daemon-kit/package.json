@@ -44,10 +44,6 @@
 			"types": "./dist/pi-client.d.ts",
 			"default": "./dist/pi-client.js"
 		},
-		"./pi-tool-availability": {
-			"types": "./dist/pi-tool-availability.d.ts",
-			"default": "./dist/pi-tool-availability.js"
-		},
 		"./secrets-backend": "./src/secrets-backend.ts",
 		"./secrets-backend-env": "./src/secrets-backend-env.ts",
 		"./secrets-backend-local": "./src/secrets-backend-local.ts",
@@ -56,9 +52,8 @@
 	},
 	"scripts": {
 		"build:pi-client": "tsc -p tsconfig.build-pi-client.json",
-		"build:pi-tool-availability": "tsc -p tsconfig.build-pi-tool-availability.json",
 		"build:daemon": "tsc -p tsconfig.build-daemon.json",
-		"build": "bun run build:pi-client && bun run build:pi-tool-availability && bun run build:daemon",
+		"build": "bun run build:pi-client && bun run build:daemon",
 		"test": "bun run build && bun test test",
 		"typecheck": "tsc --noEmit"
 	},
