@@ -181,6 +181,42 @@ On the provider side, mark an operation unavailable (or available again) on
 `VehicleRegistry` directly -- `registry.setAvailability("jira.search", 1, false, "no Jira credential configured")`
 -- and the next `refreshVehicleToolAvailability()` call picks it up.
 
+## One operation per real action, never an action-dispatch tool
+
+A recurring anti-pattern in agent tool design -- documented independently as
+"God Parameters"/"Kitchen Sink tool" (IBM's MCP integration guidance, several
+agent-tooling blogs) and covered in Anthropic's own writing-tools-for-agents
+post -- is one tool with an `action` enum branching into many otherwise-
+unrelated operations, backed by a shared parameter blob that's a superset
+union across every branch. A real audit of this house's own Pi tools found
+exactly this shape at real scale: a 38-action, 33-parameter tool with its
+`action` field left completely unconstrained (`Type.String()`, not even an
+enum), so an invalid action isn't rejected until it reaches the daemon.
+
+Define every real action as its own `VehicleOperation` instead, each with its
+own honest `effect`/`idempotency`/schema -- never an operation whose own
+input schema is itself an `action`-dispatch blob. This isn't just a style
+preference: `VehicleOperationDescriptor` requires exactly one `effect` per
+operation, so folding a destructive action (delete) and a read action (list)
+behind one shared `action` parameter forces a dishonest blended `effect` --
+either reads get gated as destructive, or deletes slip through ungated.
+There's no equivalent cost to doing this with a raw `pi.registerTool()` call,
+which is exactly how the anti-pattern accumulates unchecked.
+
+Namespace many related operations under one provider with a shared dotted
+name prefix (`tasks.create`, `tasks.list`, `tasks.remove`, ...) rather than
+collapsing them into one tool -- `registerVehicleTools()`'s existing name
+projection already turns this into distinct, correctly prefixed Pi tools
+(`tasks_create`, `tasks_list`, `tasks_remove`) with no extra code, and two
+providers using the same short action words (`notes.create` vs
+`tasks.create`) never collide. This is the same "namespacing" alternative to
+consolidation Anthropic's own guidance recommends, not something novel to
+Vehicle. Proven at the scale that actually motivates reaching for a
+mega-tool in `packages/vehicle-client-pi/test/namespaced-operations-at-scale.test.ts`,
+which models a real 38-action tool this way and checks every operation
+projects to a distinct, collision-free tool with its own narrow schema and
+honest effect intact.
+
 ## What this deliberately does not include
 
 - A routing framework (Hono, itty-router, tRPC): the auth/health/ops routing
