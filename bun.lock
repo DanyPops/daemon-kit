@@ -22,7 +22,7 @@
     },
     "packages/vehicle-client": {
       "name": "@danypops/vehicle-client",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@danypops/vehicle-core": "workspace:*",
         "@danypops/vehicle-server": "workspace:*",
@@ -55,7 +55,7 @@
     },
     "packages/vehicle-conformance": {
       "name": "@danypops/vehicle-conformance",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@danypops/vehicle-core": "workspace:*",
         "@danypops/vehicle-server": "workspace:*",
@@ -76,7 +76,7 @@
     },
     "packages/vehicle-server": {
       "name": "@danypops/vehicle-server",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@danypops/vehicle-core": "workspace:*",
         "pino": "^10.3.1",

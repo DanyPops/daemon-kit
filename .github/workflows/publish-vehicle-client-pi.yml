@@ -34,5 +34,12 @@ jobs:
 
       - run: npm install -g npm@latest && npm --version
 
+      # Bun's workspace:* protocol is not understood by npm's own resolver --
+      # rewrite it to a real ^version before publish, or every real npm
+      # consumer gets an unresolvable dependency (confirmed live: the first
+      # publish of vehicle-server/vehicle-client/vehicle-conformance shipped
+      # exactly this, deprecated and republished once found).
+      - run: node scripts/resolve-workspace-deps.mjs packages/vehicle-client-pi
+
       - run: npm publish --access public
         working-directory: packages/vehicle-client-pi
