@@ -1,0 +1,14 @@
+name: Diagnostic trigger test
+
+# Temporary -- isolates whether Actions execution works at all for this repo
+# post-rename, distinct from whether push:tags specifically fires. Delete
+# once the real publish-*.yml triggering issue is understood.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "diagnostic trigger fired"
