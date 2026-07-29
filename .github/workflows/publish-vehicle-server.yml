@@ -1,8 +1,8 @@
 name: Publish vehicle-server
 
-# Trusted publishing (OIDC), same shape as publish-daemon-kit.yml. Configure
-# the trusted publisher on npmjs.com: org=DanyPops repo=daemon-kit
-# workflow=publish-vehicle-server.yml
+# Trusted publishing (OIDC), same shape as every other publish-*.yml in this
+# workspace. Configure the trusted publisher on npmjs.com: org=DanyPops
+# repo=vehicle workflow=publish-vehicle-server.yml
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
 
       - run: bun install
       # Full workspace build -- vehicle-server depends on @danypops/vehicle-core
-      # and @danypops/daemon-kit (for its ./http subpath's use of http.ts).
+      # only; its own http.ts backs both ./http and the compiled daemon surface.
       - run: bun run build
       - run: bun run --cwd packages/vehicle-server test
       - run: bun run --cwd packages/vehicle-server typecheck

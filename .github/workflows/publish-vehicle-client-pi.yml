@@ -1,8 +1,8 @@
 name: Publish vehicle-client-pi
 
-# Trusted publishing (OIDC), same shape as publish-daemon-kit.yml. Configure
-# the trusted publisher on npmjs.com: org=DanyPops repo=daemon-kit
-# workflow=publish-vehicle-client-pi.yml
+# Trusted publishing (OIDC), same shape as every other publish-*.yml in this
+# workspace. Configure the trusted publisher on npmjs.com: org=DanyPops
+# repo=vehicle workflow=publish-vehicle-client-pi.yml
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
 
       - run: bun install
       # Full workspace build -- vehicle-client-pi depends on @danypops/vehicle-core
-      # and @danypops/daemon-kit (pi-tool-availability.ts).
+      # and @danypops/vehicle-server (secrets-backend-local.ts reads vault.ts directly).
       - run: bun run build
       - run: bun run --cwd packages/vehicle-client-pi test
       - run: bun run --cwd packages/vehicle-client-pi typecheck

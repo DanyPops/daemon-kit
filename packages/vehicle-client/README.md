@@ -17,5 +17,5 @@ bun add @danypops/vehicle-client @danypops/vehicle-core
 specifically for Pi's jiti extension loader; `./rpc-client` and `./version`
 ship as raw TypeScript.
 
-See the [workspace README](https://github.com/DanyPops/daemon-kit#readme) for
+See the [workspace README](https://github.com/DanyPops/vehicle#readme) for
 the full module table and Vehicle package layout.

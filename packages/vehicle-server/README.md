@@ -18,5 +18,5 @@ Every other module (`./paths`, `./storage`, `./logging`, `./rpc-http`,
 `./push-channel`, `./version`) is independently importable, so a consumer
 only pulls in what it uses.
 
-See the [workspace README](https://github.com/DanyPops/daemon-kit#readme) for
+See the [workspace README](https://github.com/DanyPops/vehicle#readme) for
 the full module table and Vehicle package layout.

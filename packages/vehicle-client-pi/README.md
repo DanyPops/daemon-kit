@@ -15,6 +15,6 @@ Pi-loaded module) and the shared `/secrets` Pi command (`./secrets-backend`,
 bun add @danypops/vehicle-client-pi
 ```
 
-See the [workspace README](https://github.com/DanyPops/daemon-kit#readme) for
+See the [workspace README](https://github.com/DanyPops/vehicle#readme) for
 `registerVehicleTools()`/`refreshVehicleToolAvailability()` usage and the full
 Vehicle package layout.

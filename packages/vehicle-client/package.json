@@ -42,7 +42,7 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/DanyPops/daemon-kit.git",
+		"url": "git+https://github.com/DanyPops/vehicle.git",
 		"directory": "packages/vehicle-client"
 	},
 	"keywords": ["vehicle", "agent-tools"],

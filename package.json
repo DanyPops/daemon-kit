@@ -1,5 +1,5 @@
 {
-	"name": "daemon-kit-workspace",
+	"name": "vehicle-workspace",
 	"private": true,
 	"packageManager": "bun@1.3.14",
 	"workspaces": ["packages/*"],

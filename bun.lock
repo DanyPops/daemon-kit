@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "daemon-kit-workspace",
+      "name": "vehicle-workspace",
       "devDependencies": {
         "@danypops/vehicle-client": "workspace:*",
         "@danypops/vehicle-client-pi": "workspace:*",
