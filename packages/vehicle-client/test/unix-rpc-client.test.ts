@@ -2,8 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { serveUnixRpc } from "@danypops/vehicle-server/unix-rpc-server";
 import { connectUnixRpc } from "../src/unix-rpc-client.ts";
-import { serveUnixRpc } from "../src/unix-rpc-server.ts";
 
 function socketPath(): string {
 	return join(tmpdir(), `daemon-kit-unix-rpc-client-${process.pid}-${Math.random().toString(36).slice(2)}.sock`);

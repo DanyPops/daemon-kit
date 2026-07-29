@@ -80,8 +80,8 @@ describe("cross-module-instance sharing (the actual reason this uses globalThis)
 		// Bun's module cache would normally dedupe this to the identical instance for a
 		// literal re-import of the same path, but the point under test is the *mechanism*
 		// (globalThis + Symbol.for), not proving bypass of Bun's own cache -- a real
-		// cross-package duplicate is exercised for real in daemon-kit's consumers
-		// (enigma/pipes/tickets each resolving their own nested daemon-kit copy).
+		// cross-package duplicate is exercised for real in vehicle-client-pi's
+		// consumers (enigma/pipes/tickets each resolving their own nested copy).
 		const registryModule = await import("../src/secrets-registry.ts");
 		expect(registryModule.listSecretsContributors().map((c) => c.source)).toEqual(["enigma"]);
 	});

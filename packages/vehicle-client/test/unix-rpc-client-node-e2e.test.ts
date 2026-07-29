@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { serveUnixRpc } from "../src/unix-rpc-server.ts";
+import { serveUnixRpc } from "@danypops/vehicle-server/unix-rpc-server";
 
 const UNIX_RPC_CLIENT_TS = resolve(import.meta.dir, "..", "src", "unix-rpc-client.ts");
 

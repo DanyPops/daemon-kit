@@ -13,5 +13,5 @@
 		"rewriteRelativeImportExtensions": true,
 		"rootDir": "src"
 	},
-	"include": ["src/daemon.ts", "src/paths.ts", "src/http.ts", "src/logging.ts", "src/push-channel.ts", "src/unix-peer-cred.ts", "src/unix-rpc-server.ts", "src/unix-rpc-client.ts"]
+	"include": ["src/daemon.ts", "src/paths.ts", "src/http.ts", "src/logging.ts", "src/push-channel.ts", "src/unix-peer-cred.ts", "src/unix-rpc-server.ts"]
 }

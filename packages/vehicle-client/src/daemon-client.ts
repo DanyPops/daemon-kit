@@ -9,15 +9,16 @@
  * detects that on the failing call itself, drops the cached client, and
  * retries exactly once against a freshly reconnected one.
  *
- * Shipped pre-compiled (see the package's `build:pi-client` script and its
- * `./pi-client` export) rather than raw TypeScript like the rest of this
- * package -- this is the one module here meant to be imported directly by a
- * Pi extension rather than by another Bun daemon, and Pi's jiti-based
+ * Shipped pre-compiled (see the package's `build:daemon-client` script and
+ * its `./daemon-client` export) rather than raw TypeScript like the rest of
+ * this package -- this is the one module here meant to be imported directly
+ * by a Pi extension rather than by another Bun daemon, and Pi's jiti-based
  * extension loader has a real, demonstrated failure class importing a
- * dependency's raw, unbuilt TypeScript (see pi-load-harness.ts). This
- * module and the Vehicle SDK are the runtime-neutral precompiled surfaces.
- * This module has no imports of its own -- fetch/Request/TypeError/AbortError
- * are all global -- so it is safe to load under Node without a Bun runtime.
+ * dependency's raw, unbuilt TypeScript (see @danypops/vehicle-client-pi's
+ * pi-load-harness.ts). This module has no imports of its own --
+ * fetch/Request/TypeError/AbortError are all global -- so it is safe to
+ * load under Node without a Bun runtime, and has no Pi-API dependency of
+ * its own despite existing mainly for Pi extensions to reach a Vehicle server.
  *
  * `connectWithPolicy` covers the other silent per-daemon fork found
  * alongside the retry duplication: whether a missing daemon should be
@@ -432,7 +433,7 @@ export interface DaemonStatusOptions<Handle extends DaemonHandleLike, Client> {
 	buildClient: (handle: Handle) => Client | Promise<Client>;
 	/** Optional -- e.g. reads the daemon's /health response. Omit to report liveness without a version. */
 	readVersion?: (client: Client) => Promise<string>;
-	/** Optional -- computes uptime from whatever the handle/caller already tracks (daemon-kit does not itself define where a start timestamp lives). */
+	/** Optional -- computes uptime from whatever the handle/caller already tracks (this module does not itself define where a start timestamp lives). */
 	startedAtMs?: (handle: Handle) => number | undefined;
 	/** Reports a createRetryingClient's breakerState() inline, so "why is nothing happening" and "is the breaker open" are answered by one call. */
 	breaker?: () => CircuitBreakerState;
@@ -530,9 +531,9 @@ export interface PushChannelClient {
  *   connection that opens then drops again immediately keeps the backoff
  *   climbing instead of resetting to fast retries on every brief open --
  *   the actual mechanism behind detecting "degraded", not just "down".
- * - Jitter added on top of that reference algorithm (which has none) --
- *   daemon-kit's actual shape is several concurrent Pi sessions reconnecting
- *   to one daemon after a restart; unjittered synchronized backoff would
+ * - Jitter added on top of that reference algorithm (which has none) -- the
+ *   real shape here is several concurrent Pi sessions reconnecting to one
+ *   Vehicle server after a restart; unjittered synchronized backoff would
  *   create a reconnect storm the moment the daemon comes back up.
  * - A heartbeat ping/timeout (mirroring ws-heartbeat) detects a socket that
  *   stays open while the daemon process itself is hung -- a plain

@@ -1,9 +1,9 @@
 /**
  * A VehicleClient that talks to a remote daemon's @danypops/vehicle-server's
  * ./http provider over the same Bearer-authenticated loopback transport
- * every daemon-kit daemon uses -- so a daemon-backed Pi extension can
- * project a remote Vehicle through @danypops/vehicle-pi exactly as it
- * would a LocalVehicleClient. Exported as this package's ./http subpath;
+ * every Vehicle server uses -- so a daemon-backed Pi extension can project
+ * a remote Vehicle through @danypops/vehicle-client-pi exactly as it would
+ * a LocalVehicleClient. Exported as this package's ./http subpath;
  * jiti-safe under Pi's extension loader.
  *
  * Preserves LocalVehicleClient's semantics over the wire: every

@@ -1,7 +1,7 @@
 /**
- * Env-var SecretsBackend: the Tier-1 credential source most daemon-kit
- * consumers already fall back to (pipes, tickets both resolve a static
- * token from process.env before ever touching a local store or Enigma).
+ * Env-var SecretsBackend: the Tier-1 credential source most consumers
+ * already fall back to (pipes, tickets both resolve a static token from
+ * process.env before ever touching a local store or Enigma).
  * Read-only by nature -- an env var isn't something this process can
  * rotate or delete, so both throw SecretsBackendUnsupportedOperationError
  * rather than silently no-op.

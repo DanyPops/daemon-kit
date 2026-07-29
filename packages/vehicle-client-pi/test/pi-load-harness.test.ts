@@ -1,8 +1,7 @@
-import { beforeAll, describe, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
-import { expect } from "bun:test";
-import { verifyLoadableUnderPi } from "@danypops/daemon-kit/pi-load-harness";
+import { verifyLoadableUnderPi } from "../src/pi-load-harness.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const SRC = (name: string) => resolve(import.meta.dir, "..", "src", name);
@@ -13,9 +12,24 @@ function expectAllPathsOk(results: Awaited<ReturnType<typeof verifyLoadableUnder
 	}
 }
 
+describe("verifyLoadableUnderPi", () => {
+	it("reports one result per load path, in a stable order", async () => {
+		const results = await verifyLoadableUnderPi(SRC("secrets-backend.ts"));
+		expect(results.map((r) => r.path)).toEqual(["native-esm", "jiti-try-native-false", "jiti-try-native-true"]);
+	});
+
+	it("a genuinely broken module fails every path with a real error, not a silent pass", async () => {
+		const results = await verifyLoadableUnderPi(resolve(import.meta.dir, "fixtures", "broken-module.ts"));
+		for (const result of results) {
+			expect(result.ok).toBe(false);
+			expect(result.error).toBeTruthy();
+		}
+	});
+});
+
 // vehicle-client-pi is the one Vehicle package Pi actually loads as an
 // extension dependency -- its published artifact must remain loadable
-// through the same Node/jiti paths as daemon-kit's own pi-client.
+// through every Pi extension load path.
 describe("vehicle-client-pi (the pre-compiled Pi host projection)", () => {
 	beforeAll(() => {
 		const result = spawnSync("bun", ["run", "build"], { cwd: ROOT, stdio: "inherit" });
@@ -28,5 +42,9 @@ describe("vehicle-client-pi (the pre-compiled Pi host projection)", () => {
 
 	it("the compiled artifact (dist/vehicle-pi.js) loads under every Pi extension load path", async () => {
 		expectAllPathsOk(await verifyLoadableUnderPi(resolve(ROOT, "dist", "vehicle-pi.js")));
+	});
+
+	it("secrets-tui.ts loads under every Pi extension load path", async () => {
+		expectAllPathsOk(await verifyLoadableUnderPi(SRC("secrets-tui.ts")));
 	});
 });

@@ -1,15 +1,15 @@
 /**
- * Process-wide registry so several daemon-kit consumers (Enigma, pipes,
- * tickets, ...) can all contribute to one shared `/secrets` Pi command
- * instead of each needing its own distinctly-named command. Pi's own
- * registerCommand does not merge same-named registrations -- it keeps
+ * Process-wide registry so several vehicle-client-pi consumers (Enigma,
+ * pipes, tickets, ...) can all contribute to one shared `/secrets` Pi
+ * command instead of each needing its own distinctly-named command. Pi's
+ * own registerCommand does not merge same-named registrations -- it keeps
  * every one and assigns numeric suffixes (`/secrets:1`, `/secrets:2`), see
  * extensions.md -- so the merge has to happen here, one level up.
  *
  * Different consumers can resolve to different *nested* copies of
- * daemon-kit (their own semver-pinned dependency range, hoisted or nested
- * independently by npm), so a plain module-level singleton in this file
- * would not be shared across them -- each copy would have its own map.
+ * vehicle-client-pi (their own semver-pinned dependency range, hoisted or
+ * nested independently by npm), so a plain module-level singleton in this
+ * file would not be shared across them -- each copy would have its own map.
  * globalThis + Symbol.for() sidesteps that: it's keyed by name, not by
  * module identity, so every copy of this file, any version, reads and
  * writes the exact same underlying object.
@@ -45,7 +45,7 @@ export interface SecretsContributor {
 	resolve: () => SecretsContribution | Promise<SecretsContribution>;
 }
 
-const REGISTRY_KEY = Symbol.for("@danypops/daemon-kit/secrets-registry@1");
+const REGISTRY_KEY = Symbol.for("@danypops/vehicle-client-pi/secrets-registry@1");
 
 interface SharedRegistryState {
 	contributors: Map<string, SecretsContributor>;
@@ -72,7 +72,7 @@ export function listSecretsContributors(): SecretsContributor[] {
 }
 
 /**
- * Returns true exactly once per commandName across every daemon-kit copy
+ * Returns true exactly once per commandName across every vehicle-client-pi copy
  * in this process -- the caller that gets `true` is the one that should
  * actually call pi.registerCommand(commandName, ...); every other caller
  * must skip that call and rely on its own registerSecretsContributor

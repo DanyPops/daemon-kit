@@ -3,8 +3,8 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createFileStore } from "@danypops/vehicle-server/vault";
 import { createLocalSecretsBackend } from "../src/secrets-backend-local.ts";
-import { createFileStore } from "../src/vault.ts";
 import { SecretsBackendUnsupportedOperationError } from "../src/secrets-backend.ts";
 
 function tmpDir(): string {
@@ -114,7 +114,7 @@ describe("createLocalSecretsBackend: encrypted", () => {
 		const dir = tmpDir();
 		try {
 			const masterKey = randomBytes(32);
-			const { createEncryptedFileStore } = await import("../src/vault.ts");
+			const { createEncryptedFileStore } = await import("@danypops/vehicle-server/vault");
 			createEncryptedFileStore({ dir, masterKey }, "jira").save({ accessToken: "j", extra: { cloudId: "x" } });
 			expect(await createLocalSecretsBackend({ dir, masterKey }).get("jira")).toEqual({ name: "jira", source: "local", configured: true });
 		} finally {
@@ -126,7 +126,7 @@ describe("createLocalSecretsBackend: encrypted", () => {
 		const dir = tmpDir();
 		try {
 			const masterKey = randomBytes(32);
-			const { createEncryptedFileStore } = await import("../src/vault.ts");
+			const { createEncryptedFileStore } = await import("@danypops/vehicle-server/vault");
 			createEncryptedFileStore({ dir, masterKey }, "jira").save({ accessToken: "j_real_value", extra: { cloudId: "x" } });
 			expect(await createLocalSecretsBackend({ dir, masterKey }).reveal("jira")).toEqual({ accessToken: "j_real_value", extra: { cloudId: "x" } });
 		} finally {

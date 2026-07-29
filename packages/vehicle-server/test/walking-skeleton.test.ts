@@ -13,7 +13,7 @@ import { openSqliteWithPragmas, checkpoint, optimize } from "../src/storage.ts";
 import { createLogger } from "../src/logging.ts";
 import { errorResponse, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "../src/http.ts";
 import { runDaemonProcess, startDaemon, type RunningDaemon } from "../src/daemon.ts";
-import { AuthenticatedRpcClient } from "../src/rpc-client.ts";
+import { AuthenticatedRpcClient } from "@danypops/vehicle-client/rpc-client";
 
 type Ops = { "echo.ping": { message: string } };
 type Outs = { "echo.ping": { message: string; row: unknown } };

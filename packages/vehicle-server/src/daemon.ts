@@ -282,7 +282,7 @@ export async function startDaemon(options: StartDaemonOptions): Promise<RunningD
 				// rejection outside this try/catch entirely -- Bun does not swallow that, it crashes the
 				// process (verified directly against a consuming daemon's own now-redundant guard against
 				// exactly this: jittor's reportMaintenanceFailure existed only because `void somePromise()`
-				// with no `.catch` was fatal). A daemon-kit consumer must get that protection for free.
+				// with no `.catch` was fatal). A consumer daemon must get that protection for free.
 				void (async () => {
 					try {
 						await task.run();

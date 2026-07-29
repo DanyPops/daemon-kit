@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { connectPushChannel, connectWithPolicy, connectWithVersionCheck, createRetryingClient, daemonStatus, type DaemonHandleLike, isLikelyStaleConnectionError, spawnDetachedDaemon, type SpawnPlatformOptions } from "../src/pi-client.ts";
-import { PushChannel } from "../src/push-channel.ts";
+import { PushChannel } from "@danypops/vehicle-server/push-channel";
+import { connectPushChannel, connectWithPolicy, connectWithVersionCheck, createRetryingClient, daemonStatus, type DaemonHandleLike, isLikelyStaleConnectionError, spawnDetachedDaemon, type SpawnPlatformOptions } from "../src/daemon-client.ts";
 
 class FakeClient {
 	constructor(public readonly id: number) {}

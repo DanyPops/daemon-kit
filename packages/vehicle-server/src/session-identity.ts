@@ -2,7 +2,7 @@
  * Session identity: hardens a coarse, shared-bearer-token daemon boundary (see http.ts's
  * requireBearerToken) against a specific narrower threat -- session-scoped mutable state
  * where a caller-supplied session identifier becomes BEHAVIOR-affecting, not merely a label.
- * Every authenticated caller already looks identical to a daemon-kit daemon (one shared
+ * Every authenticated caller already looks identical to any other (one shared
  * secret); a session identifier alone (e.g. a uuidv7 -- time-ordered, not cryptographically
  * opaque) is not a credential. First-touch capability binding closes the gap without a
  * heavier per-session auth scheme: the first caller to register a given session id receives

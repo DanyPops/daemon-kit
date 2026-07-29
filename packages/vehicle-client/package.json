@@ -1,7 +1,7 @@
 {
 	"name": "@danypops/vehicle-client",
 	"version": "0.1.0",
-	"description": "Vehicle clients: a same-process LocalVehicleClient (./local) and an authenticated-HTTP RemoteVehicleClient (./http). No root export -- each is a real, independent way to reach a VehicleClient, and importing one must never pull the other in.",
+	"description": "Vehicle clients: a same-process LocalVehicleClient (./local), an authenticated-HTTP RemoteVehicleClient (./http), plus the generic connection-resilience toolkit any client reaching a Vehicle server needs (retry-on-stale-connection, auto-spawn/fail-closed policy, version checking, push-channel reconnection, authenticated RPC over HTTP or a Unix socket).",
 	"license": "MIT",
 	"type": "module",
 	"exports": {
@@ -12,10 +12,22 @@
 		"./http": {
 			"types": "./dist/vehicle-http-client.d.ts",
 			"default": "./dist/vehicle-http-client.js"
-		}
+		},
+		"./daemon-client": {
+			"types": "./dist/daemon-client.d.ts",
+			"default": "./dist/daemon-client.js"
+		},
+		"./rpc-client": "./src/rpc-client.ts",
+		"./unix-rpc-client": {
+			"types": "./dist/unix-rpc-client.d.ts",
+			"default": "./dist/unix-rpc-client.js"
+		},
+		"./version": "./src/version.ts"
 	},
 	"scripts": {
-		"build": "rm -rf dist && tsc -p tsconfig.build.json",
+		"build:vehicle": "rm -rf dist && tsc -p tsconfig.build.json",
+		"build:daemon-client": "tsc -p tsconfig.build-daemon-client.json",
+		"build": "bun run build:vehicle && bun run build:daemon-client",
 		"test": "bun run build && bun test test",
 		"typecheck": "tsc --noEmit"
 	},
@@ -24,6 +36,7 @@
 		"@danypops/vehicle-server": "workspace:*"
 	},
 	"devDependencies": {
+		"@danypops/vehicle-client-pi": "workspace:*",
 		"@types/node": "^22.0.0",
 		"typescript": "latest"
 	},

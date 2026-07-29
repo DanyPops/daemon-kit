@@ -2,8 +2,8 @@
  * The `/secrets` Pi command, built against SecretsBackend/ServicesRegistry
  * instead of any one vendor's admin client -- Enigma is one pluggable
  * SecretsBackend among possibly several (env, local, Enigma), not the
- * assumed target. Any daemon-kit consumer gets a working two-menu secrets
- * command by passing its own backends/registry; no backend, no Enigma, and
+ * assumed target. Any consumer gets a working two-menu secrets command by
+ * passing its own backends/registry; no backend, no Enigma, and
  * this still works against whatever env/local backends were given.
  *
  * [secrets]: merged view across every given backend, rotate/revoke per
@@ -368,7 +368,7 @@ export async function runSecretsCommand(ctx: ExtensionCommandContext, options: R
  * but Pi has no per-extension command namespacing: two extensions calling
  * this with the default name collide (whichever registers last silently
  * wins pi's own dispatch table). A consumer sharing a Pi session with
- * another daemon-kit-based /secrets registration (e.g. pi-enigma) must
+ * another vehicle-client-pi-based /secrets registration (e.g. pi-enigma) must
  * pass a distinct commandName instead. `resolveOptions` is called fresh on
  * every invocation, so a caller can rebuild backends against the current
  * daemon state instead of capturing one snapshot at extension-load time.
@@ -414,8 +414,8 @@ export function mergeSecretsContributions(contributions: SecretsContribution[]):
  * on each invocation, not just the claiming one's own.
  *
  * Use registerSecretsCommand instead when a consumer genuinely wants its
- * own standalone command, unrelated to any other daemon-kit consumer's
- * secrets (rare -- most consumers sharing a Pi session want the same
+ * own standalone command, unrelated to any other consumer's secrets (rare
+ * -- most consumers sharing a Pi session want the same
  * `/secrets` surface).
  */
 export function registerSharedSecretsCommand(pi: ExtensionAPI, contributor: SecretsContributor, commandName = "secrets"): void {

@@ -1,10 +1,10 @@
 /**
  * Backend-agnostic port for the [secrets] side of the services/secrets model:
  * a named credential/profile, wherever it actually lives (env var, local
- * vault.ts-backed file store, or a remote vault like Enigma). Enigma is one
- * pluggable implementation of this port, not the assumed target -- a
- * daemon-kit consumer with no Enigma running still gets a working /secrets
- * command against its own env/local tiers.
+ * @danypops/vehicle-server vault.ts-backed file store, or a remote vault
+ * like Enigma). Enigma is one pluggable implementation of this port, not
+ * the assumed target -- a consumer with no Enigma running still gets a
+ * working /secrets command against its own env/local tiers.
  *
  * Every field on SecretRecord is redaction-safe by construction: there is no
  * accessToken/refreshToken/extra here at all, so a caller can never

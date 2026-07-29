@@ -5,7 +5,6 @@
     "": {
       "name": "daemon-kit-workspace",
       "devDependencies": {
-        "@danypops/daemon-kit": "workspace:*",
         "@danypops/vehicle-client": "workspace:*",
         "@danypops/vehicle-client-pi": "workspace:*",
         "@danypops/vehicle-conformance": "workspace:*",
@@ -21,29 +20,6 @@
         "typescript": "latest",
       },
     },
-    "packages/daemon-kit": {
-      "name": "@danypops/daemon-kit",
-      "version": "0.23.0",
-      "dependencies": {
-        "pino": "^10.3.1",
-      },
-      "devDependencies": {
-        "@types/bun": "latest",
-        "@types/node": "^22.0.0",
-        "env-paths": "^4",
-        "jiti": "^2.0.0",
-        "typebox": "1.1.38",
-      },
-      "peerDependencies": {
-        "@earendil-works/pi-coding-agent": "*",
-        "@earendil-works/pi-tui": "*",
-        "typescript": "^5",
-      },
-      "optionalPeers": [
-        "@earendil-works/pi-coding-agent",
-        "@earendil-works/pi-tui",
-      ],
-    },
     "packages/vehicle-client": {
       "name": "@danypops/vehicle-client",
       "version": "0.1.0",
@@ -52,6 +28,7 @@
         "@danypops/vehicle-server": "workspace:*",
       },
       "devDependencies": {
+        "@danypops/vehicle-client-pi": "workspace:*",
         "@types/node": "^22.0.0",
         "typescript": "latest",
       },
@@ -61,16 +38,20 @@
       "version": "0.1.0",
       "dependencies": {
         "@danypops/vehicle-core": "workspace:*",
+        "@danypops/vehicle-server": "workspace:*",
       },
       "devDependencies": {
-        "@danypops/daemon-kit": "workspace:*",
         "@types/node": "^22.0.0",
         "typescript": "latest",
       },
       "peerDependencies": {
         "@earendil-works/pi-coding-agent": "*",
+        "@earendil-works/pi-tui": "*",
         "typebox": "*",
       },
+      "optionalPeers": [
+        "@earendil-works/pi-tui",
+      ],
     },
     "packages/vehicle-conformance": {
       "name": "@danypops/vehicle-conformance",
@@ -98,9 +79,13 @@
       "version": "0.1.0",
       "dependencies": {
         "@danypops/vehicle-core": "workspace:*",
+        "pino": "^10.3.1",
       },
       "devDependencies": {
+        "@danypops/vehicle-client": "workspace:*",
+        "@types/bun": "latest",
         "@types/node": "^22.0.0",
+        "env-paths": "^4",
         "typescript": "latest",
       },
     },
@@ -157,8 +142,6 @@
     "@aws/lambda-invoke-store": ["@aws/lambda-invoke-store@0.3.0", "", {}, "sha512-sl4Bm6yiMNYrZKkqqDFWN0UfnWhlS8ivKxrYl+6t0gCLrqr8y3B2IqZZbFRkfaVVp7C/baApyh71P+LeE1A2sQ=="],
 
     "@babel/runtime": ["@babel/runtime@7.29.7", "", {}, "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw=="],
-
-    "@danypops/daemon-kit": ["@danypops/daemon-kit@workspace:packages/daemon-kit"],
 
     "@danypops/vehicle-client": ["@danypops/vehicle-client@workspace:packages/vehicle-client"],
 

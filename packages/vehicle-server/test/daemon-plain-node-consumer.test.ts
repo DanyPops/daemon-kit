@@ -1,7 +1,7 @@
 /**
  * Regression test for the exact gap "daemon-kit: ship daemon.ts (and its raw-TS
  * dependents) pre-compiled for plain-Node consumers" was filed to close:
- * installing @danypops/daemon-kit and importing its `./daemon` export from
+ * installing @danypops/vehicle-server and importing its `./daemon` export from
  * plain `node`, no bundler, no ts-node/tsx, used to fail immediately with
  * ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING -- Node refuses to type-strip
  * *any* .ts file under a node_modules path (confirmed directly against
@@ -9,7 +9,7 @@
  * section), a blanket policy with no override flag.
  *
  * Simulates a real node_modules layout by copying this package's own build
- * output (never a raw .ts file) into a fake node_modules/@danypops/daemon-kit,
+ * output (never a raw .ts file) into a fake node_modules/@danypops/vehicle-server,
  * rather than a real `npm install` -- hermetic and fast (no network), while
  * still exercising the one thing that actually matters: is the file Node
  * sees under node_modules a real .js file or a .ts file needing stripping.
@@ -31,11 +31,11 @@ describe("plain-Node consumption of a real (simulated) node_modules install", ()
 		if (result.status !== 0) throw new Error("bun run build:daemon failed -- see output above");
 	});
 
-	it("importing @danypops/daemon-kit/daemon under plain `node` with no bundler succeeds and round-trips real HTTP", () => {
-		const workDir = mkdtempSync(join(tmpdir(), "daemon-kit-plain-node-"));
+	it("importing @danypops/vehicle-server/daemon under plain `node` with no bundler succeeds and round-trips real HTTP", () => {
+		const workDir = mkdtempSync(join(tmpdir(), "vehicle-server-plain-node-"));
 		try {
 			const fakeNodeModules = join(workDir, "node_modules");
-			const packageDir = join(fakeNodeModules, "@danypops", "daemon-kit");
+			const packageDir = join(fakeNodeModules, "@danypops", "vehicle-server");
 			mkdirSync(packageDir, { recursive: true });
 
 			// Only what a real npm install would place there: compiled dist/,
@@ -50,12 +50,12 @@ describe("plain-Node consumption of a real (simulated) node_modules install", ()
 			writeFileSync(
 				scriptPath,
 				`
-				import { startDaemon } from "@danypops/daemon-kit/daemon";
+				import { startDaemon } from "@danypops/vehicle-server/daemon";
 				import { mkdtempSync } from "node:fs";
 				import { tmpdir } from "node:os";
 				import { join } from "node:path";
 
-				const dir = mkdtempSync(join(tmpdir(), "daemon-kit-plain-node-run-"));
+				const dir = mkdtempSync(join(tmpdir(), "vehicle-server-plain-node-run-"));
 				const daemon = await startDaemon({
 					daemonLabel: "PlainNodeCheck",
 					handlePath: join(dir, "handle.json"),

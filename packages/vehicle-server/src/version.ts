@@ -13,7 +13,7 @@ const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 /**
  * @param packageJsonUrl `new URL("../package.json", import.meta.url)` from
  *   the caller's own version.ts, so resolution is relative to the caller's
- *   file, not daemon-kit's.
+ *   file, not this package's.
  * @param projectLabel used only in error messages, e.g. "Jittor".
  */
 export function readPackageVersion(packageJsonUrl: URL, projectLabel: string): string {

@@ -1,17 +1,13 @@
 /**
  * Authenticated HTTP surface for a VehicleRegistry -- lets a host expose
  * its Vehicle operations to a RemoteVehicleClient (@danypops/vehicle-client's
- * ./http export) over the same Bearer-authenticated transport shape a
- * daemon-kit daemon uses, without depending on daemon-kit itself.
+ * ./http export), built on this package's own generic Bearer-auth/JSON
+ * helpers (./rpc-http, formerly daemon-kit's http.ts -- absorbed here since
+ * Vehicle IS the daemon substrate now, not a separate consumer of it).
  *
  * Exported as this package's ./http subpath, kept separate from the root
  * (VehicleRegistry) export -- a consumer that only builds/tests a registry
- * has no reason to pull in HTTP request/response plumbing. Vehicle depends
- * on no daemon-kit package -- the Bearer-auth/JSON-response helpers below
- * are a deliberate, tiny (~15 line) duplicate of @danypops/daemon-kit's own
- * http.ts, not an import of it: Vehicle is a runtime-neutral contract for
- * any agent host or tool provider, not daemon-kit infrastructure, and this
- * is Fetch-API-only code with no Bun/Node-specific behavior to diverge on.
+ * has no reason to pull in HTTP request/response plumbing.
  * Daemon-side raw TypeScript, not part of any Pi-loaded compiled surface.
  * Three routes:
  *   GET  /vehicle/manifest        -> the registry's current VehicleManifest
@@ -32,19 +28,8 @@
 import { randomUUID } from "node:crypto";
 import { VehicleError } from "@danypops/vehicle-core";
 import type { VehicleFailure, VehicleFailureCategory, VehicleInvocationOptions, VehiclePrincipal } from "@danypops/vehicle-core";
+import { errorResponse, jsonResponse, requireBearerToken } from "./http.js";
 import type { VehicleRegistry } from "./vehicle-registry.js";
-
-function requireBearerToken(request: Request, token: string): boolean {
-	return request.headers.get("authorization") === `Bearer ${token}`;
-}
-
-function jsonResponse(value: unknown, init?: ResponseInit): Response {
-	return Response.json(value, init);
-}
-
-function errorResponse(message: string, status: number): Response {
-	return Response.json({ error: message }, { status });
-}
 
 const UNAUTHORIZED_RESPONSE: Response = errorResponse("unauthorized", 401);
 

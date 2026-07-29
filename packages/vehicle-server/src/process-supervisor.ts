@@ -8,8 +8,8 @@
  * resolution and "is this unit due for a restart" predicate stay with the
  * caller via resolveEnv/shouldPlannedRestart, not hardcoded here.
  */
-import { spawnUnit, type DaemonUnit, type SpawnedUnit } from "./supervisor.ts";
-import type { Logger } from "./logging.ts";
+import { spawnUnit, type DaemonUnit, type SpawnedUnit } from "./supervisor.js";
+import type { Logger } from "./logging.js";
 
 const NOOP_LOGGER: Logger = { debug() {}, info() {}, warn() {}, error() {} };
 const DEFAULT_PLANNED_RESTART_CHECK_MS = 30_000;

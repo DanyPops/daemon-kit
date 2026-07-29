@@ -1,10 +1,13 @@
 /**
- * Local-profile-store SecretsBackend: wraps vault.ts's own createFileStore /
- * createEncryptedFileStore -- the Tier-2 storage every daemon-kit consumer
- * (pipes' repos.json profiles, tickets' oauth store) already keeps one file
- * per backend name in one directory. This backend just enumerates that
- * directory generically instead of each consumer hand-rolling its own
- * list/status/delete pass over the same files.
+ * Local-profile-store SecretsBackend: wraps @danypops/vehicle-server's own
+ * vault.ts (createFileStore / createEncryptedFileStore) -- the Tier-2
+ * storage every consumer daemon (pipes' repos.json profiles, tickets' oauth
+ * store) already keeps one file per backend name in one directory. This
+ * backend reads that same on-disk format directly, no RPC round trip, since
+ * the Pi extension and the daemon it fronts run on the same machine as the
+ * same user. This backend just enumerates that directory generically
+ * instead of each consumer hand-rolling its own list/status/delete pass
+ * over the same files.
  *
  * Rotation has no generic mechanism here -- refreshing a real OAuth token
  * needs that provider's own refresh flow, which this port doesn't know
@@ -12,8 +15,8 @@
  */
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { createEncryptedFileStore, createFileStore, type RefreshableAccessToken, type TokenProviderStore } from "@danypops/vehicle-server/vault";
 import { type SecretRecord, type SecretsBackend, SecretsBackendUnsupportedOperationError } from "./secrets-backend.ts";
-import { createEncryptedFileStore, createFileStore, type RefreshableAccessToken, type TokenProviderStore } from "./vault.ts";
 
 const SOURCE = "local";
 

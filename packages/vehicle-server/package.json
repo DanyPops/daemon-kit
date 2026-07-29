@@ -1,9 +1,11 @@
 {
 	"name": "@danypops/vehicle-server",
 	"version": "0.1.0",
-	"description": "Vehicle's execution engine: VehicleRegistry (registration, permission/deadline/payload enforcement, availability, execution policy) and its authenticated HTTP hosting surface. Two real, independent subpaths -- a consumer that only builds/tests a registry never pulls in HTTP plumbing.",
+	"description": "The Vehicle server substrate: a supervised, authenticated, loopback-only daemon (process lifecycle, SQLite storage, structured logging, OS service install) plus VehicleRegistry (registration, permission/deadline/payload enforcement, availability, execution policy) and its HTTP hosting surface. A Vehicle IS this daemon -- a long-running service purpose-built to serve AI agents tools.",
 	"license": "MIT",
 	"type": "module",
+	"main": "./src/vehicle-registry.ts",
+	"types": "./src/vehicle-registry.ts",
 	"exports": {
 		".": {
 			"types": "./dist/vehicle-registry.d.ts",
@@ -12,18 +14,50 @@
 		"./http": {
 			"types": "./dist/vehicle-http-provider.d.ts",
 			"default": "./dist/vehicle-http-provider.js"
+		},
+		"./daemon": {
+			"types": "./dist/daemon.d.ts",
+			"default": "./dist/daemon.js"
+		},
+		"./rpc-http": "./src/http.ts",
+		"./paths": "./src/paths.ts",
+		"./storage": "./src/storage.ts",
+		"./logging": "./src/logging.ts",
+		"./session-identity": "./src/session-identity.ts",
+		"./version": "./src/version.ts",
+		"./vault": "./src/vault.ts",
+		"./supervisor": "./src/supervisor.ts",
+		"./process-supervisor": "./src/process-supervisor.ts",
+		"./service": "./src/service.ts",
+		"./unix-peer-cred": {
+			"types": "./dist/unix-peer-cred.d.ts",
+			"default": "./dist/unix-peer-cred.js"
+		},
+		"./unix-rpc-server": {
+			"types": "./dist/unix-rpc-server.d.ts",
+			"default": "./dist/unix-rpc-server.js"
+		},
+		"./push-channel": {
+			"types": "./dist/push-channel.d.ts",
+			"default": "./dist/push-channel.js"
 		}
 	},
 	"scripts": {
-		"build": "rm -rf dist && tsc -p tsconfig.build.json",
+		"build:vehicle": "rm -rf dist && tsc -p tsconfig.build.json",
+		"build:daemon": "tsc -p tsconfig.build-daemon.json",
+		"build": "bun run build:vehicle && bun run build:daemon",
 		"test": "bun run build && bun test test",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@danypops/vehicle-core": "workspace:*"
+		"@danypops/vehicle-core": "workspace:*",
+		"pino": "^10.3.1"
 	},
 	"devDependencies": {
+		"@danypops/vehicle-client": "workspace:*",
+		"@types/bun": "latest",
 		"@types/node": "^22.0.0",
+		"env-paths": "^4",
 		"typescript": "latest"
 	},
 	"repository": {
@@ -31,6 +65,6 @@
 		"url": "git+https://github.com/DanyPops/daemon-kit.git",
 		"directory": "packages/vehicle-server"
 	},
-	"keywords": ["vehicle", "agent-tools"],
+	"keywords": ["vehicle", "agent-tools", "daemon"],
 	"files": ["src", "dist", "README.md"]
 }

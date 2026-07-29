@@ -31,7 +31,7 @@ interface WireResponse {
 
 export interface UnixRpcServerOptions {
 	path: string;
-	/** Mode for the created socket file; defaults to 0600 (owner-only), matching daemon-kit's other owner-only-by-default surfaces. */
+	/** Mode for the created socket file; defaults to 0600 (owner-only), matching this package's other owner-only-by-default surfaces. */
 	mode?: number;
 	handler: (request: Request, peer: PeerCredential) => Promise<Response>;
 	/** Called for a genuinely unexpected failure (peer-cred lookup failing, a handler throwing); never silently swallowed. */
@@ -68,10 +68,10 @@ async function frameResponse(response: Response): Promise<WireResponse> {
 }
 
 export function serveUnixRpc(options: UnixRpcServerOptions): UnixRpcServer {
-	// Matches daemon-kit's other file-writing helpers (writeDaemonHandle, ensureAuthToken):
+	// Matches this package's other file-writing helpers (writeDaemonHandle, ensureAuthToken):
 	// a caller shouldn't need to separately ensure the parent directory exists first.
 	mkdirSync(dirname(options.path), { recursive: true, mode: 0o700 });
-	// A leftover file at this path can only be a dead listener's stale socket: daemon-kit's own
+	// A leftover file at this path can only be a dead listener's stale socket: this package's own
 	// PID-based daemon lock (acquireDaemonLock) already guarantees no second live instance of
 	// this daemon exists by the time serveUnixRpc runs, so an unclean previous shutdown (crash,
 	// SIGKILL, OOM) is the only realistic way this path is occupied -- safe to clear before bind

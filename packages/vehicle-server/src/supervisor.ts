@@ -49,10 +49,10 @@ export interface SpawnUnitOptions {
 /**
  * Newline-terminated so a line-oriented reader sees exactly one complete
  * message per write; NUL-prefixed to make an accidental collision with a
- * unit's own real stdin traffic vanishingly unlikely (none of daemon-kit's
- * own units read stdin for anything today, but a future one might).
+ * unit's own real stdin traffic vanishingly unlikely (none of this
+ * package's own units read stdin for anything today, but a future one might).
  */
-const GRACEFUL_SHUTDOWN_STDIN_LINE = "\u0000daemon-kit:graceful-shutdown\n";
+const GRACEFUL_SHUTDOWN_STDIN_LINE = "\u0000vehicle-server:graceful-shutdown\n";
 
 /**
  * Spawns one unit with `credsEnv` merged over `unit.env` merged over the
