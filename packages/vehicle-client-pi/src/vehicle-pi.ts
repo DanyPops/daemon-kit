@@ -14,7 +14,7 @@ import type {
 	VehiclePrincipal,
 } from "@danypops/vehicle-core";
 import { VehicleError } from "@danypops/vehicle-core";
-import { syncManagedActiveTools } from "./pi-tool-availability.js";
+import { guardExtensionRuntimeInitialized, syncManagedActiveTools } from "./pi-tool-availability.js";
 import { renderVehicleCall, renderVehicleResult } from "./vehicle-render.js";
 
 export interface PiVehicleIdentity {
@@ -171,7 +171,7 @@ function assertNamesAvailable(
 		}
 		owners.set(toolName, operationKey(descriptor));
 	}
-	const existing = new Set(pi.getAllTools().map((tool) => tool.name));
+	const existing = new Set(guardExtensionRuntimeInitialized(() => pi.getAllTools()).map((tool) => tool.name));
 	for (const { descriptor, toolName } of projected) {
 		if (existing.has(toolName)) {
 			throw new Error(`Pi tool '${toolName}' is already registered; refusing to override it with ${operationKey(descriptor)}`);

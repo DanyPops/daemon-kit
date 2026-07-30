@@ -309,6 +309,25 @@ describe("registerVehicleTools", () => {
 		expect(activeTools().sort()).toEqual(["edit", "read"]);
 	});
 
+	it("turns Pi's cryptic \"Extension runtime not initialized\" error (calling registerVehicleTools from the top-level factory body) into a clear, actionable one", async () => {
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		const { pi } = fakePi();
+		const notInitialized = new Error("Extension runtime not initialized. Action methods cannot be called during extension loading.");
+		const brokenPi = {
+			...pi,
+			getAllTools: () => {
+				throw notInitialized;
+			},
+		} as unknown as ExtensionAPI;
+
+		await expect(registerVehicleTools(brokenPi, client)).rejects.toThrow(/session_start/);
+		try {
+			await registerVehicleTools(brokenPi, client);
+		} catch (error) {
+			expect((error as Error).cause).toBe(notInitialized);
+		}
+	});
+
 	it("sets promptSnippet so Pi's \"Available tools\" system-prompt section lists the tool -- omitted entirely otherwise, confirmed live", async () => {
 		const descriptor = operation("issues.search");
 		const client = new FakeClient(manifest([descriptor]));
