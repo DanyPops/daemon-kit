@@ -309,6 +309,16 @@ describe("registerVehicleTools", () => {
 		expect(activeTools().sort()).toEqual(["edit", "read"]);
 	});
 
+	it("sets promptSnippet so Pi's \"Available tools\" system-prompt section lists the tool -- omitted entirely otherwise, confirmed live", async () => {
+		const descriptor = operation("issues.search");
+		const client = new FakeClient(manifest([descriptor]));
+		const { pi, tools } = fakePi();
+
+		await registerVehicleTools(pi, client);
+
+		expect(tools[0]?.promptSnippet).toBe(descriptor.description);
+	});
+
 	it("wires the generic Vehicle renderer by default, so a projected tool never falls back to Pi's raw-JSON rendering", async () => {
 		const client = new FakeClient(manifest([operation("issues.search")]));
 		const { pi, tools } = fakePi();

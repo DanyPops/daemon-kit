@@ -191,6 +191,11 @@ function createTool(
 		name: toolName,
 		label: displayLabel(descriptor),
 		description: descriptor.description,
+		// Without this, Pi omits the tool from the "Available tools" section of
+		// its default system prompt entirely -- confirmed live: a projected tool
+		// was registered and technically callable, but the model had no way to
+		// know it existed and reported it as unavailable when asked directly.
+		promptSnippet: descriptor.description,
 		parameters: descriptor.inputSchema as TSchema,
 		renderCall: overrides?.renderCall ?? ((args, theme, context) => renderVehicleCall(descriptor, args, theme, context)),
 		renderResult:
