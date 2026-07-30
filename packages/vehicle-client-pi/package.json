@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/vehicle-client-pi",
-	"version": "0.1.2",
+	"version": "0.1.3",
 	"description": "Projects any VehicleClient's manifest into native Pi tools, plus the rest of this house's Pi-extension-facing surface: jiti-load-safety verification and the shared /secrets command (backend port, env/local implementations, cross-extension registry, TUI). Preserves operation versions, schemas, cancellation, Pi call/session identity, permissions, keyed idempotency, progress, and structured failures; curates tool visibility by live operation availability.",
 	"license": "MIT",
 	"type": "module",
@@ -26,7 +26,7 @@
 	"dependencies": {
 		"@danypops/vehicle-core": "workspace:*",
 		"@danypops/vehicle-server": "workspace:*",
-		"malevich-tui-components": "^0.1.1"
+		"malevich-tui-components": "^0.2.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-agent-core": "*",

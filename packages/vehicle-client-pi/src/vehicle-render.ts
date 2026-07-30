@@ -1,8 +1,8 @@
-import type { Theme, ToolDefinition, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import type { Theme, ThemeColor, ToolDefinition, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { CollapsibleText, ProgressBar, Table, type TableColumn, type TextMeasure } from "malevich-tui-components";
+import { CollapsibleText, deriveTableColumns, firstDistinctStyle, ProgressBar, Table, Text, type TextMeasure } from "malevich-tui-components";
 import type { VehicleEffect, VehicleOperationDescriptor } from "@danypops/vehicle-core";
 
 // ToolRenderContext itself isn't part of the public export barrel; derive
@@ -22,27 +22,30 @@ type RenderResultContext = Parameters<NonNullable<ToolDefinition["renderResult"]
 
 const measure: TextMeasure = { visibleWidth, truncateToWidth, wrapTextWithAnsi };
 
-function effectColor(effect: VehicleEffect): "muted" | "text" | "warning" | "error" {
-	switch (effect) {
-		case "read":
-			return "muted";
-		case "local-write":
-			return "text";
-		case "external-write":
-			return "warning";
-		case "destructive":
-		case "open-world":
-			return "error";
-	}
-}
+/** Preference-ordered theme tokens per effect, most specific first -- cascaded through firstDistinctStyle since not every Pi theme defines all of these distinctly from plain text. */
+const EFFECT_TOKENS: Record<VehicleEffect, readonly ThemeColor[]> = {
+	read: ["muted", "dim"],
+	"local-write": ["text"],
+	"external-write": ["warning"],
+	destructive: ["error"],
+	"open-world": ["error"],
+};
 
-/** A single pre-rendered line, wrapped as a Component -- for the cases where a plain styled line is all that's needed and reaching for a Malevich widget would be overkill. */
-class TextLine implements Component {
-	constructor(private readonly line: string) {}
-	invalidate(): void {}
-	render(width: number): string[] {
-		return [truncateToWidth(this.line, width)];
-	}
+/** Absolute last-resort ANSI codes, used only when a theme fails to distinguish even its own error/warning tokens from plain text. */
+const HARDCODED_FALLBACK: Record<VehicleEffect, string> = {
+	read: "\x1b[90m", // bright black
+	"local-write": "",
+	"external-write": "\x1b[33m", // yellow
+	destructive: "\x1b[31m", // red
+	"open-world": "\x1b[31m",
+};
+
+function effectStyle(theme: Theme, effect: VehicleEffect, text: string): string {
+	const baseline = theme.fg("text", text);
+	const candidates = EFFECT_TOKENS[effect].map((token) => theme.fg(token, text));
+	const fallbackCode = HARDCODED_FALLBACK[effect];
+	const fallback = fallbackCode ? `${fallbackCode}${text}\x1b[39m` : text;
+	return firstDistinctStyle(baseline, candidates, fallback);
 }
 
 function compactArgs(args: unknown, width: number): string {
@@ -58,10 +61,9 @@ export function renderVehicleCall(
 	theme: Theme,
 	context: RenderCallContext,
 ): Component {
-	const color = effectColor(descriptor.effect);
 	const argsText = compactArgs(args, Math.max(10, context.cwd ? 60 : 60));
 	const line = argsText ? `${descriptor.name} ${theme.fg("dim", argsText)}` : descriptor.name;
-	return new TextLine(theme.fg(color, line));
+	return new Text({ text: effectStyle(theme, descriptor.effect, line), measure });
 }
 
 /** Best-effort duck-typing over an untyped Vehicle progress payload: {current,total} or {value,max} render as a bar, anything else falls back to a plain line. */
@@ -75,27 +77,7 @@ function progressBarFor(progress: unknown, theme: Theme): Component {
 		}
 	}
 	const text = typeof progress === "string" ? progress : JSON.stringify(progress);
-	return new TextLine(theme.fg("dim", text ?? ""));
-}
-
-/** An array of plain objects (not arrays/primitives) with at least one entry renders as a Table; anything else isn't table-shaped. */
-function asTableRows(output: unknown): { columns: TableColumn[]; rows: Record<string, string>[] } | undefined {
-	if (!Array.isArray(output) || output.length === 0) return undefined;
-	if (!output.every((item) => item !== null && typeof item === "object" && !Array.isArray(item))) return undefined;
-	const keys = new Set<string>();
-	for (const item of output as Record<string, unknown>[]) {
-		for (const key of Object.keys(item)) keys.add(key);
-	}
-	const columns: TableColumn[] = [...keys].map((key) => ({ header: key, key }));
-	const rows = (output as Record<string, unknown>[]).map((item) => {
-		const row: Record<string, string> = {};
-		for (const key of keys) {
-			const value = item[key];
-			row[key] = value === undefined ? "" : typeof value === "string" ? value : JSON.stringify(value);
-		}
-		return row;
-	});
-	return { columns, rows };
+	return new Text({ text: theme.fg("dim", text ?? ""), measure });
 }
 
 export function renderVehicleResult(
@@ -121,7 +103,7 @@ export function renderVehicleResult(
 	}
 
 	const output = details?.output;
-	const table = asTableRows(output);
+	const table = Array.isArray(output) ? deriveTableColumns(output) : undefined;
 	if (table) {
 		return new Table({
 			...table,

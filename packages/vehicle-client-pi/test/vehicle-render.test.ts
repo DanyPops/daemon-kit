@@ -6,7 +6,16 @@ import { renderVehicleCall, renderVehicleResult } from "../src/vehicle-render.ts
 // Theme is a class with private fields; a plain fake can't satisfy it
 // structurally. Cast through unknown -- documented, not a real runtime
 // concern, since only fg()/bold() are ever called by vehicle-render.ts.
+// Differentiates tokens (rather than an identity function) so tests exercise
+// real cascade behavior instead of always hitting the hardcoded fallback.
 const fakeTheme = {
+	fg: (color: string, text: string) => (color === "text" ? text : `<${color}>${text}`),
+	bold: (text: string) => text,
+} as unknown as Theme;
+
+// Every fg() call resolves to the baseline (identity) -- simulates a theme
+// that never defines any semantic token distinctly from plain text.
+const flatTheme = {
 	fg: (_color: string, text: string) => text,
 	bold: (text: string) => text,
 } as unknown as Theme;
@@ -44,7 +53,12 @@ describe("renderVehicleCall", () => {
 
 	it("omits the args snippet for an empty-object call", () => {
 		const component = renderVehicleCall(descriptor("read"), {}, fakeTheme, callContext());
-		expect(component.render(80)).toEqual(["issue.list"]);
+		expect(component.render(80)).toEqual(["<muted>issue.list"]);
+	});
+
+	it("falls back to a hardcoded ANSI color when the theme never distinguishes any candidate token from plain text", () => {
+		const component = renderVehicleCall(descriptor("destructive"), {}, flatTheme, callContext());
+		expect(component.render(80)[0]).toContain("\x1b[31m");
 	});
 });
 
