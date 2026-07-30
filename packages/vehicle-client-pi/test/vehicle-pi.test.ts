@@ -308,6 +308,32 @@ describe("registerVehicleTools", () => {
 
 		expect(activeTools().sort()).toEqual(["edit", "read"]);
 	});
+
+	it("wires the generic Vehicle renderer by default, so a projected tool never falls back to Pi's raw-JSON rendering", async () => {
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		const { pi, tools } = fakePi();
+
+		await registerVehicleTools(pi, client);
+
+		expect(tools[0]?.renderCall).toBeDefined();
+		expect(tools[0]?.renderResult).toBeDefined();
+	});
+
+	it("lets a per-operation renderers override win over the generic default", async () => {
+		const client = new FakeClient(manifest([operation("issues.search"), operation("issues.close")]));
+		const { pi, tools } = fakePi();
+		const customRenderCall = () => ({ render: () => ["custom"], invalidate: () => {} });
+
+		await registerVehicleTools(pi, client, {
+			renderers: (descriptor) => (descriptor.name === "issues.search" ? { renderCall: customRenderCall as never } : undefined),
+		});
+
+		const search = tools.find((tool) => tool.name === "issues_search");
+		const close = tools.find((tool) => tool.name === "issues_close");
+		expect(search?.renderCall).toBe(customRenderCall as never);
+		expect(close?.renderCall).toBeDefined();
+		expect(close?.renderCall).not.toBe(customRenderCall as never);
+	});
 });
 
 describe("refreshVehicleToolAvailability", () => {

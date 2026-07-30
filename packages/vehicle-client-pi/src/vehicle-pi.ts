@@ -15,6 +15,7 @@ import type {
 } from "@danypops/vehicle-core";
 import { VehicleError } from "@danypops/vehicle-core";
 import { syncManagedActiveTools } from "./pi-tool-availability.js";
+import { renderVehicleCall, renderVehicleResult } from "./vehicle-render.js";
 
 export interface PiVehicleIdentity {
 	readonly name: string;
@@ -43,12 +44,27 @@ export type PiVehicleInvocationResolver = (
 	request: PiVehicleInvocationRequest,
 ) => VehicleInvocationOptions | Promise<VehicleInvocationOptions>;
 
+export interface VehicleToolRenderers {
+	readonly renderCall?: ToolDefinition<TSchema, PiVehicleToolDetails>["renderCall"];
+	readonly renderResult?: ToolDefinition<TSchema, PiVehicleToolDetails>["renderResult"];
+}
+
 export interface RegisterVehicleToolsOptions {
 	readonly permissions?: readonly string[];
 	readonly principal?: VehiclePrincipal;
 	readonly resolveInvocation?: PiVehicleInvocationResolver;
 	readonly toolName?: (descriptor: VehicleOperationDescriptor, versioned: boolean) => string;
 	readonly closeClientOnSessionShutdown?: boolean;
+	/**
+	 * Per-operation renderCall/renderResult override. Returning undefined (or
+	 * omitting this option entirely) falls back to the generic Vehicle
+	 * renderer, which renders effect-colored call rows and a Table/ProgressBar/
+	 * collapsible-JSON result view driven by the operation's own descriptor --
+	 * see vehicle-render.ts. A consumer with real UX investment in one
+	 * operation supplies its own pair here; every other operation still gets
+	 * sensible default rendering instead of Pi's raw-JSON fallback.
+	 */
+	readonly renderers?: (descriptor: VehicleOperationDescriptor) => VehicleToolRenderers | undefined;
 }
 
 export interface RegisteredPiVehicleTool {
@@ -170,11 +186,15 @@ function createTool(
 	toolName: string,
 	options: RegisterVehicleToolsOptions,
 ): ToolDefinition<TSchema, PiVehicleToolDetails> {
+	const overrides = options.renderers?.(descriptor);
 	return {
 		name: toolName,
 		label: displayLabel(descriptor),
 		description: descriptor.description,
 		parameters: descriptor.inputSchema as TSchema,
+		renderCall: overrides?.renderCall ?? ((args, theme, context) => renderVehicleCall(descriptor, args, theme, context)),
+		renderResult:
+			overrides?.renderResult ?? ((result, resultOptions, theme, context) => renderVehicleResult(descriptor, result, resultOptions, theme, context)),
 		async execute(toolCallId, input, signal, onUpdate, context) {
 			const identity = vehicleIdentity(manifest, descriptor, toolCallId);
 			const resolved = await options.resolveInvocation?.({
