@@ -1,0 +1,69 @@
+name: Publish Package
+
+# Trusted publishing (OIDC): every Vehicle package's npmjs.com Trusted
+# Publisher is configured against this one shared workflow file (org=DanyPops
+# repo=vehicle workflow=publish.yml) -- npm's trust check is per-package
+# (repo + workflow path), so several packages trusting the same file is a
+# normal, supported shape. Which package actually gets published is decided
+# entirely by which tag triggered the run.
+
+on:
+  push:
+    tags:
+      - "vehicle-server-v*"
+      - "vehicle-client-pi-v*"
+      - "vehicle-client-v*"
+      - "vehicle-core-v*"
+      - "vehicle-conformance-v*"
+
+permissions:
+  id-token: write # Required for OIDC
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
+      - run: bun run build
+
+      # Tag prefixes are checked longest-first (vehicle-client-pi- before
+      # vehicle-client-) so vehicle-client-pi-v* never falls through to the
+      # vehicle-client match.
+      - id: package
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            vehicle-server-v*) echo "dir=packages/vehicle-server" >> "$GITHUB_OUTPUT" ;;
+            vehicle-client-pi-v*) echo "dir=packages/vehicle-client-pi" >> "$GITHUB_OUTPUT" ;;
+            vehicle-client-v*) echo "dir=packages/vehicle-client" >> "$GITHUB_OUTPUT" ;;
+            vehicle-core-v*) echo "dir=packages/vehicle-core" >> "$GITHUB_OUTPUT" ;;
+            vehicle-conformance-v*) echo "dir=packages/vehicle-conformance" >> "$GITHUB_OUTPUT" ;;
+            *) echo "unrecognized tag: ${GITHUB_REF_NAME}" >&2; exit 1 ;;
+          esac
+
+      - run: bun run --cwd ${{ steps.package.outputs.dir }} test
+      - run: bun run --cwd ${{ steps.package.outputs.dir }} typecheck
+
+      # npm CLI only for the publish step (trusted publishing needs >= 11.5.1).
+      # NO registry-url here: it makes setup-node write an .npmrc with an empty
+      # NODE_AUTH_TOKEN line, which shadows OIDC auto-detection and breaks
+      # trusted publishing with a 404.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - run: npm install -g npm@latest && npm --version
+
+      # Bun's workspace:* protocol is not understood by npm's own resolver --
+      # rewrite it to a real ^version before publish, or every real npm
+      # consumer gets an unresolvable dependency (confirmed live: the first
+      # publish of vehicle-server/vehicle-client/vehicle-conformance shipped
+      # exactly this, deprecated and republished once found).
+      - run: node scripts/resolve-workspace-deps.mjs ${{ steps.package.outputs.dir }}
+
+      - run: npm publish --access public
+        working-directory: ${{ steps.package.outputs.dir }}
