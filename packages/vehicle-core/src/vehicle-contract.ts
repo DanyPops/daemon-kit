@@ -23,6 +23,51 @@ export function defineVehicleSchema<T>(codec: VehicleSchemaCodec<T>): VehicleSch
 	});
 }
 
+export interface LooseObjectProperty {
+	readonly type: string;
+	readonly enum?: readonly string[];
+}
+
+/**
+ * A VehicleRegistry only ever calls a schema's own safeParse -- jsonSchema is
+ * descriptive metadata surfaced to a client/Pi projection, never itself
+ * enforced at runtime -- so a declared `enum` has to be checked here for
+ * real, or it's a documentation gesture, not an honest contract. Every
+ * consumer projecting a plain-object input onto a VehicleOperation needs the
+ * same required/enum checks; this is that check written once.
+ */
+export function defineLooseObjectSchema(properties: Record<string, LooseObjectProperty>, required: readonly string[] = []): VehicleSchemaCodec<Record<string, unknown>> {
+	return defineVehicleSchema<Record<string, unknown>>({
+		// LooseObjectProperty's named fields (type, enum) are all JSON-value-shaped
+		// at runtime, but TypeScript's structural check against the recursive
+		// JsonValue union doesn't see that through a plain interface -- the cast
+		// is a type-system limitation, not a runtime concern.
+		jsonSchema: { type: "object", properties: properties as unknown as JsonValue, required: [...required], additionalProperties: false },
+		safeParse(value) {
+			if (typeof value !== "object" || value === null || Array.isArray(value)) {
+				return { success: false, issues: [{ path: [], message: "input must be an object" }] };
+			}
+			const input = value as Record<string, unknown>;
+			for (const key of required) {
+				if (!(key in input)) return { success: false, issues: [{ path: [key], message: `${key} is required` }] };
+			}
+			for (const [key, schema] of Object.entries(properties)) {
+				if (!schema.enum || !(key in input)) continue;
+				if (!schema.enum.includes(input[key] as string)) {
+					return { success: false, issues: [{ path: [key], message: `${key} must be one of ${schema.enum.join(", ")}` }] };
+				}
+			}
+			return { success: true, value: input };
+		},
+	});
+}
+
+/** Accepts any value unvalidated -- for an operation whose output shape isn't worth a dedicated schema (an internal/low-stakes result, or one already validated upstream by the domain logic it wraps). */
+export const passthroughVehicleSchema: VehicleSchemaCodec<unknown> = defineVehicleSchema<unknown>({
+	jsonSchema: { type: "object" },
+	safeParse: (value) => ({ success: true, value }),
+});
+
 export type VehicleEffect = "read" | "local-write" | "external-write" | "destructive" | "open-world";
 
 export type VehicleIdempotency =
