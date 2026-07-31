@@ -50,6 +50,8 @@ export interface ServiceSpec {
 	 * has no effect on macOS/Windows.
 	 */
 	restartOnFailure?: boolean;
+	/** RestartSec, in seconds -- only applied alongside restartOnFailure. Omit to use systemd's own default (100ms), too aggressive for a daemon that could genuinely crash-loop. */
+	restartSec?: number;
 }
 
 export interface RunResult {
@@ -120,6 +122,7 @@ export function generateSystemdUnit(spec: ServiceSpec): string {
 		`ExecStart=${execLine}`,
 		...(envLines ? [envLines] : []),
 		...(spec.restartOnFailure ? ["Restart=always"] : []),
+		...(spec.restartOnFailure && spec.restartSec !== undefined ? [`RestartSec=${spec.restartSec}`] : []),
 		"",
 		"[Install]",
 		"WantedBy=default.target",

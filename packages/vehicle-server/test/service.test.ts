@@ -77,6 +77,12 @@ describe("generateSystemdUnit", () => {
 		expect(generateSystemdUnit({ ...SPEC, restartOnFailure: true })).toContain("Restart=always");
 		expect(generateSystemdUnit(SPEC)).not.toContain("Restart=");
 	});
+
+	it("adds RestartSec only alongside restartOnFailure -- systemd's own 100ms default is too aggressive for a genuinely crash-looping daemon", () => {
+		expect(generateSystemdUnit({ ...SPEC, restartOnFailure: true, restartSec: 2 })).toContain("RestartSec=2");
+		expect(generateSystemdUnit({ ...SPEC, restartOnFailure: true })).not.toContain("RestartSec=");
+		expect(generateSystemdUnit({ ...SPEC, restartSec: 2 })).not.toContain("RestartSec=");
+	});
 });
 
 describe("generateLaunchdPlist", () => {
