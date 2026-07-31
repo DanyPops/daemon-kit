@@ -253,6 +253,32 @@ describe("registerVehicleTools", () => {
 		});
 	});
 
+	it("calls onInvoked with the resolved output after a successful invoke, and never lets its own error surface", async () => {
+		const client = new FakeClient(manifest([operation("focus.test")]));
+		client.result = { taskId: "task-1" };
+		const { pi, tools } = fakePi();
+		const seen: unknown[] = [];
+		await registerVehicleTools(pi, client, {
+			onInvoked: (request, output) => {
+				seen.push({ operation: request.descriptor.name, output });
+				throw new Error("broadcast failed");
+			},
+		});
+		const result = await execute(tools[0]!, { value: "go" });
+		expect(seen).toEqual([{ operation: "focus.test", output: { taskId: "task-1" } }]);
+		expect(result.content[0]).toMatchObject({ text: expect.stringContaining("task-1") });
+	});
+
+	it("never calls onInvoked when invoke() itself fails", async () => {
+		const client = new FakeClient(manifest([operation("focus.test")]));
+		client.error = new VehicleError("upstream-busy", "Provider is busy", { category: "unavailable", retryable: true });
+		const { pi, tools } = fakePi();
+		let called = false;
+		await registerVehicleTools(pi, client, { onInvoked: () => { called = true; } });
+		await expect(execute(tools[0]!, { value: "go" })).rejects.toThrow();
+		expect(called).toBe(false);
+	});
+
 	it("sanitizes Vehicle failures and optionally closes an owned client on session shutdown", async () => {
 		const client = new FakeClient(manifest([operation("fail.test")]));
 		client.error = new VehicleError("upstream-busy", "Provider is busy", {

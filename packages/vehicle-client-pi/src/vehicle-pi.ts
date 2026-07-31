@@ -53,6 +53,16 @@ export interface RegisterVehicleToolsOptions {
 	readonly permissions?: readonly string[];
 	readonly principal?: VehiclePrincipal;
 	readonly resolveInvocation?: PiVehicleInvocationResolver;
+	/**
+	 * Fires after a successful invoke(), before the tool result is returned -- for a
+	 * consumer-local side effect the operation's own output has no way to carry (e.g. a
+	 * same-process Pi extension event bus notification a sibling extension observes; a
+	 * remote HTTP Vehicle consumer has no such bus, so this is deliberately host-local,
+	 * not part of the operation's own transport-neutral contract). Never aborts the tool
+	 * call: an error here is swallowed, matching the same "best-effort broadcast" contract
+	 * a direct pi.events.emit() call would carry on its own.
+	 */
+	readonly onInvoked?: (request: PiVehicleInvocationRequest, output: unknown) => void | Promise<void>;
 	readonly toolName?: (descriptor: VehicleOperationDescriptor, versioned: boolean) => string;
 	readonly closeClientOnSessionShutdown?: boolean;
 	/**
@@ -245,16 +255,25 @@ function createTool(
 					: {}),
 			};
 
+			let output: unknown;
 			try {
-				const output = await client.invoke(descriptor.name, descriptor.version, input, invocation);
-				const content = extractVehicleContent(output) ?? [{ type: "text" as const, text: formatJson(output) }];
-				return {
-					content: [...content],
-					details: { vehicle: identity, output },
-				};
+				output = await client.invoke(descriptor.name, descriptor.version, input, invocation);
 			} catch (error) {
 				throw new PiVehicleInvocationError(sanitizedFailure(error));
 			}
+			if (options.onInvoked) {
+				try {
+					await options.onInvoked({ descriptor, manifest, toolName, toolCallId, input, context }, output);
+				} catch {
+					// Best-effort: the invoke() itself already succeeded, so a broadcast failure
+					// must never surface as a failed tool call.
+				}
+			}
+			const content = extractVehicleContent(output) ?? [{ type: "text" as const, text: formatJson(output) }];
+			return {
+				content: [...content],
+				details: { vehicle: identity, output },
+			};
 		},
 	};
 }

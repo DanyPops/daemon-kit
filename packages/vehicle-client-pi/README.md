@@ -24,6 +24,16 @@ Pi's own tool-result type already use -- and that gets sent to the model
 instead. See `extractVehicleContent`/`WithVehicleContent` in
 `@danypops/vehicle-core`.
 
+A consumer-local side effect the operation's own output can't carry --
+e.g. broadcasting on a same-process Pi extension event bus so a sibling
+extension can react -- has its own hook: `registerVehicleTools(pi, client,
+{ onInvoked })` fires after a successful `invoke()`, before the tool
+result is returned. It's deliberately host-local, not part of the
+operation's transport-neutral contract (a remote HTTP Vehicle consumer has
+no such bus), and never aborts the tool call: an error thrown from
+`onInvoked` is swallowed, the same "best-effort broadcast" contract a
+direct `pi.events.emit()` call would carry on its own.
+
 The same package carries the rest of this house's Pi-extension-facing
 surface: `./pi-load-harness` (jiti-load-safety verification for any
 Pi-loaded module) and the shared `/secrets` Pi command (`./secrets-backend`,
