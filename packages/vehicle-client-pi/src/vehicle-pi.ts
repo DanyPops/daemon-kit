@@ -13,7 +13,7 @@ import type {
 	VehicleOperationDescriptor,
 	VehiclePrincipal,
 } from "@danypops/vehicle-core";
-import { VehicleError } from "@danypops/vehicle-core";
+import { VehicleError, extractVehicleContent } from "@danypops/vehicle-core";
 import { guardExtensionRuntimeInitialized, syncManagedActiveTools } from "./pi-tool-availability.js";
 import { renderVehicleCall, renderVehicleResult } from "./vehicle-render.js";
 
@@ -63,6 +63,13 @@ export interface RegisterVehicleToolsOptions {
 	 * see vehicle-render.ts. A consumer with real UX investment in one
 	 * operation supplies its own pair here; every other operation still gets
 	 * sensible default rendering instead of Pi's raw-JSON fallback.
+	 *
+	 * This is the HUMAN TUI channel only. The model-facing channel is a
+	 * separate concern: see extractVehicleContent in vehicle-core -- an
+	 * operation whose output carries its own `content` blocks gets those sent
+	 * to the model instead of raw JSON, with no per-registration option needed
+	 * here at all, since the operation itself is the only code that knows how
+	 * to narrate what it computed.
 	 */
 	readonly renderers?: (descriptor: VehicleOperationDescriptor) => VehicleToolRenderers | undefined;
 }
@@ -240,8 +247,9 @@ function createTool(
 
 			try {
 				const output = await client.invoke(descriptor.name, descriptor.version, input, invocation);
+				const content = extractVehicleContent(output) ?? [{ type: "text" as const, text: formatJson(output) }];
 				return {
-					content: [{ type: "text", text: formatJson(output) }],
+					content: [...content],
 					details: { vehicle: identity, output },
 				};
 			} catch (error) {

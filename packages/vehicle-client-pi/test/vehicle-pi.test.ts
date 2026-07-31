@@ -363,6 +363,65 @@ describe("registerVehicleTools", () => {
 		expect(close?.renderCall).toBeDefined();
 		expect(close?.renderCall).not.toBe(customRenderCall as never);
 	});
+
+	it("falls back to raw formatted JSON for the model when the output carries no content blocks", async () => {
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		client.result = { total: 2 };
+		const { pi, tools } = fakePi();
+
+		await registerVehicleTools(pi, client);
+		const result = await execute(tools[0]!, { value: "bug" });
+
+		expect(result.content).toEqual([{ type: "text", text: '{\n  "total": 2\n}' }]);
+	});
+
+	it("sends an operation's own content blocks to the model instead of raw JSON, when its output carries them", async () => {
+		const client = new FakeClient(manifest([operation("skills.run"), operation("issues.search")]));
+		client.result = {
+			runId: "run-1",
+			created: { tasks: ["t1", "t2"] },
+			content: [{ type: "text", text: "Created run run-1: 2 task(s)." }],
+		};
+		const { pi, tools } = fakePi();
+
+		await registerVehicleTools(pi, client);
+
+		const run = tools.find((tool) => tool.name === "skills_run")!;
+		const search = tools.find((tool) => tool.name === "issues_search")!;
+
+		const runResult = await execute(run, { value: "x" });
+		expect(runResult.content).toEqual([{ type: "text", text: "Created run run-1: 2 task(s)." }]);
+
+		// An operation whose output carries no content field falls back to raw JSON, same as before --
+		// the convention is opt-in per operation, not a global behavior change.
+		client.result = { ok: true };
+		const searchResult = await execute(search, { value: "bug" });
+		expect(searchResult.content).toEqual([{ type: "text", text: '{\n  "ok": true\n}' }]);
+	});
+
+	it("falls back to raw JSON when an output's content field is present but malformed, rather than forwarding partial blocks", async () => {
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		client.result = { total: 2, content: [{ type: "text" }, "not a block"] };
+		const { pi, tools } = fakePi();
+
+		await registerVehicleTools(pi, client);
+		const result = await execute(tools[0]!, { value: "bug" });
+
+		expect(result.content).toEqual([{ type: "text", text: JSON.stringify(client.result, null, 2) }]);
+	});
+
+	it("content blocks never replace details.output or the human renderCall/renderResult", async () => {
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		client.result = { total: 2, content: [{ type: "text", text: "Found 2 issues." }] };
+		const { pi, tools } = fakePi();
+
+		await registerVehicleTools(pi, client);
+		const result = await execute(tools[0]!, { value: "bug" });
+
+		expect((result.details as PiVehicleToolDetails).output).toEqual(client.result);
+		expect(tools[0]?.renderCall).toBeDefined();
+		expect(tools[0]?.renderResult).toBeDefined();
+	});
 });
 
 describe("refreshVehicleToolAvailability", () => {
