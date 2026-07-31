@@ -64,13 +64,18 @@ describe("generateSystemdUnit", () => {
 	it("includes ExecStart, Environment lines, and no Restart= directive", () => {
 		const unit = generateSystemdUnit(SPEC);
 		expect(unit).toContain('ExecStart="/opt/acme/cli.ts" "serve"');
-		expect(unit).toContain("Environment=ACME_TOKEN=s3cr3t");
+		expect(unit).toContain('Environment="ACME_TOKEN=s3cr3t"');
 		expect(unit).toContain("Description=Acme Daemon");
 		expect(unit).not.toContain("Restart=");
 	});
 
+	it("quotes and escapes an Environment= value the same way ExecStart's own arguments are, so a value containing a space, quote, or backslash never breaks systemd's parsing", () => {
+		const unit = generateSystemdUnit({ ...SPEC, env: { WEIRD: 'has "quotes" and \\backslashes\\ and spaces' } });
+		expect(unit).toContain('Environment="WEIRD=has \\"quotes\\" and \\\\backslashes\\\\ and spaces"');
+	});
+
 	it("declares DAEMON_KIT_LAUNCH_PROVENANCE=service so startDaemon() defaults to always-on, not the bounded auto-spawn budget", () => {
-		expect(generateSystemdUnit(SPEC)).toContain("Environment=DAEMON_KIT_LAUNCH_PROVENANCE=service");
+		expect(generateSystemdUnit(SPEC)).toContain('Environment="DAEMON_KIT_LAUNCH_PROVENANCE=service"');
 	});
 
 	it("adds Restart=always only when restartOnFailure is set -- for a daemon with no client-side auto-spawn to fall back on", () => {

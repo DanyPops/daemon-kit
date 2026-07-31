@@ -121,8 +121,11 @@ function withServiceProvenance(env: Record<string, string> | undefined): Record<
 /** Pure text generator -- a systemd --user unit that starts on login and stays a plain one-shot start, no Restart= (see the module doc comment for why). */
 export function generateSystemdUnit(spec: ServiceSpec): string {
 	const execLine = [spec.binPath, ...(spec.args ?? [])].map(shellQuote).join(" ");
+	// Quoted the same way as ExecStart's own arguments -- an unquoted value containing a space
+	// or a literal quote/backslash would otherwise either break systemd's own parsing or, worse,
+	// silently truncate at the first space.
 	const envLines = Object.entries(withServiceProvenance(spec.env))
-		.map(([key, value]) => `Environment=${key}=${value}`)
+		.map(([key, value]) => `Environment=${shellQuote(`${key}=${value}`)}`)
 		.join("\n");
 	return [
 		"[Unit]",
