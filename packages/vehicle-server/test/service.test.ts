@@ -90,6 +90,14 @@ describe("generateSystemdUnit", () => {
 		expect(generateSystemdUnit(SPEC)).not.toContain("NoNewPrivileges=");
 		expect(generateSystemdUnit(SPEC)).not.toContain("PrivateTmp=");
 	});
+
+	it("always waits for default.target; adds network-online.target only when waitForNetwork is set", () => {
+		expect(generateSystemdUnit(SPEC)).toContain("After=default.target");
+		expect(generateSystemdUnit(SPEC)).not.toContain("network-online.target");
+		const withNetwork = generateSystemdUnit({ ...SPEC, waitForNetwork: true });
+		expect(withNetwork).toContain("After=default.target network-online.target");
+		expect(withNetwork).toContain("Wants=network-online.target");
+	});
 });
 
 describe("generateLaunchdPlist", () => {

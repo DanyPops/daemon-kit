@@ -56,6 +56,13 @@ export interface ServiceSpec {
 	noNewPrivileges?: boolean;
 	/** Adds PrivateTmp=true (systemd only) -- gives the unit its own /tmp and /var/tmp, invisible to and isolated from every other process on the host. */
 	privateTmp?: boolean;
+	/**
+	 * Adds `network-online.target` to After=/Wants= (systemd only) -- for a daemon that talks to
+	 * external services (search providers, model APIs) at startup and would otherwise race a
+	 * --user unit's own login-time network bring-up. Omit for a daemon with no real network
+	 * dependency of its own (e.g. a local-only graph store).
+	 */
+	waitForNetwork?: boolean;
 }
 
 export interface RunResult {
@@ -120,6 +127,8 @@ export function generateSystemdUnit(spec: ServiceSpec): string {
 	return [
 		"[Unit]",
 		`Description=${spec.displayName ?? spec.name}`,
+		spec.waitForNetwork ? "After=default.target network-online.target" : "After=default.target",
+		...(spec.waitForNetwork ? ["Wants=network-online.target"] : []),
 		"",
 		"[Service]",
 		"Type=simple",
