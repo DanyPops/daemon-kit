@@ -73,6 +73,8 @@ export interface RunningDaemon {
 	/** The idle-shutdown budget actually in effect (0 means disabled) -- exposed so a caller/test can observe the provenance-derived default without waiting it out. */
 	idleBudgetMs: number;
 	stop(): Promise<void>;
+	/** Resolves once stop() has fully run, however it was triggered (an explicit call, or the internal idle timer) -- the single signal runDaemonProcess needs to exit the process for either case. */
+	stopped: Promise<void>;
 }
 
 /**
@@ -308,19 +310,24 @@ export async function startDaemon(options: StartDaemonOptions): Promise<RunningD
 		}, options.idleTickMs ?? DEFAULT_IDLE_TICK_MS);
 	}
 
-	let stopped = false;
+	let alreadyStopping = false;
+	let resolveStopped: () => void = () => {};
+	const stoppedPromise = new Promise<void>((resolve) => {
+		resolveStopped = resolve;
+	});
 	const stop = async (): Promise<void> => {
-		if (stopped) return;
-		stopped = true;
+		if (alreadyStopping) return;
+		alreadyStopping = true;
 		for (const timer of timers) clearInterval(timer);
 		if (idleTimer) clearInterval(idleTimer);
 		removeDaemonHandle(options.handlePath);
 		releaseDaemonLock(lockPath);
 		await options.onShutdown?.();
 		await listener.stop();
+		resolveStopped();
 	};
 
-	return { host: LOOPBACK_HOST, port: listener.port, idleBudgetMs: effectiveIdleBudgetMs, stop };
+	return { host: LOOPBACK_HOST, port: listener.port, idleBudgetMs: effectiveIdleBudgetMs, stop, stopped: stoppedPromise };
 }
 
 export interface RunDaemonProcessOptions extends StartDaemonOptions {
@@ -353,11 +360,16 @@ async function runDaemonProcessAsync(options: RunDaemonProcessOptions, logger: L
 		throw error;
 	}
 	options.onListen?.({ host: daemon.host, port: daemon.port });
+	// One unified exit path for both triggers: an explicit SIGINT/SIGTERM below, or the
+	// idle timer inside startDaemon() calling stop() on its own. Either way, once stop()
+	// has actually finished, this process must exit -- Restart=always (or any other
+	// process manager) only recovers a daemon that genuinely exits.
+	void daemon.stopped.then(() => process.exit(0));
 	let shuttingDown = false;
 	const shutdown = (): void => {
 		if (shuttingDown) return;
 		shuttingDown = true;
-		void daemon.stop().finally(() => process.exit(0));
+		void daemon.stop();
 	};
 	process.on("SIGINT", shutdown);
 	process.on("SIGTERM", shutdown);

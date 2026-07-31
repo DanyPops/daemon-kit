@@ -3,7 +3,15 @@ import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_AUTO_SPAWN_IDLE_BUDGET_MS, DaemonAlreadyRunningError, readLaunchProvenance, resolveIdleBudgetMs, startDaemon, type RunningDaemon } from "../src/daemon.ts";
+import {
+	DEFAULT_AUTO_SPAWN_IDLE_BUDGET_MS,
+	DaemonAlreadyRunningError,
+	readLaunchProvenance,
+	resolveIdleBudgetMs,
+	runDaemonProcess,
+	startDaemon,
+	type RunningDaemon,
+} from "../src/daemon.ts";
 import { readDaemonHandle } from "../src/paths.ts";
 
 let daemon: RunningDaemon | undefined;
@@ -282,6 +290,34 @@ describe("startDaemon", () => {
 				}),
 			).rejects.toThrow(/pushChannel requires the Bun runtime/);
 			expect(readDaemonHandle(handlePath)).toBeNull();
+		}
+	});
+});
+
+describe("runDaemonProcess idle-shutdown", () => {
+	// stop()'s idle path must exit the process, not just remove the handle file --
+	// otherwise a process manager's Restart=always never triggers.
+	it("actually exits the process once the idle budget is exceeded, the same way SIGTERM does -- not just removing the handle file", async () => {
+		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-idle-exit-"));
+		const handlePath = join(dir, "handle.json");
+		const originalExit = process.exit;
+		let exitCode: number | undefined;
+		process.exit = ((code?: number) => {
+			exitCode = code;
+		}) as typeof process.exit;
+		try {
+			runDaemonProcess({
+				daemonLabel: "Acme",
+				handlePath,
+				buildApp: trivialApp,
+				idleBudgetMs: 20,
+				idleTickMs: 5,
+			});
+			await new Promise((resolve) => setTimeout(resolve, 150));
+			expect(readDaemonHandle(handlePath)).toBeNull();
+			expect(exitCode).toBe(0);
+		} finally {
+			process.exit = originalExit;
 		}
 	});
 });

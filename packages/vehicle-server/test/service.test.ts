@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+	createNodeServiceInstallDeps,
 	detectLinuxInitSystem,
 	generateLaunchdPlist,
 	generateSystemdUnit,
@@ -67,6 +71,11 @@ describe("generateSystemdUnit", () => {
 
 	it("declares DAEMON_KIT_LAUNCH_PROVENANCE=service so startDaemon() defaults to always-on, not the bounded auto-spawn budget", () => {
 		expect(generateSystemdUnit(SPEC)).toContain("Environment=DAEMON_KIT_LAUNCH_PROVENANCE=service");
+	});
+
+	it("adds Restart=always only when restartOnFailure is set -- for a daemon with no client-side auto-spawn to fall back on", () => {
+		expect(generateSystemdUnit({ ...SPEC, restartOnFailure: true })).toContain("Restart=always");
+		expect(generateSystemdUnit(SPEC)).not.toContain("Restart=");
 	});
 });
 
@@ -203,5 +212,41 @@ describe("isServiceInstalled", () => {
 	it("Windows: checks the registry value via reg.exe query", () => {
 		const deps = fakeDeps({ platform: "win32", runCommand: () => ({ ok: true, output: "REG_SZ" }) });
 		expect(isServiceInstalled(SPEC, deps)).toBe(true);
+	});
+});
+
+describe("createNodeServiceInstallDeps", () => {
+	it("writes, reads, checks, and removes real files against the real filesystem", () => {
+		const dir = mkdtempSync(join(tmpdir(), "vehicle-service-deps-"));
+		try {
+			const deps = createNodeServiceInstallDeps();
+			const path = join(dir, "nested", "acme.service");
+			expect(deps.fileExists(path)).toBe(false);
+			expect(deps.readFile(path)).toBeNull();
+			deps.mkdirp(join(dir, "nested"));
+			deps.writeFile(path, "unit content");
+			expect(deps.fileExists(path)).toBe(true);
+			expect(deps.readFile(path)).toBe("unit content");
+			deps.removeFile(path);
+			expect(deps.fileExists(path)).toBe(false);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("which() finds a real binary on PATH and rejects a nonexistent one", () => {
+		const deps = createNodeServiceInstallDeps();
+		expect(deps.which(process.platform === "win32" ? "cmd" : "sh")).toBe(true);
+		expect(deps.which("definitely-not-a-real-binary-xyz")).toBe(false);
+	});
+
+	it("runCommand reports ok:true with captured output for a succeeding command, ok:false for a failing one", () => {
+		const deps = createNodeServiceInstallDeps();
+		const isWindows = process.platform === "win32";
+		const ok = deps.runCommand(isWindows ? "cmd" : "sh", isWindows ? ["/c", "echo hi"] : ["-c", "echo hi"]);
+		expect(ok.ok).toBe(true);
+		expect(ok.output).toContain("hi");
+		const failed = deps.runCommand(isWindows ? "cmd" : "sh", isWindows ? ["/c", "exit 1"] : ["-c", "exit 1"]);
+		expect(failed.ok).toBe(false);
 	});
 });

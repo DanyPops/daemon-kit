@@ -28,6 +28,8 @@
  * ship, just shelled out to directly instead of via the `winreg` package.
  * No elevation required.
  */
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 
 export interface ServiceSpec {
 	/** Used in filenames/labels, e.g. "web-spider". Must be filesystem/registry-value-name safe. */
@@ -40,6 +42,14 @@ export interface ServiceSpec {
 	env?: Record<string, string>;
 	/** Where the generated descriptor is written -- resolveDaemonPaths().serviceDescriptor. */
 	descriptorPath: string;
+	/**
+	 * Adds Restart=always (systemd) / KeepAlive (launchd) so the init system itself
+	 * relaunches a crashed or exited process. Only for a daemon whose client never
+	 * auto-spawns (connectWithPolicy's autoStart) -- otherwise this duplicates recovery
+	 * the client side already provides for free, on every platform. Linux only for now;
+	 * has no effect on macOS/Windows.
+	 */
+	restartOnFailure?: boolean;
 }
 
 export interface RunResult {
@@ -109,6 +119,7 @@ export function generateSystemdUnit(spec: ServiceSpec): string {
 		"Type=simple",
 		`ExecStart=${execLine}`,
 		...(envLines ? [envLines] : []),
+		...(spec.restartOnFailure ? ["Restart=always"] : []),
 		"",
 		"[Install]",
 		"WantedBy=default.target",
@@ -274,6 +285,47 @@ export function isServiceInstalled(spec: ServiceSpec, deps: ServiceInstallDeps):
 		return result.ok;
 	}
 	return deps.fileExists(spec.descriptorPath);
+}
+
+/** Real ServiceInstallDeps against the actual filesystem/shell -- every consumer's own cli.ts needs the exact same glue, so it lives here once instead of five hand-rolled copies. */
+export function createNodeServiceInstallDeps(): ServiceInstallDeps {
+	return {
+		writeFile: (path, content) => writeFileSync(path, content),
+		readFile: (path) => {
+			try {
+				return readFileSync(path, "utf8");
+			} catch {
+				return null;
+			}
+		},
+		removeFile: (path) => {
+			try {
+				unlinkSync(path);
+			} catch {
+				// already absent -- removal is idempotent.
+			}
+		},
+		fileExists: (path) => existsSync(path),
+		mkdirp: (path) => mkdirSync(path, { recursive: true }),
+		runCommand: (command, args): RunResult => {
+			try {
+				const output = execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+				return { ok: true, output };
+			} catch (error) {
+				const execError = error as { stdout?: string; stderr?: string; message: string };
+				return { ok: false, output: (execError.stdout ?? "") + (execError.stderr ?? execError.message) };
+			}
+		},
+		which: (binary) => {
+			try {
+				execFileSync(process.platform === "win32" ? "where" : "which", [binary], { stdio: "ignore" });
+				return true;
+			} catch {
+				return false;
+			}
+		},
+		uid: process.getuid?.(),
+	};
 }
 
 function dirnameOf(path: string): string {
