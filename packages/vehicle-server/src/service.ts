@@ -52,6 +52,10 @@ export interface ServiceSpec {
 	restartOnFailure?: boolean;
 	/** RestartSec, in seconds -- only applied alongside restartOnFailure. Omit to use systemd's own default (100ms), too aggressive for a daemon that could genuinely crash-loop. */
 	restartSec?: number;
+	/** Adds NoNewPrivileges=true (systemd only) -- the process and its children can never gain new privileges via setuid/setgid/capabilities, regardless of the daemon's own logic. Cheap, no functional cost for a daemon that never needs to. */
+	noNewPrivileges?: boolean;
+	/** Adds PrivateTmp=true (systemd only) -- gives the unit its own /tmp and /var/tmp, invisible to and isolated from every other process on the host. */
+	privateTmp?: boolean;
 }
 
 export interface RunResult {
@@ -123,6 +127,8 @@ export function generateSystemdUnit(spec: ServiceSpec): string {
 		...(envLines ? [envLines] : []),
 		...(spec.restartOnFailure ? ["Restart=always"] : []),
 		...(spec.restartOnFailure && spec.restartSec !== undefined ? [`RestartSec=${spec.restartSec}`] : []),
+		...(spec.noNewPrivileges ? ["NoNewPrivileges=true"] : []),
+		...(spec.privateTmp ? ["PrivateTmp=true"] : []),
 		"",
 		"[Install]",
 		"WantedBy=default.target",

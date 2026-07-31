@@ -83,6 +83,13 @@ describe("generateSystemdUnit", () => {
 		expect(generateSystemdUnit({ ...SPEC, restartOnFailure: true })).not.toContain("RestartSec=");
 		expect(generateSystemdUnit({ ...SPEC, restartSec: 2 })).not.toContain("RestartSec=");
 	});
+
+	it("adds NoNewPrivileges/PrivateTmp only when explicitly opted into, independently of each other", () => {
+		expect(generateSystemdUnit({ ...SPEC, noNewPrivileges: true })).toContain("NoNewPrivileges=true");
+		expect(generateSystemdUnit({ ...SPEC, privateTmp: true })).toContain("PrivateTmp=true");
+		expect(generateSystemdUnit(SPEC)).not.toContain("NoNewPrivileges=");
+		expect(generateSystemdUnit(SPEC)).not.toContain("PrivateTmp=");
+	});
 });
 
 describe("generateLaunchdPlist", () => {
