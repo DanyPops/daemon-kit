@@ -64,7 +64,7 @@ etc.) so a consumer only pulls in what it uses.
 | Module | Replaces | Responsibility |
 |---|---|---|
 | `rpc-client` | each daemon's `client.ts` | Typed `AuthenticatedRpcClient<Op, Inputs, Outputs>`: `call(op, input)`, `operations()`, `health()`, `ready()` over a single Bearer-authenticated dispatch endpoint. |
-| `daemon-client` | each Pi extension's own retrying-client copy (lector's `lectorClient()`, web-spider's `callWebSpider()`, papyrus's `callService()`, pi-packed's `createNatives()`) and their independently-forked auto-start policy | `createRetryingClient()`: caches a connected client and retries exactly once against a freshly reconnected one on a stale-connection error (the daemon rebinds a random port on every restart), and fails fast via a circuit breaker after sustained connect failures instead of paying a full connect timeout on every call. `connectWithPolicy()`: one explicit `autoStart` flag (default false, fail closed) instead of a silent per-daemon fork between failing closed and transparently spawning the daemon. `connectWithVersionCheck()`: detects a daemon left running from before an extension upgrade and transparently replaces it. `spawnDetachedDaemon()`: platform-correct spawn options (Windows console-hiding) for the four independent `spawn()` callbacks. `connectPushChannel()`: subscribes to a daemon's push-invalidation channel with real reconnection -- exponential backoff gated by a minimum-uptime window, jittered to avoid a reconnect storm when several Pi sessions reconnect to the same restarted daemon at once, plus a heartbeat ping/timeout to catch a socket that stays open while the daemon itself is hung. Has no imports of its own (fetch/Request/TypeError/AbortError/WebSocket are all global), so it loads safely under Node without a Bun runtime -- shipped pre-compiled via `bun run build:daemon-client` anyway, since Pi's jiti loader has a real, demonstrated failure class importing a dependency's raw, unbuilt TypeScript. |
+| `daemon-client` | each Pi extension's own retrying-client copy (lector's `lectorClient()`, web-spider's `callWebSpider()`, papyrus's `callService()`, pi-packed's `createNatives()`) and their independently-forked auto-start policy | `createRetryingClient()`: caches a connected client and retries exactly once against a freshly reconnected one on a stale-connection error (the daemon rebinds a random port on every restart), and fails fast via a circuit breaker after sustained connect failures instead of paying a full connect timeout on every call. `connectWithPolicy()`: one explicit `autoStart` flag (default false, fail closed) instead of a silent per-daemon fork between failing closed and transparently spawning the daemon. `connectWithVersionCheck()`: detects a daemon left running from before an extension upgrade and transparently replaces it. `spawnDetachedDaemon()`: platform-correct spawn options (Windows console-hiding) for the four independent `spawn()` callbacks. `connectPushChannel()`: subscribes to a daemon's push-invalidation channel with real reconnection -- exponential backoff gated by a minimum-uptime window, jittered to avoid a reconnect storm when several Pi sessions reconnect to the same restarted daemon at once, plus a heartbeat ping/timeout to catch a socket that stays open while the daemon itself is hung. `createReconnectingVehicleClient(connect)`: wraps `createRetryingClient` as a drop-in `VehicleClient` -- pass it to `registerVehicleTools()` instead of a bare `new RemoteVehicleClient(...)` so a Pi session survives a daemon restart without a full extension reload. `manifest()` retries transparently (read-only, always safe); `invoke()` uses the separate `callOnce()` method -- connects fresh when needed but never silently re-runs a mutating operation a second time, so a real in-flight failure still surfaces to the caller exactly once instead of risking a duplicate side effect, while the *next* call (a model's own retry, or the next scheduled manifest refresh) reconnects and succeeds. Has no RUNTIME imports of its own (fetch/Request/TypeError/AbortError/WebSocket are all global; the one VehicleClient type import is erased at compile time), so it loads safely under Node without a Bun runtime -- shipped pre-compiled via `bun run build:daemon-client` anyway, since Pi's jiti loader has a real, demonstrated failure class importing a dependency's raw, unbuilt TypeScript. |
 | `unix-rpc-client` | nothing (new) | Client counterpart to `vehicle-server`'s `unix-rpc-server`, same wire framing, built on `node:net` (not `Bun.connect`) so it works under Pi's own Node process. No identity material needed client-side -- SO_PEERCRED is kernel-enforced server-side. |
 
 ## Vehicle packages
@@ -199,6 +199,46 @@ setInterval(async () => {
 On the provider side, mark an operation unavailable (or available again) on
 `VehicleRegistry` directly -- `registry.setAvailability("jira.search", 1, false, "no Jira credential configured")`
 -- and the next `refreshVehicleToolAvailability()` call picks it up.
+
+### Surviving a daemon restart
+
+`registerVehicleTools()` captures whatever `VehicleClient` you pass it forever,
+in every registered tool's closure. A daemon binds a new random port on every
+restart (crash, upgrade, manual `systemctl restart`); a bare
+`new RemoteVehicleClient({baseUrl, token})` built once at `session_start` has no
+way to notice its `baseUrl` is now dead. **Confirmed live**: every Vehicle tool
+call in an already-running Pi session failed with a bare connection error
+until the whole extension reloaded. Pass `createReconnectingVehicleClient()`
+(`@danypops/vehicle-client`) instead:
+
+```ts
+import { createReconnectingVehicleClient } from "@danypops/vehicle-client/daemon-client";
+import { RemoteVehicleClient } from "@danypops/vehicle-client/http";
+
+const client = createReconnectingVehicleClient(async () => {
+  // Re-resolve the daemon's CURRENT handle (host/port/token) on every
+  // reconnect attempt -- a value captured once outside this factory would
+  // reintroduce the exact bug this fixes.
+  const target = await resolveCurrentVehicleTarget();
+  return new RemoteVehicleClient({ baseUrl: target.baseUrl, token: target.token });
+});
+await registerVehicleTools(pi, client, { permissions: ["issues:read"] });
+```
+
+`manifest()` retries transparently -- always safe, since it's read-only and
+idempotent, so a scheduled `refreshVehicleToolAvailability()` call (see above)
+self-heals the connection with zero visible failure. `invoke()` deliberately
+does **not** auto-retry: Vehicle's own idempotency model (`safe`/`keyed`/
+`unsafe`) is real per-operation information this generic wire-level wrapper
+can't safely generalize over, so a mutating call that genuinely fails against
+a dead connection still surfaces that failure to the caller exactly once --
+never silently repeated -- while dropping the stale connection so the *next*
+call (the model's own retry after seeing a tool error, or the next
+`refreshVehicleToolAvailability()` tick) reconnects and succeeds. Built on
+`createRetryingClient`'s new `callOnce()` method -- connect-with-caching and
+circuit-breaking identical to `call()`, but the operation itself is never
+retried after a failure, only the underlying connection is dropped for next
+time.
 
 ## One operation per real action, never an action-dispatch tool
 

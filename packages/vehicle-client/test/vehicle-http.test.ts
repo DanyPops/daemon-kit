@@ -3,6 +3,7 @@ import { bindVehicleOperation, defineVehicleOperation, defineVehicleSchema, type
 import { VehicleRegistry } from "@danypops/vehicle-server";
 import { createVehicleHttpApp } from "@danypops/vehicle-server/http";
 import type { Logger } from "@danypops/vehicle-server/logging";
+import { createReconnectingVehicleClient } from "../src/daemon-client.ts";
 import { RemoteVehicleClient } from "../src/vehicle-http-client.ts";
 
 interface CapturedLog {
@@ -257,5 +258,117 @@ describe("Vehicle HTTP provider: failure logging", () => {
 		const { baseUrl, token } = startTestServer();
 		const client = new RemoteVehicleClient({ baseUrl, token });
 		await expect(client.invoke("test.boom", 1, { value: "x" }, {})).rejects.toThrow("always fails");
+	});
+});
+
+/**
+ * Reproduces the exact live failure this house hit: a Papyrus daemon
+ * restart rebound a new random port, and every Vehicle tool call in an
+ * already-running Pi session failed with a bare connection error until the
+ * whole extension reloaded -- because registerVehicleTools() (vehicle-client-pi)
+ * captures one concrete VehicleClient forever, and that client (a bare
+ * `new RemoteVehicleClient(...)`) has no way to notice its baseUrl died.
+ * createReconnectingVehicleClient() is the fix: these tests start a real
+ * server, kill it, start a genuinely new one on a new port (same token --
+ * matching a real daemon's token file surviving a restart while its handle
+ * file's port does not), and prove the wrapped client self-heals.
+ */
+describe("createReconnectingVehicleClient: survives a daemon restart onto a new port", () => {
+	let servers: ReturnType<typeof Bun.serve>[] = [];
+
+	afterEach(() => {
+		for (const s of servers) s.stop(true);
+		servers = [];
+	});
+
+	function startServer(registry: VehicleRegistry, token: string, logger?: Logger): string {
+		const app = createVehicleHttpApp({ registry, token, logger });
+		const s = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: app.fetch });
+		servers.push(s);
+		return `http://127.0.0.1:${s.port}`;
+	}
+
+	function buildRegistry(): VehicleRegistry {
+		const registry = new VehicleRegistry({ name: "test-vehicle", version: "1.0.0", description: "Test Vehicle" });
+		registry.register(
+			"test-owner",
+			bindVehicleOperation(Echo, () => async (context) => ({ echoed: context.input.value })),
+		);
+		return registry;
+	}
+
+	it("manifest() transparently self-heals after a restart -- the very first call after the port changes still succeeds", async () => {
+		const token = "test-token";
+		let currentBaseUrl = startServer(buildRegistry(), token);
+		let connectCount = 0;
+		const client = createReconnectingVehicleClient(async () => {
+			connectCount++;
+			return new RemoteVehicleClient({ baseUrl: currentBaseUrl, token });
+		});
+
+		await expect(client.manifest()).resolves.toMatchObject({ name: "test-vehicle" });
+		expect(connectCount).toBe(1);
+
+		// Simulate a real restart: the old process is gone, a new one binds a new random port.
+		servers[0]?.stop(true);
+		currentBaseUrl = startServer(buildRegistry(), token);
+
+		// No visible failure to the caller -- call() retries transparently against the fresh port.
+		await expect(client.manifest()).resolves.toMatchObject({ name: "test-vehicle" });
+		expect(connectCount).toBe(2);
+	});
+
+	it("invoke() surfaces the first post-restart failure once (never silently double-invoked), then self-heals on the next call", async () => {
+		const token = "test-token";
+		let currentBaseUrl = startServer(buildRegistry(), token);
+		let connectCount = 0;
+		const client = createReconnectingVehicleClient(async () => {
+			connectCount++;
+			return new RemoteVehicleClient({ baseUrl: currentBaseUrl, token });
+		});
+
+		await expect(client.invoke("test.echo", 1, { value: "first" }, { permissions: ["test:echo"] })).resolves.toEqual({ echoed: "first" });
+		expect(connectCount).toBe(1);
+
+		servers[0]?.stop(true);
+		currentBaseUrl = startServer(buildRegistry(), token);
+
+		// This exact call's own request really did fail (the port it was sent to is dead) --
+		// callOnce() surfaces that honestly instead of silently retrying a mutating call.
+		await expect(client.invoke("test.echo", 1, { value: "second" }, { permissions: ["test:echo"] })).rejects.toThrow();
+
+		// The stale connection was dropped by that failure -- this next call reconnects and
+		// succeeds on its own first attempt, exactly matching the real fix's behavior: one
+		// failed call (visible to the model as a tool error, same as any other transient
+		// failure), not "broken until /reload".
+		await expect(client.invoke("test.echo", 1, { value: "third" }, { permissions: ["test:echo"] })).resolves.toEqual({ echoed: "third" });
+		expect(connectCount).toBe(2);
+	});
+
+	it("invoke() never retries a caller-aborted call as if it were a connection failure", async () => {
+		const token = "test-token";
+		const baseUrl = startServer(buildRegistry(), token);
+		let connectCount = 0;
+		const client = createReconnectingVehicleClient(async () => {
+			connectCount++;
+			return new RemoteVehicleClient({ baseUrl, token });
+		});
+
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			client.invoke("test.echo", 1, { value: "x" }, { permissions: ["test:echo"], signal: controller.signal }),
+		).rejects.toThrow();
+		// Exactly one attempt -- an aborted call is the CALLER's decision, never silently repeated.
+		expect(connectCount).toBe(1);
+	});
+
+	it("close() prevents further calls, matching RemoteVehicleClient's own closed-client contract", async () => {
+		const token = "test-token";
+		const baseUrl = startServer(buildRegistry(), token);
+		const client = createReconnectingVehicleClient(async () => new RemoteVehicleClient({ baseUrl, token }));
+		await client.close();
+		await expect(client.manifest()).rejects.toThrow("closed");
+		await expect(client.invoke("test.echo", 1, { value: "x" }, {})).rejects.toThrow("closed");
 	});
 });

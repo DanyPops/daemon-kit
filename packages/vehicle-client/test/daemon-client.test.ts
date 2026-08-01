@@ -260,6 +260,84 @@ describe("createRetryingClient", () => {
 		).rejects.toThrow("fetch failed");
 		expect(connectCount).toBe(1); // no retry -- custom predicate said this isn't stale
 	});
+
+	describe("callOnce", () => {
+		it("runs the operation once against a freshly connected client, same as call() on first attempt", async () => {
+			let connectCount = 0;
+			const client = createRetryingClient(async () => {
+				connectCount++;
+				return new FakeClient(connectCount);
+			});
+			expect(await client.callOnce(async (c) => c.id)).toBe(1);
+			expect(connectCount).toBe(1);
+		});
+
+		it("never retries the operation itself on a stale-connection error -- surfaces it immediately", async () => {
+			let connectCount = 0;
+			let operationCalls = 0;
+			const client = createRetryingClient(async () => {
+				connectCount++;
+				return new FakeClient(connectCount);
+			});
+			await expect(
+				client.callOnce(async () => {
+					operationCalls++;
+					throw new TypeError("fetch failed");
+				}),
+			).rejects.toThrow("fetch failed");
+			expect(operationCalls).toBe(1); // never re-run, unlike call()'s own retry-once behavior
+		});
+
+		it("drops the cached client on a stale-connection failure, so the NEXT callOnce()/call() reconnects", async () => {
+			let connectCount = 0;
+			const client = createRetryingClient(async () => {
+				connectCount++;
+				return new FakeClient(connectCount);
+			});
+			await expect(
+				client.callOnce(async () => {
+					throw new TypeError("fetch failed");
+				}),
+			).rejects.toThrow("fetch failed");
+			expect(connectCount).toBe(1);
+
+			// Self-heals here: the connection was dropped above, so this next call reconnects and succeeds.
+			expect(await client.callOnce(async (c) => c.id)).toBe(2);
+			expect(connectCount).toBe(2);
+		});
+
+		it("does NOT drop the cached client on a genuine domain-level rejection -- the connection itself was fine", async () => {
+			let connectCount = 0;
+			const client = createRetryingClient(async () => {
+				connectCount++;
+				return new FakeClient(connectCount);
+			});
+			await expect(
+				client.callOnce(async () => {
+					throw new Error("validation failed: missing field");
+				}),
+			).rejects.toThrow("validation failed");
+			// Same cached client reused -- no reconnect for a non-stale error.
+			expect(await client.callOnce(async (c) => c.id)).toBe(1);
+			expect(connectCount).toBe(1);
+		});
+
+		it("respects the circuit breaker exactly like call() -- short-circuits without a new connect attempt once open", async () => {
+			let connectCount = 0;
+			const client = createRetryingClient<FakeClient>(
+				async () => {
+					connectCount++;
+					throw new Error(`fail ${connectCount}`);
+				},
+				{ circuitBreaker: { failureThreshold: 2, cooldownMs: 10_000 } },
+			);
+			await expect(client.callOnce(async (c) => c.id)).rejects.toThrow("fail 1");
+			await expect(client.callOnce(async (c) => c.id)).rejects.toThrow("fail 2");
+			expect(client.breakerState().open).toBe(true);
+			await expect(client.callOnce(async (c) => c.id)).rejects.toThrow("fail 2");
+			expect(connectCount).toBe(2); // the third call short-circuited, no new connect attempt
+		});
+	});
 });
 
 const FAKE_HANDLE: DaemonHandleLike = { host: "127.0.0.1", port: 4242, pid: 1 };

@@ -15,10 +15,13 @@
  * by a Pi extension rather than by another Bun daemon, and Pi's jiti-based
  * extension loader has a real, demonstrated failure class importing a
  * dependency's raw, unbuilt TypeScript (see @danypops/vehicle-client-pi's
- * pi-load-harness.ts). This module has no imports of its own --
+ * pi-load-harness.ts). This module has no RUNTIME imports of its own --
  * fetch/Request/TypeError/AbortError are all global -- so it is safe to
  * load under Node without a Bun runtime, and has no Pi-API dependency of
  * its own despite existing mainly for Pi extensions to reach a Vehicle server.
+ * The one type-only import below (VehicleClient's shape, for
+ * createReconnectingVehicleClient) is fully erased at compile time and
+ * carries no runtime module resolution of its own.
  *
  * `connectWithPolicy` covers the other silent per-daemon fork found
  * alongside the retry duplication: whether a missing daemon should be
@@ -26,6 +29,8 @@
  * auto-spawns; lector/papyrus/pi-packed fail closed) but were each
  * hardcoded per daemon instead of being a parameter of one shared helper.
  */
+
+import type { VehicleClient } from "@danypops/vehicle-core";
 
 export type StaleConnectionPredicate = (error: unknown) => boolean;
 
@@ -68,6 +73,16 @@ export interface RetryingClient<Client> {
 	 * the rest of the session.
 	 */
 	call<T>(operation: (client: Client) => Promise<T>): Promise<T>;
+	/**
+	 * Like call(), but never retries `operation` itself after a failure --
+	 * only the underlying connection is dropped (when the failure looks
+	 * connection-shaped) so the *next* call()/callOnce() reconnects. Use this
+	 * for a mutating/non-idempotent operation where transparently re-running
+	 * it a second time after a transport failure could cause a duplicate
+	 * side effect (e.g. Vehicle's own invoke()); call() remains right for a
+	 * read-only or genuinely idempotent operation.
+	 */
+	callOnce<T>(operation: (client: Client) => Promise<T>): Promise<T>;
 	/** Drops any cached client and resets the circuit breaker, forcing the next call() to reconnect. */
 	reset(): void;
 	/** Current breaker state, readable without triggering a live connect attempt. */
@@ -196,6 +211,16 @@ export function createRetryingClient<Client>(
 			// safety net rather than a non-null assertion, in case that bound
 			// ever becomes configurable.
 			throw new Error(`${label} client retry exhausted`);
+		},
+		async callOnce(operation) {
+			if (breaker.isOpen()) throw breaker.lastFailure();
+			const client = await resolveClient();
+			try {
+				return await operation(client);
+			} catch (error) {
+				if (isStale(error)) cached = undefined;
+				throw error;
+			}
 		},
 		reset() {
 			cached = undefined;
@@ -679,6 +704,66 @@ export function connectPushChannel(options: PushChannelClientOptions): PushChann
 			stopHeartbeat();
 			setState("closed");
 			ws?.close();
+		},
+	};
+}
+
+/**
+ * A VehicleClient (@danypops/vehicle-core) that survives a daemon restart
+ * without a full Pi extension reload. Confirmed live gap: registerVehicleTools()
+ * (@danypops/vehicle-client-pi) captures one concrete VehicleClient forever in
+ * every registered tool's closure -- when the daemon rebinds a new random
+ * port (any restart), every tool call fails with a bare connection error
+ * until the whole extension reloads and re-registers with a fresh client.
+ * Passing `createReconnectingVehicleClient(connect)` instead of a bare
+ * `new RemoteVehicleClient(...)` to registerVehicleTools() fixes this at the
+ * one shared layer every Vehicle consumer already goes through, instead of
+ * each hand-rolling its own reconnect wrapper.
+ *
+ * `connect` is re-invoked with the CALLER's own current target resolution
+ * (e.g. re-reading a handle file for the daemon's latest port/token) --
+ * this only works if `connect` itself re-resolves that target on each call,
+ * not if it closes over one target captured at Pi session_start.
+ *
+ * manifest() is always safe to retry transparently (read-only, idempotent) --
+ * uses call(), so a stale connection self-heals on the very next manifest
+ * refresh (e.g. refreshVehicleToolAvailability()'s own periodic cadence)
+ * with no visible failure to any caller.
+ *
+ * invoke() is deliberately NOT auto-retried: Vehicle's own idempotency model
+ * (safe/keyed/unsafe) is real per-operation information this generic
+ * wire-level wrapper has no way to safely generalize over (a keyed
+ * operation's actual dedup, if any, lives in that operation's own handler,
+ * not centrally in VehicleRegistry). Uses callOnce(), so a failed invoke()
+ * still surfaces its real error to the caller exactly once -- never silently
+ * double-invoked -- but the stale connection is dropped either way, so the
+ * *next* invoke() (a model's natural retry after a tool error, or any other
+ * call) reconnects and succeeds instead of failing forever.
+ */
+export function createReconnectingVehicleClient(
+	connect: () => Promise<VehicleClient>,
+	options: CreateRetryingClientOptions = {},
+): VehicleClient {
+	const retrying = createRetryingClient<VehicleClient>(connect, { label: "Vehicle", ...options });
+	let closed = false;
+
+	function assertNotClosed(): void {
+		if (closed) throw new Error("Vehicle client closed");
+	}
+
+	return {
+		async manifest() {
+			assertNotClosed();
+			return retrying.call((client) => client.manifest());
+		},
+		async invoke(name, version, input, invocationOptions) {
+			assertNotClosed();
+			return retrying.callOnce((client) => client.invoke(name, version, input, invocationOptions));
+		},
+		async close() {
+			if (closed) return;
+			closed = true;
+			retrying.reset();
 		},
 	};
 }
