@@ -120,6 +120,20 @@ describe("createAtomicJsonWriter", () => {
 		expect(fs.files.get("/state/compact.json")).toBe(JSON.stringify({ a: 1 }));
 	});
 
+	test("write() with trailingNewline:true appends exactly one trailing newline", async () => {
+		const fs = createFakeFs();
+		const writer = createAtomicJsonWriter({ fs });
+		await writer.write("/state/nl.json", { a: 1 }, { pretty: true, trailingNewline: true });
+		expect(fs.files.get("/state/nl.json")).toBe(`${JSON.stringify({ a: 1 }, null, 2)}\n`);
+	});
+
+	test("write() without trailingNewline omits it by default (unchanged)", async () => {
+		const fs = createFakeFs();
+		const writer = createAtomicJsonWriter({ fs });
+		await writer.write("/state/no-nl.json", { a: 1 });
+		expect(fs.files.get("/state/no-nl.json")).toBe(JSON.stringify({ a: 1 }));
+	});
+
 	test("write() rejects a non-JSON-serializable value without touching the filesystem", async () => {
 		const fs = createFakeFs();
 		const writer = createAtomicJsonWriter({ fs });

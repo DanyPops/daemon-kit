@@ -31,6 +31,8 @@ export interface AtomicJsonWriteOptions {
 	readonly mode?: number;
 	/** Pretty-prints with 2-space indentation (matching JSON.stringify(value, null, 2)) for a human-editable file. Defaults to false (compact). */
 	readonly pretty?: boolean;
+	/** Appends a trailing "\n" -- the common POSIX text-file convention. Defaults to false (exact JSON.stringify output, unchanged). */
+	readonly trailingNewline?: boolean;
 }
 
 export interface AtomicJsonWriterOptions {
@@ -118,6 +120,7 @@ export function createAtomicJsonWriter(options: AtomicJsonWriterOptions): Atomic
 				throw new Error(`atomic-json: value for ${filePath} is not JSON-serializable`, { cause: error });
 			}
 			if (serialized === undefined) throw new Error(`atomic-json: value for ${filePath} is not JSON-serializable`);
+			if (options?.trailingNewline) serialized += "\n";
 			const { dir, base } = dirAndBase(filePath);
 			const tempPath = `${dir}/.${base}.${pid()}.${now()}.${random()}.tmp`;
 			await fsAdapter.writeFile(tempPath, serialized, options?.mode);
