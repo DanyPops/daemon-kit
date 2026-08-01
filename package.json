@@ -6,7 +6,7 @@
 	"scripts": {
 		"build": "bun run --cwd packages/vehicle-core build && bun run --cwd packages/vehicle-server build && bun run --cwd packages/vehicle-client build && bun run --cwd packages/vehicle-client-pi build",
 		"test": "bun run build && bun test packages/*/test scripts/test",
-		"typecheck": "for p in packages/*/; do (cd \"$p\" && bunx tsc --noEmit) || exit 1; done",
+		"typecheck": "bun run build && for p in packages/*/; do (cd \"$p\" && bunx tsc --noEmit) || exit 1; done",
 		"format": "biome format --write .",
 		"lint": "biome lint . && eslint packages --max-warnings 0",
 		"check": "biome check --write . && eslint packages --max-warnings 0"
