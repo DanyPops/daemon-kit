@@ -26,7 +26,7 @@
 	"dependencies": {
 		"@danypops/vehicle-core": "workspace:*",
 		"@danypops/vehicle-server": "workspace:*",
-		"malevich-tui-components": "^0.2.0"
+		"malevich-tui-components": "^0.16.1"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-agent-core": "*",
