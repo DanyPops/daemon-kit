@@ -17,6 +17,9 @@ import { VehicleError, extractVehicleContent } from "@danypops/vehicle-core";
 import { guardExtensionRuntimeInitialized, syncManagedActiveTools } from "./pi-tool-availability.js";
 import { renderVehicleCall, renderVehicleResult } from "./vehicle-render.js";
 
+// Re-exported so a custom `renderers` override can fall back to the default for shapes it doesn't handle.
+export { renderVehicleCall, renderVehicleResult } from "./vehicle-render.js";
+
 export interface PiVehicleIdentity {
 	readonly name: string;
 	readonly version: string;
