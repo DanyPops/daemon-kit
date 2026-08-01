@@ -25,7 +25,9 @@ export type VehicleCoreErrorCode =
 	| "policy-failed"
 	| "idempotency-key-required"
 	| "client-closed"
-	| "operation-unavailable";
+	| "operation-unavailable"
+	| "background-not-supported"
+	| "job-not-found";
 
 export interface VehicleRecovery {
 	readonly operation?: string;

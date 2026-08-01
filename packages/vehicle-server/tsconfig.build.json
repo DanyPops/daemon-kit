@@ -11,5 +11,5 @@
 		"outDir": "dist",
 		"rootDir": "src"
 	},
-	"include": ["src/vehicle-registry.ts", "src/vehicle-http-provider.ts"]
+	"include": ["src/vehicle-registry.ts", "src/vehicle-http-provider.ts", "src/vehicle-job-store.ts"]
 }

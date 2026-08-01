@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+	VehicleBackgroundCapability,
 	VehicleInvocationOptions,
 	VehicleManifest,
 	VehicleManifestIdentity,
@@ -149,6 +150,25 @@ function enforcePayloadSize(value: unknown, maxBytes: number, kind: "request" | 
 interface AvailabilityState {
 	readonly available: boolean;
 	readonly reason?: string;
+}
+
+export interface VehicleBackgroundResolutionOptions {
+	readonly operationId?: string;
+	readonly correlationId?: string;
+	readonly permissions?: readonly string[];
+	readonly principal?: VehiclePrincipal;
+	readonly idempotencyKey?: string;
+	readonly expectedRevision?: string | number;
+	readonly approvalCapability?: string;
+}
+
+/** Everything VehicleJobStore needs to run a background op detached: validated descriptor/capability, parsed input, and a run() that validates the result like invoke() does. */
+export interface VehicleBackgroundResolution {
+	readonly descriptor: VehicleOperationDescriptor;
+	readonly background: VehicleBackgroundCapability;
+	readonly operationId: string;
+	readonly parsedInput: unknown;
+	run(context: VehicleOperationContext<unknown>): Promise<unknown>;
 }
 
 export class VehicleRegistry {
@@ -339,5 +359,72 @@ export class VehicleRegistry {
 		const output = await awaitWithSignal(pending, signal, deadline, operationId);
 		enforcePayloadSize(output, registration.descriptor.limits.maxResponseBytes, "response", key, operationId);
 		return registration.parseOutput(output, operationId);
+	}
+
+	/** Same validation as invoke(), minus awaiting the handler -- the seam VehicleJobStore needs. Kept separate so it can't regress invoke()'s tested behavior. */
+	resolveForBackground(
+		name: string,
+		version: number,
+		input: unknown,
+		options: VehicleBackgroundResolutionOptions = {},
+	): VehicleBackgroundResolution {
+		const operationId = options.operationId ?? randomUUID();
+		const key = operationKey(name, version);
+		const registration = this.registrations.get(key);
+		if (!registration) {
+			throw new VehicleError("not-found", `No Vehicle operation is registered for ${key}`, { category: "not_found", operationId });
+		}
+		const background = registration.descriptor.background;
+		if (!background) {
+			throw new VehicleError("background-not-supported", `${key} does not support background execution`, {
+				category: "validation",
+				operationId,
+			});
+		}
+		const availability = this.availability.get(key);
+		if (availability?.available === false) {
+			throw new VehicleError("operation-unavailable", availability.reason ?? `${key} is currently unavailable`, {
+				category: "unavailable",
+				operationId,
+				retryable: true,
+			});
+		}
+
+		enforcePayloadSize(input, registration.descriptor.limits.maxRequestBytes, "request", key, operationId);
+		const granted = new Set(options.permissions ?? []);
+		const missing = registration.descriptor.permissions.filter((permission) => !granted.has(permission));
+		if (missing.length > 0) {
+			throw new VehicleError("permission-denied", `${key} requires permissions: ${missing.join(", ")}`, {
+				category: "authorization",
+				operationId,
+				details: { missing },
+			});
+		}
+		if (registration.descriptor.idempotency.mode === "keyed" && !options.idempotencyKey?.trim()) {
+			throw new VehicleError("idempotency-key-required", `${key} requires an idempotency key`, {
+				category: "validation",
+				operationId,
+			});
+		}
+		const parsedInput = registration.parseInput(input, operationId);
+
+		return Object.freeze({
+			descriptor: registration.descriptor,
+			background,
+			operationId,
+			parsedInput,
+			run: async (context: VehicleOperationContext<unknown>): Promise<unknown> => {
+				let output: unknown;
+				try {
+					output = await registration.invoke(parsedInput, context);
+				} catch (error) {
+					if (error instanceof VehicleError) throw error;
+					if (context.signal.aborted) throw abortError(context.signal, context.deadline, operationId);
+					throw new VehicleError("handler-failed", `${key} handler failed`, { category: "internal", operationId, cause: error });
+				}
+				enforcePayloadSize(output, registration.descriptor.limits.maxResponseBytes, "response", key, operationId);
+				return registration.parseOutput(output, operationId);
+			},
+		});
 	}
 }

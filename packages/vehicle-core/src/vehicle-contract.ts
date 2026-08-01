@@ -1,3 +1,5 @@
+import type { VehicleJobWakeBudget } from "./vehicle-jobs.js";
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 export type JsonSchema = Readonly<Record<string, JsonValue>>;
@@ -137,6 +139,13 @@ export interface VehicleFailureDescriptor {
 	readonly description: string;
 }
 
+/** Declares an operation safe to run as a Vehicle Job (detached, polled/tailed/canceled by id). Absent means live-invoke only. */
+export interface VehicleBackgroundCapability {
+	readonly supported: true;
+	readonly defaultWakeBudget: VehicleJobWakeBudget;
+	readonly maxWakeBudget: VehicleJobWakeBudget;
+}
+
 export interface VehicleOperationDescriptor {
 	readonly name: string;
 	readonly version: number;
@@ -150,6 +159,7 @@ export interface VehicleOperationDescriptor {
 	readonly longRunning: boolean;
 	readonly limits: VehicleLimits;
 	readonly errors: readonly VehicleFailureDescriptor[];
+	readonly background?: VehicleBackgroundCapability;
 }
 
 export interface VehicleOperation<Input, Output> {
@@ -171,6 +181,7 @@ export interface DefineVehicleOperationOptions<Input, Output> {
 	readonly longRunning?: boolean;
 	readonly limits: VehicleLimits;
 	readonly errors?: readonly VehicleFailureDescriptor[];
+	readonly background?: VehicleBackgroundCapability;
 }
 
 export interface VehiclePrincipal {
@@ -260,6 +271,15 @@ export function defineVehicleOperation<Input, Output>(
 		longRunning: options.longRunning ?? false,
 		limits: Object.freeze({ ...options.limits }),
 		errors: Object.freeze((options.errors ?? []).map((failure) => Object.freeze({ ...failure }))),
+		...(options.background
+			? {
+					background: Object.freeze({
+						supported: true as const,
+						defaultWakeBudget: Object.freeze({ ...options.background.defaultWakeBudget }),
+						maxWakeBudget: Object.freeze({ ...options.background.maxWakeBudget }),
+					}),
+				}
+			: {}),
 	});
 	return Object.freeze({ descriptor, input: options.input, output: options.output });
 }
@@ -292,6 +312,28 @@ function validateOperationMetadata<Input, Output>(options: DefineVehicleOperatio
 		(!Number.isSafeInteger(options.idempotency.retentionMs) || options.idempotency.retentionMs < 1)
 	) {
 		throw new Error("Vehicle keyed idempotency retentionMs must be a positive integer");
+	}
+	if (options.background) {
+		if (!options.longRunning) {
+			throw new Error("Vehicle operation with a background capability must also set longRunning: true");
+		}
+		for (const [budgetName, budget] of [
+			["defaultWakeBudget", options.background.defaultWakeBudget],
+			["maxWakeBudget", options.background.maxWakeBudget],
+		] as const) {
+			if (!Number.isSafeInteger(budget.maxCount) || budget.maxCount < 1) {
+				throw new Error(`Vehicle operation background.${budgetName}.maxCount must be a positive integer`);
+			}
+			if (!Number.isSafeInteger(budget.maxBytes) || budget.maxBytes < 1) {
+				throw new Error(`Vehicle operation background.${budgetName}.maxBytes must be a positive integer`);
+			}
+		}
+		if (options.background.defaultWakeBudget.maxCount > options.background.maxWakeBudget.maxCount) {
+			throw new Error("Vehicle operation background.defaultWakeBudget.maxCount must not exceed maxWakeBudget.maxCount");
+		}
+		if (options.background.defaultWakeBudget.maxBytes > options.background.maxWakeBudget.maxBytes) {
+			throw new Error("Vehicle operation background.defaultWakeBudget.maxBytes must not exceed maxWakeBudget.maxBytes");
+		}
 	}
 }
 
