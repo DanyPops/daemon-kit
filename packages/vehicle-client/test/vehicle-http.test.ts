@@ -2,7 +2,22 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { bindVehicleOperation, defineVehicleOperation, defineVehicleSchema, type JsonValue, VehicleError } from "@danypops/vehicle-core";
 import { VehicleRegistry } from "@danypops/vehicle-server";
 import { createVehicleHttpApp } from "@danypops/vehicle-server/http";
+import type { Logger } from "@danypops/vehicle-server/logging";
 import { RemoteVehicleClient } from "../src/vehicle-http-client.ts";
+
+interface CapturedLog {
+	level: "debug" | "info" | "warn" | "error";
+	msg: string;
+	fields?: Record<string, unknown>;
+}
+
+function createCapturingLogger(): { logger: Logger; calls: CapturedLog[] } {
+	const calls: CapturedLog[] = [];
+	const capture = (level: CapturedLog["level"]) => (msg: string, fields?: Record<string, unknown>) => {
+		calls.push({ level, msg, fields });
+	};
+	return { logger: { debug: capture("debug"), info: capture("info"), warn: capture("warn"), error: capture("error") }, calls };
+}
 
 const objectSchema = <T extends Record<string, unknown>>(properties: Record<string, JsonValue>, parse: (value: unknown) => T | undefined) =>
 	defineVehicleSchema<T>({
@@ -81,7 +96,7 @@ afterEach(() => {
 	server = undefined;
 });
 
-function startTestServer(): { baseUrl: string; token: string; registry: VehicleRegistry } {
+function startTestServer(options: { logger?: Logger } = {}): { baseUrl: string; token: string; registry: VehicleRegistry } {
 	const token = "test-token";
 	const registry = new VehicleRegistry({ name: "test-vehicle", version: "1.0.0", description: "Test Vehicle" });
 	registry.register(
@@ -111,7 +126,7 @@ function startTestServer(): { baseUrl: string; token: string; registry: VehicleR
 			});
 		}),
 	);
-	const app = createVehicleHttpApp({ registry, token });
+	const app = createVehicleHttpApp({ registry, token, logger: options.logger });
 	server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: app.fetch });
 	return { baseUrl: `http://127.0.0.1:${server.port}`, token, registry };
 }
@@ -202,5 +217,45 @@ describe("Vehicle HTTP provider + RemoteVehicleClient: local/HTTP parity", () =>
 		const client = new RemoteVehicleClient({ baseUrl, token });
 		await client.close();
 		await expect(client.manifest()).rejects.toThrow("closed");
+	});
+});
+
+describe("Vehicle HTTP provider: failure logging", () => {
+	it("logs a failed non-streaming invocation's real code/category/message and cause, not just a sanitized wire payload", async () => {
+		const { logger, calls } = createCapturingLogger();
+		const { baseUrl, token } = startTestServer({ logger });
+		const client = new RemoteVehicleClient({ baseUrl, token });
+		await expect(client.invoke("test.boom", 1, { value: "x" }, {})).rejects.toThrow();
+
+		const errorCalls = calls.filter((c) => c.level === "error");
+		expect(errorCalls).toHaveLength(1);
+		expect(errorCalls[0]?.msg).toBe("vehicle invoke failed: test.boom@1");
+		expect(errorCalls[0]?.fields).toMatchObject({ code: "boom", category: "internal", message: "always fails" });
+	});
+
+	it("logs a failed streaming (onProgress) invocation the same way as the plain JSON path", async () => {
+		const { logger, calls } = createCapturingLogger();
+		const { baseUrl, token } = startTestServer({ logger });
+		const client = new RemoteVehicleClient({ baseUrl, token });
+		await expect(client.invoke("test.boom", 1, { value: "x" }, { onProgress: () => {} })).rejects.toThrow();
+
+		const errorCalls = calls.filter((c) => c.level === "error");
+		expect(errorCalls).toHaveLength(1);
+		expect(errorCalls[0]?.msg).toBe("vehicle invoke failed: test.boom@1");
+		expect(errorCalls[0]?.fields).toMatchObject({ code: "boom", category: "internal", message: "always fails" });
+	});
+
+	it("never logs anything for a successful invocation", async () => {
+		const { logger, calls } = createCapturingLogger();
+		const { baseUrl, token } = startTestServer({ logger });
+		const client = new RemoteVehicleClient({ baseUrl, token });
+		await client.invoke("test.echo", 1, { value: "x" }, { permissions: ["test:echo"] });
+		expect(calls).toHaveLength(0);
+	});
+
+	it("defaults to a no-op logger when none is supplied -- no behavior change, and never throws from logging itself", async () => {
+		const { baseUrl, token } = startTestServer();
+		const client = new RemoteVehicleClient({ baseUrl, token });
+		await expect(client.invoke("test.boom", 1, { value: "x" }, {})).rejects.toThrow("always fails");
 	});
 });

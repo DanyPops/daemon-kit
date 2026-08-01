@@ -29,13 +29,25 @@ import { randomUUID } from "node:crypto";
 import type { VehicleFailure, VehicleFailureCategory, VehicleInvocationOptions, VehiclePrincipal } from "@danypops/vehicle-core";
 import { VehicleError } from "@danypops/vehicle-core";
 import { errorResponse, jsonResponse, requireBearerToken } from "./http.js";
+import type { Logger } from "./logging.js";
 import type { VehicleRegistry } from "./vehicle-registry.js";
 
 const UNAUTHORIZED_RESPONSE: Response = errorResponse("unauthorized", 401);
 
+const NOOP_LOGGER: Logger = { debug() {}, info() {}, warn() {}, error() {} };
+
 export interface VehicleHttpProviderOptions {
 	registry: VehicleRegistry;
 	token: string;
+	/**
+	 * Defaults to a no-op logger. Without one, a failed invocation is sanitized
+	 * into a wire-safe VehicleFailure (code/category/message only, per this
+	 * house's own "never leak internals over the wire" discipline) and returned
+	 * to the caller -- but the real cause (a handler's own thrown error,
+	 * including its stack) is otherwise discarded the moment this function
+	 * returns, unrecoverable from any log. Pass a real logger to keep it.
+	 */
+	logger?: Logger;
 }
 
 interface InvokeRequestBody {
@@ -80,8 +92,27 @@ function toFailurePayload(error: unknown): VehicleFailure {
 	return { code: "internal", category: "internal", message: "internal error", retryable: false };
 }
 
+/**
+ * Logs the real, unsanitized cause of a failed invocation before it's
+ * reduced to a wire-safe VehicleFailure -- the sanitized payload alone
+ * (e.g. "tasks.complete@1 handler failed") names which operation failed but
+ * never why; the operator-facing side of that same failure needs the
+ * underlying error/stack this function preserves.
+ */
+function logInvokeFailure(logger: Logger, name: string, version: number, operationId: string, error: unknown): void {
+	const cause = error instanceof VehicleError ? error.cause : undefined;
+	logger.error(`vehicle invoke failed: ${name}@${version}`, {
+		operationId,
+		code: error instanceof VehicleError ? error.code : undefined,
+		category: error instanceof VehicleError ? error.category : undefined,
+		message: error instanceof Error ? error.message : String(error),
+		cause: cause instanceof Error ? (cause.stack ?? cause.message) : cause !== undefined ? String(cause) : undefined,
+	});
+}
+
 export function createVehicleHttpApp(options: VehicleHttpProviderOptions): { fetch(request: Request): Promise<Response> } {
 	const inFlight = new Map<string, AbortController>();
+	const logger = options.logger ?? NOOP_LOGGER;
 
 	return {
 		async fetch(request: Request): Promise<Response> {
@@ -104,7 +135,7 @@ export function createVehicleHttpApp(options: VehicleHttpProviderOptions): { fet
 			}
 
 			if (request.method === "POST" && url.pathname === "/vehicle/invoke") {
-				return handleInvoke(request, options.registry, inFlight);
+				return handleInvoke(request, options.registry, inFlight, logger);
 			}
 
 			return errorResponse("not found", 404);
@@ -112,7 +143,12 @@ export function createVehicleHttpApp(options: VehicleHttpProviderOptions): { fet
 	};
 }
 
-async function handleInvoke(request: Request, registry: VehicleRegistry, inFlight: Map<string, AbortController>): Promise<Response> {
+async function handleInvoke(
+	request: Request,
+	registry: VehicleRegistry,
+	inFlight: Map<string, AbortController>,
+	logger: Logger,
+): Promise<Response> {
 	let body: InvokeRequestBody;
 	try {
 		body = (await request.json()) as InvokeRequestBody;
@@ -142,13 +178,14 @@ async function handleInvoke(request: Request, registry: VehicleRegistry, inFligh
 	const wantsStream = (request.headers.get("accept") ?? "").includes("text/event-stream");
 
 	if (wantsStream) {
-		return streamInvoke(registry, body.name, body.version, body.input, invocationOptions, () => inFlight.delete(operationId));
+		return streamInvoke(registry, body.name, body.version, body.input, invocationOptions, logger, () => inFlight.delete(operationId));
 	}
 
 	try {
 		const output = await registry.invoke(body.name, body.version, body.input, invocationOptions);
 		return jsonResponse({ output, operationId });
 	} catch (error) {
+		logInvokeFailure(logger, body.name, body.version, operationId, error);
 		const failure = toFailurePayload(error);
 		return jsonResponse({ error: failure, operationId }, { status: statusForCategory(failure.category) });
 	} finally {
@@ -162,6 +199,7 @@ function streamInvoke(
 	version: number,
 	input: unknown,
 	invocationOptions: VehicleInvocationOptions,
+	logger: Logger,
 	cleanup: () => void,
 ): Response {
 	const encoder = new TextEncoder();
@@ -178,6 +216,7 @@ function streamInvoke(
 					cleanup();
 				},
 				(error: unknown) => {
+					logInvokeFailure(logger, name, version, invocationOptions.operationId ?? "unknown", error);
 					controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify(toFailurePayload(error))}\n\n`));
 					controller.close();
 					cleanup();
