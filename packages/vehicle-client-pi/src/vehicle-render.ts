@@ -5,11 +5,10 @@ import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
 	CollapsibleText,
-	type DerivedTable,
 	deriveTableColumns,
 	firstDistinctStyle,
 	ProgressBar,
-	Table,
+	renderBoundedTable,
 	Text,
 	type TextMeasure,
 } from "malevich-tui-components";
@@ -75,45 +74,11 @@ export function renderVehicleCall(
 	return new Text({ text: effectStyle(theme, descriptor.effect, line), measure });
 }
 
-/** Rows beyond this default render as a truncation note instead of an ever-taller table -- a generic renderer has no schema-level sense of "how much of this array actually matters," so it borrows the same order-of-magnitude default several of Lector's own list renderers use (files/matches). Resolved here, at the Vehicle client, from Pi's own tool-row `expanded` flag -- the identical mechanism Lector's own renderers already key off, not a second, Vehicle-specific toggle. */
+/** Rows beyond this default render as a truncation note (via Malevich's renderBoundedTable) instead of an ever-taller table -- a generic renderer has no schema-level sense of "how much of this array actually matters," so it borrows the same order-of-magnitude default several of Lector's own list renderers use (files/matches). Resolved here, at the Vehicle client, from Pi's own tool-row `expanded` flag -- the identical mechanism Lector's own renderers already key off, not a second, Vehicle-specific toggle. */
 const DEFAULT_VISIBLE_ROWS = 20;
 
-/** A Table plus one appended, width-truncated footer line -- Malevich has no generic vertical-stack primitive, and this composition (one Table, one plain trailing note) is specific enough to Vehicle's generic row-bounding that it doesn't warrant becoming one yet. */
-class TableWithFooter implements Component {
-	constructor(
-		private readonly table: Table,
-		private readonly footerLine: string,
-	) {}
-
-	invalidate(): void {
-		this.table.invalidate();
-	}
-
-	render(width: number): string[] {
-		return [...this.table.render(width), truncateToWidth(this.footerLine, width)];
-	}
-}
-
-/**
- * Bounds a derived table's rows to DEFAULT_VISIBLE_ROWS unless Pi's own
- * `expanded` flag says otherwise, appending a "... N more (expand)" note --
- * the same truncation shape Malevich's own renderTruncatedList codifies,
- * reimplemented directly here rather than called through it: that helper
- * produces formatted STRING lines one-for-one with its items, but Table
- * needs the real, unformatted row objects it wasn't truncated away from, so
- * there's no item-to-string mapping for it to usefully do here.
- */
-function boundedTable(rows: Record<string, string>[], table: Omit<DerivedTable, "rows">, expanded: boolean, theme: Theme): Component {
-	const displayCount = expanded ? rows.length : Math.min(DEFAULT_VISIBLE_ROWS, rows.length);
-	const visibleRows = rows.slice(0, displayCount);
-	const built = new Table({ ...table, rows: visibleRows, headerStyle: (s) => theme.fg("muted", theme.bold(s)), measure });
-	const hiddenCount = rows.length - displayCount;
-	if (hiddenCount <= 0) return built;
-	const footer = theme.fg(
-		"dim",
-		`... ${hiddenCount} more row${hiddenCount === 1 ? "" : "s"} (${keyHint("app.tools.expand", "to expand")})`,
-	);
-	return new TableWithFooter(built, footer);
+function moreRowsLine(theme: Theme, hiddenCount: number): string {
+	return theme.fg("dim", `... ${hiddenCount} more row${hiddenCount === 1 ? "" : "s"} (${keyHint("app.tools.expand", "to expand")})`);
 }
 
 /** Best-effort duck-typing over an untyped Vehicle progress payload: {current,total} or {value,max} render as a bar, anything else falls back to a plain line. */
@@ -158,7 +123,14 @@ export function renderVehicleResult(
 	}
 	const table = Array.isArray(output) ? deriveTableColumns(output) : undefined;
 	if (table) {
-		return boundedTable(table.rows, { columns: table.columns }, options.expanded, theme);
+		return renderBoundedTable({
+			...table,
+			expanded: options.expanded,
+			visibleRowCount: DEFAULT_VISIBLE_ROWS,
+			moreLine: (hiddenCount) => moreRowsLine(theme, hiddenCount),
+			headerStyle: (s) => theme.fg("muted", theme.bold(s)),
+			measure,
+		});
 	}
 
 	const text = JSON.stringify(output, null, 2) ?? "null";
