@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	DEFAULT_AUTO_SPAWN_IDLE_BUDGET_MS,
 	DaemonAlreadyRunningError,
+	DEFAULT_AUTO_SPAWN_IDLE_BUDGET_MS,
+	type RunningDaemon,
 	readLaunchProvenance,
 	resolveIdleBudgetMs,
 	runDaemonProcess,
 	startDaemon,
-	type RunningDaemon,
 } from "../src/daemon.ts";
 import { readDaemonHandle } from "../src/paths.ts";
 
@@ -25,11 +25,15 @@ afterEach(async () => {
 });
 
 function trivialApp() {
-	return { async fetch() { return new Response("ok"); } };
+	return {
+		async fetch() {
+			return new Response("ok");
+		},
+	};
 }
 
 describe("readLaunchProvenance / resolveIdleBudgetMs", () => {
-	it("reads a known provenance value from env, and \"unknown\" for anything else", () => {
+	it('reads a known provenance value from env, and "unknown" for anything else', () => {
 		expect(readLaunchProvenance({ DAEMON_KIT_LAUNCH_PROVENANCE: "auto-spawn" })).toBe("auto-spawn");
 		expect(readLaunchProvenance({ DAEMON_KIT_LAUNCH_PROVENANCE: "service" })).toBe("service");
 		expect(readLaunchProvenance({ DAEMON_KIT_LAUNCH_PROVENANCE: "garbage" })).toBe("unknown");
@@ -91,8 +95,20 @@ describe("startDaemon", () => {
 			buildApp: trivialApp,
 			logger: { debug() {}, info() {}, warn() {}, error: (msg) => errors.push(msg) },
 			maintenanceTasks: [
-				{ name: "good", intervalMs: 5, run: () => { goodRuns++; } },
-				{ name: "bad", intervalMs: 5, run: () => { throw new Error("boom"); } },
+				{
+					name: "good",
+					intervalMs: 5,
+					run: () => {
+						goodRuns++;
+					},
+				},
+				{
+					name: "bad",
+					intervalMs: 5,
+					run: () => {
+						throw new Error("boom");
+					},
+				},
 			],
 		});
 		await new Promise((resolve) => setTimeout(resolve, 40));
@@ -119,8 +135,21 @@ describe("startDaemon", () => {
 				buildApp: trivialApp,
 				logger: { debug() {}, info() {}, warn() {}, error: (msg) => errors.push(msg) },
 				maintenanceTasks: [
-					{ name: "good", intervalMs: 5, run: () => { goodRuns++; } },
-					{ name: "bad-async", intervalMs: 5, run: async () => { await Promise.resolve(); throw new Error("async boom"); } },
+					{
+						name: "good",
+						intervalMs: 5,
+						run: () => {
+							goodRuns++;
+						},
+					},
+					{
+						name: "bad-async",
+						intervalMs: 5,
+						run: async () => {
+							await Promise.resolve();
+							throw new Error("async boom");
+						},
+					},
 				],
 			});
 			await new Promise((resolve) => setTimeout(resolve, 40));
@@ -136,7 +165,14 @@ describe("startDaemon", () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
 		let shutdowns = 0;
-		daemon = await startDaemon({ daemonLabel: "Acme", handlePath, buildApp: trivialApp, onShutdown: () => { shutdowns++; } });
+		daemon = await startDaemon({
+			daemonLabel: "Acme",
+			handlePath,
+			buildApp: trivialApp,
+			onShutdown: () => {
+				shutdowns++;
+			},
+		});
 		await daemon.stop();
 		await daemon.stop();
 		expect(shutdowns).toBe(1);

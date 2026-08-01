@@ -1,18 +1,18 @@
 import { describe, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-	LOOPBACK_HOST,
 	acquireDaemonLock,
 	ensureAuthToken,
+	LOOPBACK_HOST,
 	readDaemonHandle,
 	releaseDaemonLock,
 	removeDaemonHandle,
 	resolveDaemonPaths,
 	writeDaemonHandle,
 } from "../src/paths.ts";
-import { spawnSync } from "node:child_process";
 
 const NAMES = {
 	stateDirectoryName: "acme-daemon",

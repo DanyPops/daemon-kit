@@ -1,6 +1,6 @@
+import { RemoteVehicleClient } from "@danypops/vehicle-client/http";
 import { VehicleRegistry } from "@danypops/vehicle-server";
 import { createVehicleHttpApp } from "@danypops/vehicle-server/http";
-import { RemoteVehicleClient } from "@danypops/vehicle-client/http";
 import { registerConformanceOperations, runVehicleClientConformance } from "../src/vehicle-conformance.ts";
 
 runVehicleClientConformance({

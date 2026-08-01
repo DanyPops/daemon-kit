@@ -3,7 +3,15 @@ import { createLogger } from "../src/logging.ts";
 
 function capture() {
 	const lines: string[] = [];
-	return { lines, destination: { write: (chunk: string) => { lines.push(chunk); return true; } } };
+	return {
+		lines,
+		destination: {
+			write: (chunk: string) => {
+				lines.push(chunk);
+				return true;
+			},
+		},
+	};
 }
 
 describe("createLogger", () => {

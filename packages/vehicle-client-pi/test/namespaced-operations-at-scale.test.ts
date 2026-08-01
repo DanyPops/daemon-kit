@@ -16,9 +16,15 @@
  * action words (`notes.create` vs `tasks.create`).
  */
 import { describe, expect, it } from "bun:test";
+import type {
+	VehicleClient,
+	VehicleEffect,
+	VehicleInvocationOptions,
+	VehicleManifest,
+	VehicleManifestOperation,
+} from "@danypops/vehicle-core";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { registerVehicleTools } from "../src/vehicle-pi.ts";
-import type { VehicleClient, VehicleEffect, VehicleInvocationOptions, VehicleManifest, VehicleManifestOperation } from "@danypops/vehicle-core";
 
 const limits = { defaultTimeoutMs: 1_000, maxTimeoutMs: 5_000, maxRequestBytes: 1_024, maxResponseBytes: 1_024 };
 

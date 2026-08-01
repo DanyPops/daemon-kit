@@ -7,8 +7,9 @@
  * dependency, which is why this file is its own subpath (./local) rather
  * than folded into a shared barrel.
  */
-import { VehicleError } from "@danypops/vehicle-core";
+
 import type { VehicleClient, VehicleInvocationOptions, VehicleManifest } from "@danypops/vehicle-core";
+import { VehicleError } from "@danypops/vehicle-core";
 import type { VehicleRegistry } from "@danypops/vehicle-server";
 
 export class LocalVehicleClient implements VehicleClient {
@@ -28,12 +29,7 @@ export class LocalVehicleClient implements VehicleClient {
 		return this.registry.manifest();
 	}
 
-	async invoke<Output = unknown>(
-		name: string,
-		version: number,
-		input: unknown,
-		options?: VehicleInvocationOptions,
-	): Promise<Output> {
+	async invoke<Output = unknown>(name: string, version: number, input: unknown, options?: VehicleInvocationOptions): Promise<Output> {
 		this.ensureOpen();
 		return (await this.registry.invoke(name, version, input, options)) as Output;
 	}

@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { PushChannel } from "@danypops/vehicle-server/push-channel";
-import { connectPushChannel, connectWithPolicy, connectWithVersionCheck, createRetryingClient, daemonStatus, type DaemonHandleLike, isLikelyStaleConnectionError, spawnDetachedDaemon, type SpawnPlatformOptions } from "../src/daemon-client.ts";
+import {
+	connectPushChannel,
+	connectWithPolicy,
+	connectWithVersionCheck,
+	createRetryingClient,
+	type DaemonHandleLike,
+	daemonStatus,
+	isLikelyStaleConnectionError,
+	type SpawnPlatformOptions,
+	spawnDetachedDaemon,
+} from "../src/daemon-client.ts";
 
 class FakeClient {
 	constructor(public readonly id: number) {}
@@ -360,8 +370,14 @@ describe("connectPushChannel", () => {
 		const deadline = Date.now() + timeoutMs;
 		return new Promise((resolve, reject) => {
 			const tick = (): void => {
-				if (predicate()) return resolve();
-				if (Date.now() > deadline) return reject(new Error("waitFor timed out"));
+				if (predicate()) {
+					resolve();
+					return;
+				}
+				if (Date.now() > deadline) {
+					reject(new Error("waitFor timed out"));
+					return;
+				}
 				setTimeout(tick, 5);
 			};
 			tick();
@@ -429,7 +445,8 @@ describe("connectPushChannel", () => {
 				FakeWebSocket.instances.push(this);
 			}
 			addEventListener(type: string, handler: (event: unknown) => void): void {
-				(this.listeners[type] ??= []).push(handler);
+				this.listeners[type] ??= [];
+				this.listeners[type].push(handler);
 			}
 			send(): void {}
 			close(): void {
@@ -482,7 +499,8 @@ describe("connectPushChannel", () => {
 				FakeWebSocket.instances.push(this);
 			}
 			addEventListener(type: string, handler: (event: unknown) => void): void {
-				(this.listeners[type] ??= []).push(handler);
+				this.listeners[type] ??= [];
+				this.listeners[type].push(handler);
 			}
 			send(): void {
 				// A completely unresponsive peer: never answers a ping with a pong,
@@ -610,7 +628,6 @@ describe("connectWithVersionCheck", () => {
 	it("kills and replaces a version-mismatched daemon transparently, returning the fresh client", async () => {
 		let currentHandle: DaemonHandleLike | null = FAKE_HANDLE;
 		let spawnCalls = 0;
-		let killCalls = 0;
 		let shutdownRequests = 0;
 
 		const client = await connectWithVersionCheck<DaemonHandleLike, VersionedFakeClient>(
@@ -631,9 +648,7 @@ describe("connectWithVersionCheck", () => {
 					shutdownRequests++;
 					currentHandle = null; // graceful shutdown clears the handle immediately
 				},
-				killStaleProcess: () => {
-					killCalls++;
-				},
+				killStaleProcess: () => {},
 				shutdownPollIntervalMs: 1,
 			},
 		);

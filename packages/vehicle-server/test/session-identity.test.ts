@@ -5,22 +5,30 @@ import {
 	isSessionRegistered,
 	registerSessionIdentity,
 	releaseSessionIdentity,
-	secretMatches,
-	verifySessionSecret,
 	type SessionIdentityRecord,
 	type SessionIdentityStore,
+	secretMatches,
+	verifySessionSecret,
 } from "../src/session-identity.ts";
 
 class InMemorySessionIdentityStore implements SessionIdentityStore {
 	private rows = new Map<string, SessionIdentityRecord>();
-	find(sessionId: string): SessionIdentityRecord | undefined { return this.rows.get(sessionId); }
-	upsert(record: SessionIdentityRecord): void { this.rows.set(record.sessionId, record); }
-	remove(sessionId: string): void { this.rows.delete(sessionId); }
+	find(sessionId: string): SessionIdentityRecord | undefined {
+		return this.rows.get(sessionId);
+	}
+	upsert(record: SessionIdentityRecord): void {
+		this.rows.set(record.sessionId, record);
+	}
+	remove(sessionId: string): void {
+		this.rows.delete(sessionId);
+	}
 	touch(sessionId: string, lastSeenAt: string): void {
 		const existing = this.rows.get(sessionId);
 		if (existing) this.rows.set(sessionId, { ...existing, lastSeenAt });
 	}
-	count(): number { return this.rows.size; }
+	count(): number {
+		return this.rows.size;
+	}
 }
 
 describe("generateSessionSecret / hashSessionSecret / secretMatches", () => {

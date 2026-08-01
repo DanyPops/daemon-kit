@@ -18,8 +18,8 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PushChannel } from "../dist/push-channel.js";
 import { startDaemon } from "../dist/daemon.js";
+import { PushChannel } from "../dist/push-channel.js";
 
 describe("PushChannel <-> startDaemon type identity", () => {
 	it("a PushChannel built through the public export assigns to startDaemon's pushChannel option with no cast, and works end to end", async () => {
@@ -29,23 +29,34 @@ describe("PushChannel <-> startDaemon type identity", () => {
 		const daemon = await startDaemon({
 			daemonLabel: "PushIdentityCheck",
 			handlePath: join(dir, "handle.json"),
-			buildApp: () => ({ async fetch() { return new Response("ok"); } }),
+			buildApp: () => ({
+				async fetch() {
+					return new Response("ok");
+				},
+			}),
 			pushChannel, // <-- the actual proof: no cast, no `as unknown as`, nothing.
 		});
 		try {
 			const ws = new WebSocket(`ws://127.0.0.1:${daemon.port}/push?token=identity-check-token`);
 			await new Promise<void>((resolve, reject) => {
 				const timeout = setTimeout(() => reject(new Error("timed out waiting for open")), 5_000);
-				ws.addEventListener("open", () => { clearTimeout(timeout); resolve(); });
+				ws.addEventListener("open", () => {
+					clearTimeout(timeout);
+					resolve();
+				});
 			});
 			ws.send(JSON.stringify({ op: "subscribe", topic: "identity" }));
 
 			const messageArrived = new Promise<{ topic: string; payload: unknown }>((resolve, reject) => {
 				const timeout = setTimeout(() => reject(new Error("timed out waiting for a push message")), 5_000);
-				ws.addEventListener("message", (event) => {
-					clearTimeout(timeout);
-					resolve(JSON.parse(String(event.data)));
-				}, { once: true });
+				ws.addEventListener(
+					"message",
+					(event) => {
+						clearTimeout(timeout);
+						resolve(JSON.parse(String(event.data)));
+					},
+					{ once: true },
+				);
 			});
 			// Give the subscribe control message a moment to be processed before publishing.
 			await new Promise((resolve) => setTimeout(resolve, 50));

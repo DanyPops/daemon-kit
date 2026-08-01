@@ -4,8 +4,8 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFileStore } from "@danypops/vehicle-server/vault";
-import { createLocalSecretsBackend } from "../src/secrets-backend-local.ts";
 import { SecretsBackendUnsupportedOperationError } from "../src/secrets-backend.ts";
+import { createLocalSecretsBackend } from "../src/secrets-backend-local.ts";
 
 function tmpDir(): string {
 	return mkdtempSync(join(tmpdir(), "daemon-kit-secrets-local-"));
@@ -48,7 +48,12 @@ describe("createLocalSecretsBackend: plaintext", () => {
 		try {
 			const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
 			createFileStore(dir, "gitlab").save({ accessToken: "gl", expiresAt });
-			expect(await createLocalSecretsBackend({ dir }).get("gitlab")).toEqual({ name: "gitlab", source: "local", configured: true, expiresAt });
+			expect(await createLocalSecretsBackend({ dir }).get("gitlab")).toEqual({
+				name: "gitlab",
+				source: "local",
+				configured: true,
+				expiresAt,
+			});
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -93,7 +98,11 @@ describe("createLocalSecretsBackend: plaintext", () => {
 		const dir = tmpDir();
 		try {
 			createFileStore(dir, "github").save({ accessToken: "gh_real_value", refreshToken: "refresh_real_value", scope: "repo" });
-			expect(await createLocalSecretsBackend({ dir }).reveal("github")).toEqual({ accessToken: "gh_real_value", refreshToken: "refresh_real_value", scope: "repo" });
+			expect(await createLocalSecretsBackend({ dir }).reveal("github")).toEqual({
+				accessToken: "gh_real_value",
+				refreshToken: "refresh_real_value",
+				scope: "repo",
+			});
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -128,7 +137,10 @@ describe("createLocalSecretsBackend: encrypted", () => {
 			const masterKey = randomBytes(32);
 			const { createEncryptedFileStore } = await import("@danypops/vehicle-server/vault");
 			createEncryptedFileStore({ dir, masterKey }, "jira").save({ accessToken: "j_real_value", extra: { cloudId: "x" } });
-			expect(await createLocalSecretsBackend({ dir, masterKey }).reveal("jira")).toEqual({ accessToken: "j_real_value", extra: { cloudId: "x" } });
+			expect(await createLocalSecretsBackend({ dir, masterKey }).reveal("jira")).toEqual({
+				accessToken: "j_real_value",
+				extra: { cloudId: "x" },
+			});
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

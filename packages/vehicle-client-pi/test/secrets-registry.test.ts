@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import type { SecretsBackend } from "../src/secrets-backend.ts";
 import {
 	__resetSecretsRegistryForTests,
 	claimSecretsCommandName,
@@ -6,7 +7,6 @@ import {
 	registerSecretsContributor,
 	unregisterSecretsContributor,
 } from "../src/secrets-registry.ts";
-import type { SecretsBackend } from "../src/secrets-backend.ts";
 
 function fakeBackend(source: string): SecretsBackend {
 	return {

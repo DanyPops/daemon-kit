@@ -8,6 +8,7 @@ import type {
 	VehicleOperationDescriptor,
 	VehiclePrincipal,
 	VehicleSchemaCodec,
+	VehicleSchemaResult,
 } from "@danypops/vehicle-core";
 import { boundedValidationDetails, VehicleError } from "@danypops/vehicle-core";
 
@@ -61,15 +62,19 @@ function parseWithSchema<T>(
 	descriptor: VehicleOperationDescriptor,
 	operationId: string,
 ): T {
-	let result;
+	let result: VehicleSchemaResult<T>;
 	try {
 		result = schema.safeParse(value);
 	} catch (error) {
-		throw new VehicleError(`invalid-${kind}`, `${operationKey(descriptor.name, descriptor.version)} returned an invalid ${kind} boundary result`, {
-			category: kind === "input" ? "validation" : "internal",
-			operationId,
-			cause: error,
-		});
+		throw new VehicleError(
+			`invalid-${kind}`,
+			`${operationKey(descriptor.name, descriptor.version)} returned an invalid ${kind} boundary result`,
+			{
+				category: kind === "input" ? "validation" : "internal",
+				operationId,
+				cause: error,
+			},
+		);
 	}
 	if (!result.success) {
 		throw new VehicleError(`invalid-${kind}`, `${operationKey(descriptor.name, descriptor.version)} received invalid ${kind}`, {
@@ -83,12 +88,16 @@ function parseWithSchema<T>(
 
 function abortError(signal: AbortSignal, deadline: number, operationId: string): VehicleError {
 	const timedOut = Date.now() >= deadline || (signal.reason instanceof Error && signal.reason.name === "TimeoutError");
-	return new VehicleError(timedOut ? "deadline-exceeded" : "cancelled", timedOut ? "Vehicle operation deadline exceeded" : "Vehicle operation cancelled", {
-		category: timedOut ? "timeout" : "cancelled",
-		retryable: false,
-		operationId,
-		cause: signal.reason,
-	});
+	return new VehicleError(
+		timedOut ? "deadline-exceeded" : "cancelled",
+		timedOut ? "Vehicle operation deadline exceeded" : "Vehicle operation cancelled",
+		{
+			category: timedOut ? "timeout" : "cancelled",
+			retryable: false,
+			operationId,
+			cause: signal.reason,
+		},
+	);
 }
 
 async function awaitWithSignal<T>(operation: Promise<T>, signal: AbortSignal, deadline: number, operationId: string): Promise<T> {
@@ -106,13 +115,7 @@ function effectiveDeadline(descriptor: VehicleOperationDescriptor, requested: nu
 	return requested === undefined ? now + descriptor.limits.defaultTimeoutMs : Math.min(requested, maximum);
 }
 
-function enforcePayloadSize(
-	value: unknown,
-	maxBytes: number,
-	kind: "request" | "response",
-	key: string,
-	operationId: string,
-): void {
+function enforcePayloadSize(value: unknown, maxBytes: number, kind: "request" | "response", key: string, operationId: string): void {
 	let serialized: string | undefined;
 	try {
 		serialized = JSON.stringify(value);
@@ -131,11 +134,15 @@ function enforcePayloadSize(
 	}
 	const actualBytes = new TextEncoder().encode(serialized).byteLength;
 	if (actualBytes > maxBytes) {
-		throw new VehicleError(kind === "request" ? "request-too-large" : "response-too-large", `${key} ${kind} exceeds its ${maxBytes}-byte limit`, {
-			category: "capacity",
-			operationId,
-			details: { actualBytes, maxBytes },
-		});
+		throw new VehicleError(
+			kind === "request" ? "request-too-large" : "response-too-large",
+			`${key} ${kind} exceeds its ${maxBytes}-byte limit`,
+			{
+				category: "capacity",
+				operationId,
+				details: { actualBytes, maxBytes },
+			},
+		);
 	}
 }
 
@@ -149,7 +156,10 @@ export class VehicleRegistry {
 	private readonly availability = new Map<string, AvailabilityState>();
 	private readonly identity: VehicleManifestIdentity;
 
-	constructor(identity: VehicleManifestIdentity, private executionPolicy?: VehicleExecutionPolicy) {
+	constructor(
+		identity: VehicleManifestIdentity,
+		private executionPolicy?: VehicleExecutionPolicy,
+	) {
 		if (!identity.name.trim()) throw new Error("Vehicle name must not be empty");
 		if (!identity.version.trim()) throw new Error("Vehicle version must not be empty");
 		if (!identity.description.trim()) throw new Error("Vehicle description must not be empty");

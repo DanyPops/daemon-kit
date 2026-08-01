@@ -183,4 +183,3 @@ describe("createTokenProvider", () => {
 		expect(await getToken()).toBe("static-pat");
 	});
 });
-

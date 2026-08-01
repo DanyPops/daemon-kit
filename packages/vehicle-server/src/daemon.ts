@@ -29,8 +29,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { Socket } from "node:net";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
-import { LOOPBACK_HOST, acquireDaemonLock, releaseDaemonLock, removeDaemonHandle, writeDaemonHandle } from "./paths.ts";
 import type { Logger } from "./logging.ts";
+import { acquireDaemonLock, LOOPBACK_HOST, releaseDaemonLock, removeDaemonHandle, writeDaemonHandle } from "./paths.ts";
 import type { PushChannel } from "./push-channel.ts";
 
 const isBun = typeof Bun !== "undefined";
@@ -193,7 +193,9 @@ function nodeRequestToWebRequest(request: IncomingMessage): Request {
 /** Writes a standard Response back onto a Node ServerResponse. */
 async function writeWebResponseToNode(response: Response, res: ServerResponse): Promise<void> {
 	res.statusCode = response.status;
-	response.headers.forEach((value, key) => res.setHeader(key, value));
+	response.headers.forEach((value, key) => {
+		res.setHeader(key, value);
+	});
 	if (!response.body) {
 		res.end();
 		return;

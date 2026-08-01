@@ -15,7 +15,12 @@
  */
 import { existsSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { createEncryptedFileStore, createFileStore, type RefreshableAccessToken, type TokenProviderStore } from "@danypops/vehicle-server/vault";
+import {
+	createEncryptedFileStore,
+	createFileStore,
+	type RefreshableAccessToken,
+	type TokenProviderStore,
+} from "@danypops/vehicle-server/vault";
 import { type SecretRecord, type SecretsBackend, SecretsBackendUnsupportedOperationError } from "./secrets-backend.ts";
 
 const SOURCE = "local";
@@ -27,12 +32,20 @@ export interface LocalSecretsBackendOptions {
 }
 
 function storeFor(options: LocalSecretsBackendOptions, name: string): TokenProviderStore<RefreshableAccessToken> {
-	return options.masterKey ? createEncryptedFileStore({ dir: options.dir, masterKey: options.masterKey }, name) : createFileStore(options.dir, name);
+	return options.masterKey
+		? createEncryptedFileStore({ dir: options.dir, masterKey: options.masterKey }, name)
+		: createFileStore(options.dir, name);
 }
 
 function toRecord(name: string, token: RefreshableAccessToken | undefined): SecretRecord {
 	if (!token) return { name, source: SOURCE, configured: false };
-	return { name, source: SOURCE, configured: true, ...(token.expiresAt ? { expiresAt: token.expiresAt } : {}), ...(token.scope ? { scope: token.scope } : {}) };
+	return {
+		name,
+		source: SOURCE,
+		configured: true,
+		...(token.expiresAt ? { expiresAt: token.expiresAt } : {}),
+		...(token.scope ? { scope: token.scope } : {}),
+	};
 }
 
 export function createLocalSecretsBackend(options: LocalSecretsBackendOptions): SecretsBackend {

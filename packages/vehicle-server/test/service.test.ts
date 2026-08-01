@@ -9,11 +9,11 @@ import {
 	generateSystemdUnit,
 	installUserService,
 	isServiceInstalled,
-	uninstallUserService,
-	windowsRunCommand,
 	type RunResult,
 	type ServiceInstallDeps,
 	type ServiceSpec,
+	uninstallUserService,
+	windowsRunCommand,
 } from "../src/service.ts";
 
 const SPEC: ServiceSpec = {
@@ -25,7 +25,9 @@ const SPEC: ServiceSpec = {
 	descriptorPath: "/config/systemd/user/acme.service",
 };
 
-function fakeDeps(overrides: Partial<ServiceInstallDeps> = {}): ServiceInstallDeps & { files: Map<string, string>; commands: Array<{ command: string; args: string[] }> } {
+function fakeDeps(
+	overrides: Partial<ServiceInstallDeps> = {},
+): ServiceInstallDeps & { files: Map<string, string>; commands: Array<{ command: string; args: string[] }> } {
 	const files = new Map<string, string>();
 	const commands: Array<{ command: string; args: string[] }> = [];
 	const deps: ServiceInstallDeps & { files: Map<string, string>; commands: typeof commands } = {
@@ -167,14 +169,18 @@ describe("installUserService", () => {
 		const deps = fakeDeps({
 			platform: "linux",
 			which: (b) => b === "systemctl",
-			runCommand: (command, args) => (args.includes("enable") ? { ok: false, output: "permission denied" } : { ok: true, output: "" }),
+			runCommand: (_command, args) => (args.includes("enable") ? { ok: false, output: "permission denied" } : { ok: true, output: "" }),
 		});
 		const result = installUserService(SPEC, deps);
 		expect(result).toEqual({ installed: false, reason: "systemctl --user enable --now failed: permission denied" });
 	});
 
 	it("macOS: writes the plist and bootstraps it via launchctl", () => {
-		const deps = fakeDeps({ platform: "darwin", uid: 501, descriptorPath: "/Users/x/Library/LaunchAgents/com.danypops.acme.plist" } as Partial<ServiceInstallDeps>);
+		const deps = fakeDeps({
+			platform: "darwin",
+			uid: 501,
+			descriptorPath: "/Users/x/Library/LaunchAgents/com.danypops.acme.plist",
+		} as Partial<ServiceInstallDeps>);
 		const spec = { ...SPEC, descriptorPath: "/Users/x/Library/LaunchAgents/com.danypops.acme.plist" };
 		const result = installUserService(spec, deps);
 		expect(result).toEqual({ installed: true });
@@ -199,7 +205,17 @@ describe("installUserService", () => {
 		expect(deps.commands).toEqual([
 			{
 				command: "reg.exe",
-				args: ["add", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "acme", "/t", "REG_SZ", "/d", '"/opt/acme/cli.ts" "serve"', "/f"],
+				args: [
+					"add",
+					"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+					"/v",
+					"acme",
+					"/t",
+					"REG_SZ",
+					"/d",
+					'"/opt/acme/cli.ts" "serve"',
+					"/f",
+				],
 			},
 		]);
 	});
@@ -221,7 +237,10 @@ describe("uninstallUserService", () => {
 	});
 
 	it("Windows: deletes the registry value, treating already-absent as success (idempotent)", () => {
-		const deps = fakeDeps({ platform: "win32", runCommand: () => ({ ok: false, output: "The system was unable to find the specified registry key or value." }) });
+		const deps = fakeDeps({
+			platform: "win32",
+			runCommand: () => ({ ok: false, output: "The system was unable to find the specified registry key or value." }),
+		});
 		const result = uninstallUserService(SPEC, deps);
 		expect(result).toEqual({ installed: true });
 	});

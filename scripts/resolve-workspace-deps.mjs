@@ -49,7 +49,8 @@ for (const field of DEP_FIELDS) {
 	if (!deps) continue;
 	for (const [name, range] of Object.entries(deps)) {
 		if (range !== "workspace:*") continue;
-		if (!name.startsWith(SCOPE)) throw new Error(`workspace:* dependency "${name}" is not under ${SCOPE} -- resolveWorkspaceDeps only knows this repo's own packages`);
+		if (!name.startsWith(SCOPE))
+			throw new Error(`workspace:* dependency "${name}" is not under ${SCOPE} -- resolveWorkspaceDeps only knows this repo's own packages`);
 		deps[name] = `^${realVersionOf(name)}`;
 		rewritten++;
 	}

@@ -36,7 +36,10 @@ export interface LooseObjectProperty {
  * consumer projecting a plain-object input onto a VehicleOperation needs the
  * same required/enum checks; this is that check written once.
  */
-export function defineLooseObjectSchema(properties: Record<string, LooseObjectProperty>, required: readonly string[] = []): VehicleSchemaCodec<Record<string, unknown>> {
+export function defineLooseObjectSchema(
+	properties: Record<string, LooseObjectProperty>,
+	required: readonly string[] = [],
+): VehicleSchemaCodec<Record<string, unknown>> {
 	return defineVehicleSchema<Record<string, unknown>>({
 		// LooseObjectProperty's named fields (type, enum) are all JSON-value-shaped
 		// at runtime, but TypeScript's structural check against the recursive
@@ -236,12 +239,7 @@ export interface VehicleManifest extends VehicleManifestIdentity {
 
 export interface VehicleClient {
 	manifest(): Promise<VehicleManifest>;
-	invoke<Output = unknown>(
-		name: string,
-		version: number,
-		input: unknown,
-		options?: VehicleInvocationOptions,
-	): Promise<Output>;
+	invoke<Output = unknown>(name: string, version: number, input: unknown, options?: VehicleInvocationOptions): Promise<Output>;
 	close(): Promise<void>;
 }
 
@@ -289,7 +287,10 @@ function validateOperationMetadata<Input, Output>(options: DefineVehicleOperatio
 	if (limits.defaultTimeoutMs > limits.maxTimeoutMs) {
 		throw new Error("Vehicle operation defaultTimeoutMs must not exceed maxTimeoutMs");
 	}
-	if (options.idempotency.mode === "keyed" && (!Number.isSafeInteger(options.idempotency.retentionMs) || options.idempotency.retentionMs < 1)) {
+	if (
+		options.idempotency.mode === "keyed" &&
+		(!Number.isSafeInteger(options.idempotency.retentionMs) || options.idempotency.retentionMs < 1)
+	) {
 		throw new Error("Vehicle keyed idempotency retentionMs must be a positive integer");
 	}
 }

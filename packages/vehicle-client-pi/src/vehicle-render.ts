@@ -1,9 +1,17 @@
-import type { Theme, ThemeColor, ToolDefinition, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import type { VehicleEffect, VehicleOperationDescriptor } from "@danypops/vehicle-core";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { Theme, ThemeColor, ToolDefinition, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { CollapsibleText, deriveTableColumns, firstDistinctStyle, ProgressBar, Table, Text, type TextMeasure } from "malevich-tui-components";
-import type { VehicleEffect, VehicleOperationDescriptor } from "@danypops/vehicle-core";
+import {
+	CollapsibleText,
+	deriveTableColumns,
+	firstDistinctStyle,
+	ProgressBar,
+	Table,
+	Text,
+	type TextMeasure,
+} from "malevich-tui-components";
 
 // ToolRenderContext itself isn't part of the public export barrel; derive
 // its shape from the exported ToolDefinition so this stays in sync with
@@ -81,7 +89,7 @@ function progressBarFor(progress: unknown, theme: Theme): Component {
 }
 
 export function renderVehicleResult(
-	descriptor: VehicleOperationDescriptor,
+	_descriptor: VehicleOperationDescriptor,
 	result: AgentToolResult<unknown>,
 	options: ToolRenderResultOptions,
 	theme: Theme,

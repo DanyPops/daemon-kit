@@ -14,7 +14,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnUnit, type DaemonUnit } from "../src/supervisor.ts";
+import { type DaemonUnit, spawnUnit } from "../src/supervisor.ts";
 
 const FIXTURE = join(import.meta.dir, "fixtures", "restartable-unit.ts");
 

@@ -5,15 +5,15 @@
  * architecture before any of the four real daemons migrate onto it.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureAuthToken, readDaemonHandle, resolveDaemonPaths } from "../src/paths.ts";
-import { openSqliteWithPragmas, checkpoint, optimize } from "../src/storage.ts";
-import { createLogger } from "../src/logging.ts";
-import { errorResponse, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "../src/http.ts";
-import { runDaemonProcess, startDaemon, type RunningDaemon } from "../src/daemon.ts";
 import { AuthenticatedRpcClient } from "@danypops/vehicle-client/rpc-client";
+import { type RunningDaemon, runDaemonProcess, startDaemon } from "../src/daemon.ts";
+import { errorResponse, healthResponse, jsonResponse, readyResponse, requireBearerToken } from "../src/http.ts";
+import { createLogger } from "../src/logging.ts";
+import { ensureAuthToken, readDaemonHandle, resolveDaemonPaths } from "../src/paths.ts";
+import { checkpoint, openSqliteWithPragmas, optimize } from "../src/storage.ts";
 
 type Ops = { "echo.ping": { message: string } };
 type Outs = { "echo.ping": { message: string; row: unknown } };
@@ -54,7 +54,12 @@ describe("walking skeleton — a real daemon built from every module", () => {
 		const logLines: string[] = [];
 		const logger = createLogger("skeleton", {
 			level: "debug",
-			destination: { write: (chunk: string) => { logLines.push(chunk); return true; } },
+			destination: {
+				write: (chunk: string) => {
+					logLines.push(chunk);
+					return true;
+				},
+			},
 		});
 
 		let maintenanceRuns = 0;
@@ -63,8 +68,21 @@ describe("walking skeleton — a real daemon built from every module", () => {
 			handlePath: paths.handle,
 			logger,
 			maintenanceTasks: [
-				{ name: "checkpoint", intervalMs: 10, run: () => { checkpoint(db); maintenanceRuns++; } },
-				{ name: "always-fails", intervalMs: 10, run: () => { throw new Error("boom"); } },
+				{
+					name: "checkpoint",
+					intervalMs: 10,
+					run: () => {
+						checkpoint(db);
+						maintenanceRuns++;
+					},
+				},
+				{
+					name: "always-fails",
+					intervalMs: 10,
+					run: () => {
+						throw new Error("boom");
+					},
+				},
 			],
 			buildApp: () => ({
 				async fetch(request: Request): Promise<Response> {
@@ -91,11 +109,9 @@ describe("walking skeleton — a real daemon built from every module", () => {
 		expect(handle?.port).toBe(daemon.port);
 		expect(handle?.pid).toBe(process.pid);
 
-		const client = new AuthenticatedRpcClient<keyof Ops & string, Ops, Outs>(
-			`http://${daemon.host}:${daemon.port}`,
-			token,
-			{ label: "Skeleton" },
-		);
+		const client = new AuthenticatedRpcClient<keyof Ops & string, Ops, Outs>(`http://${daemon.host}:${daemon.port}`, token, {
+			label: "Skeleton",
+		});
 
 		expect(await client.health()).toEqual({ ok: true, version: "0.0.0-skeleton" });
 		expect(await client.ready()).toBe(true);
@@ -106,11 +122,9 @@ describe("walking skeleton — a real daemon built from every module", () => {
 		expect(result.row).toEqual({ message: "hello" });
 
 		// Wrong token is rejected before any op runs.
-		const badClient = new AuthenticatedRpcClient<keyof Ops & string, Ops, Outs>(
-			`http://${daemon.host}:${daemon.port}`,
-			"wrong-token",
-			{ label: "Skeleton" },
-		);
+		const badClient = new AuthenticatedRpcClient<keyof Ops & string, Ops, Outs>(`http://${daemon.host}:${daemon.port}`, "wrong-token", {
+			label: "Skeleton",
+		});
 		await expect(badClient.health()).rejects.toThrow();
 
 		// Maintenance tasks actually ran, and a failing one didn't crash the daemon or the passing one.
@@ -137,13 +151,21 @@ describe("walking skeleton — a real daemon built from every module", () => {
 
 		const originalExit = process.exit;
 		let exitCode: number | undefined;
-		process.exit = ((code?: number) => { exitCode = code; }) as typeof process.exit;
+		process.exit = ((code?: number) => {
+			exitCode = code;
+		}) as typeof process.exit;
 		try {
 			runDaemonProcess({
 				daemonLabel: "Skeleton",
 				handlePath: paths.handle,
-				onListen: (info) => { listened = info; },
-				buildApp: () => ({ async fetch() { return errorResponse("not found", 404); } }),
+				onListen: (info) => {
+					listened = info;
+				},
+				buildApp: () => ({
+					async fetch() {
+						return errorResponse("not found", 404);
+					},
+				}),
 			});
 			// runDaemonProcess() is fire-and-forget by design (the real binary's
 			// entry point isn't awaited by its own caller), but its internals now

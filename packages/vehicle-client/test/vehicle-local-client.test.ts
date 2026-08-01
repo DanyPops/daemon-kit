@@ -27,7 +27,15 @@ const Echo = defineVehicleOperation({
 
 function clientWith(): LocalVehicleClient {
 	const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
-	registry.register("echo-provider", bindVehicleOperation(Echo, () => async ({ input }) => input));
+	registry.register(
+		"echo-provider",
+		bindVehicleOperation(
+			Echo,
+			() =>
+				async ({ input }) =>
+					input,
+		),
+	);
 	return new LocalVehicleClient(registry);
 }
 

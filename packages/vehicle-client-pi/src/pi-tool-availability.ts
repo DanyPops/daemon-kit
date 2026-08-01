@@ -25,7 +25,7 @@ export function guardExtensionRuntimeInitialized<T>(fn: () => T): T {
 	} catch (error) {
 		if (error instanceof Error && error.message.includes(NOT_INITIALIZED_MARKER)) {
 			throw new Error(
-				"Called a Pi \"action method\" (getAllTools/getActiveTools/setActiveTools) before Pi's extension runtime finished initializing. " +
+				'Called a Pi "action method" (getAllTools/getActiveTools/setActiveTools) before Pi\'s extension runtime finished initializing. ' +
 					'This happens when registerVehicleTools()/refreshVehicleToolAvailability() is called directly from an extension\'s top-level factory body -- call it from within a pi.on("session_start", ...) handler instead (or later), never from the factory body itself, even if the factory is async and awaited.',
 				{ cause: error },
 			);

@@ -82,7 +82,10 @@ describe("AuthenticatedRpcClient", () => {
 		const client = new AuthenticatedRpcClient<keyof Ops & string, Ops, Outs>("http://x", "tok", {
 			label: "Acme",
 			opsPath: "/custom/ops",
-			transport: fakeTransport((req) => { seen.path = new URL(req.url).pathname; return Response.json({ result: { y: 1 } }); }),
+			transport: fakeTransport((req) => {
+				seen.path = new URL(req.url).pathname;
+				return Response.json({ result: { y: 1 } });
+			}),
 		});
 		await client.call("a.b", { x: 1 });
 		expect(seen.path).toBe("/custom/ops");

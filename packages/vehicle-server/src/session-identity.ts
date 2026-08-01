@@ -73,7 +73,11 @@ export function secretMatches(secret: string, expectedHash: string): boolean {
  * legitimate holder going forward, safely invalidating any stale secret a now-exited process
  * held.
  */
-export function registerSessionIdentity(store: SessionIdentityStore, sessionId: string, now: () => string = () => new Date().toISOString()): RegisterSessionIdentityResult {
+export function registerSessionIdentity(
+	store: SessionIdentityStore,
+	sessionId: string,
+	now: () => string = () => new Date().toISOString(),
+): RegisterSessionIdentityResult {
 	const secret = generateSessionSecret();
 	const timestamp = now();
 	store.upsert({ sessionId, secretHash: hashSessionSecret(secret), registeredAt: timestamp, lastSeenAt: timestamp });
@@ -91,7 +95,12 @@ export function isSessionRegistered(store: SessionIdentityStore, sessionId: stri
  * configured" (proceed unauthenticated, the opt-in-armor default) from "armor present but
  * secret wrong" (reject) must call isSessionRegistered() first.
  */
-export function verifySessionSecret(store: SessionIdentityStore, sessionId: string, secret: string | undefined, now: () => string = () => new Date().toISOString()): boolean {
+export function verifySessionSecret(
+	store: SessionIdentityStore,
+	sessionId: string,
+	secret: string | undefined,
+	now: () => string = () => new Date().toISOString(),
+): boolean {
 	const record = store.find(sessionId);
 	if (!record) return false;
 	if (!secret || !secretMatches(secret, record.secretHash)) return false;

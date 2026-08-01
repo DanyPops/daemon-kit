@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { unlinkSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getPeerCredential, PeerCredentialLookupError, rawSocketFd, UnsupportedPlatformError } from "../src/unix-peer-cred.ts";
 
 function socketPath(): string {
@@ -12,7 +12,8 @@ function socketPath(): string {
 // wherever this Linux-only suite actually runs -- asserted once, not per call site.
 const realUid = process.getuid?.();
 const realGid = process.getgid?.();
-if (realUid === undefined || realGid === undefined) throw new Error("process.getuid/getgid unavailable -- this suite requires a POSIX platform");
+if (realUid === undefined || realGid === undefined)
+	throw new Error("process.getuid/getgid unavailable -- this suite requires a POSIX platform");
 
 describe("getPeerCredential", () => {
 	it("reports the real kernel-verified uid/gid of a same-process connecting client", async () => {
@@ -65,10 +66,17 @@ describe("getPeerCredential", () => {
 				},
 			});
 
-			const child = Bun.spawn(["bun", "-e", `const s = await Bun.connect({ unix: "${path}", socket: { open(){}, data(){}, close(){} } }); await Bun.sleep(200); s.end();`], {
-				stdout: "ignore",
-				stderr: "ignore",
-			});
+			const child = Bun.spawn(
+				[
+					"bun",
+					"-e",
+					`const s = await Bun.connect({ unix: "${path}", socket: { open(){}, data(){}, close(){} } }); await Bun.sleep(200); s.end();`,
+				],
+				{
+					stdout: "ignore",
+					stderr: "ignore",
+				},
+			);
 			const cred = await seen.promise;
 			await child.exited;
 

@@ -43,10 +43,20 @@ describe("runProcessSupervisor", () => {
 		try {
 			const logPath = join(dir, "log.txt");
 			let calls = 0;
-			const units: SupervisedUnitConfig[] = [{
-				name: "probe", bin: "bun", args: [FIXTURE, logPath], backends: [], restart: "always", env: { EXIT_CODE: "0" },
-				resolveEnv: () => { calls += 1; return { PROBE_TOKEN: `value-${calls}` }; },
-			}];
+			const units: SupervisedUnitConfig[] = [
+				{
+					name: "probe",
+					bin: "bun",
+					args: [FIXTURE, logPath],
+					backends: [],
+					restart: "always",
+					env: { EXIT_CODE: "0" },
+					resolveEnv: () => {
+						calls += 1;
+						return { PROBE_TOKEN: `value-${calls}` };
+					},
+				},
+			];
 			const supervisor = runProcessSupervisor(units);
 			try {
 				await waitFor(() => startCount(logPath) >= 2, 4_000);
@@ -65,7 +75,9 @@ describe("runProcessSupervisor", () => {
 		const dir = tmpDir();
 		try {
 			const logPath = join(dir, "log.txt");
-			const units: SupervisedUnitConfig[] = [{ name: "probe", bin: "bun", args: [FIXTURE, logPath], backends: [], env: { EXIT_CODE: "0" }, restart: "always" }];
+			const units: SupervisedUnitConfig[] = [
+				{ name: "probe", bin: "bun", args: [FIXTURE, logPath], backends: [], env: { EXIT_CODE: "0" }, restart: "always" },
+			];
 			const supervisor = runProcessSupervisor(units);
 			try {
 				await waitFor(() => startCount(logPath) >= 2, 4_000);
@@ -81,7 +93,9 @@ describe("runProcessSupervisor", () => {
 		const dir = tmpDir();
 		try {
 			const logPath = join(dir, "log.txt");
-			const units: SupervisedUnitConfig[] = [{ name: "probe", bin: "bun", args: [FIXTURE, logPath], backends: [], env: { EXIT_CODE: "0" }, restart: "on-failure" }];
+			const units: SupervisedUnitConfig[] = [
+				{ name: "probe", bin: "bun", args: [FIXTURE, logPath], backends: [], env: { EXIT_CODE: "0" }, restart: "on-failure" },
+			];
 			const supervisor = runProcessSupervisor(units);
 			try {
 				await waitFor(() => startCount(logPath) >= 1);
@@ -99,7 +113,9 @@ describe("runProcessSupervisor", () => {
 		const dir = tmpDir();
 		try {
 			const logPath = join(dir, "log.txt");
-			const units: SupervisedUnitConfig[] = [{ name: "probe", bin: "bun", args: [FIXTURE, logPath], backends: [], env: { EXIT_CODE: "1" }, restart: "on-failure" }];
+			const units: SupervisedUnitConfig[] = [
+				{ name: "probe", bin: "bun", args: [FIXTURE, logPath], backends: [], env: { EXIT_CODE: "1" }, restart: "on-failure" },
+			];
 			const supervisor = runProcessSupervisor(units);
 			try {
 				await waitFor(() => startCount(logPath) >= 2, 4_000);
@@ -115,7 +131,9 @@ describe("runProcessSupervisor", () => {
 		const dir = tmpDir();
 		try {
 			const logPath = join(dir, "log.txt");
-			const units: SupervisedUnitConfig[] = [{ name: "probe", bin: "bun", args: [FIXTURE, logPath], backends: [], env: { EXIT_CODE: "1" } }];
+			const units: SupervisedUnitConfig[] = [
+				{ name: "probe", bin: "bun", args: [FIXTURE, logPath], backends: [], env: { EXIT_CODE: "1" } },
+			];
 			const supervisor = runProcessSupervisor(units);
 			try {
 				await waitFor(() => startCount(logPath) >= 1);
@@ -135,11 +153,17 @@ describe("runProcessSupervisor", () => {
 			const logPath = join(dir, "log.txt");
 			let generation = 0;
 			let due = true;
-			const units: SupervisedUnitConfig[] = [{
-				name: "probe", bin: "bun", args: [FIXTURE, logPath], backends: [], restart: "no",
-				resolveEnv: () => ({ GENERATION: String(++generation) }),
-				shouldPlannedRestart: () => due,
-			}];
+			const units: SupervisedUnitConfig[] = [
+				{
+					name: "probe",
+					bin: "bun",
+					args: [FIXTURE, logPath],
+					backends: [],
+					restart: "no",
+					resolveEnv: () => ({ GENERATION: String(++generation) }),
+					shouldPlannedRestart: () => due,
+				},
+			];
 			const supervisor = runProcessSupervisor(units, { plannedRestartCheckMs: 50 });
 			try {
 				await waitFor(() => startCount(logPath) >= 2, 4_000);

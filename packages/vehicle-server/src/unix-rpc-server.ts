@@ -14,7 +14,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
-import { getPeerCredential, rawSocketFd, type PeerCredential } from "./unix-peer-cred.ts";
+import { getPeerCredential, type PeerCredential, rawSocketFd } from "./unix-peer-cred.ts";
 
 interface WireRequest {
 	method: string;

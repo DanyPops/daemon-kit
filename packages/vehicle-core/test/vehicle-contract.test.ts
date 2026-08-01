@@ -36,7 +36,12 @@ describe("defineLooseObjectSchema", () => {
 
 	it("produces additionalProperties: false JSON Schema metadata carrying the declared properties/required", () => {
 		const schema = defineLooseObjectSchema({ id: { type: "string" } }, ["id"]);
-		expect(schema.jsonSchema).toEqual({ type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false });
+		expect(schema.jsonSchema).toEqual({
+			type: "object",
+			properties: { id: { type: "string" } },
+			required: ["id"],
+			additionalProperties: false,
+		});
 	});
 });
 

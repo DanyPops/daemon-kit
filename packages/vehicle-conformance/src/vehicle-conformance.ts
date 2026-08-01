@@ -19,8 +19,8 @@
  * scope this generalizes.
  */
 import { describe, expect, it } from "bun:test";
-import { bindVehicleOperation, defineVehicleOperation, defineVehicleSchema, VehicleError } from "@danypops/vehicle-core";
 import type { VehicleClient } from "@danypops/vehicle-core";
+import { bindVehicleOperation, defineVehicleOperation, defineVehicleSchema, VehicleError } from "@danypops/vehicle-core";
 import type { VehicleRegistry } from "@danypops/vehicle-server";
 
 const passthroughSchema = defineVehicleSchema<{ value: string }>({
@@ -176,7 +176,12 @@ export function runVehicleClientConformance(fixture: VehicleConformanceFixture):
 		it("invoke() returns the real handler output on success", async () => {
 			const { client, cleanup } = await fixture.create();
 			try {
-				const result = await client.invoke<{ echoed: string }>("conformance.echo", 1, { value: "hi" }, { permissions: ["conformance:echo"] });
+				const result = await client.invoke<{ echoed: string }>(
+					"conformance.echo",
+					1,
+					{ value: "hi" },
+					{ permissions: ["conformance:echo"] },
+				);
 				expect(result).toEqual({ echoed: "hi" });
 			} finally {
 				await cleanup();
@@ -235,7 +240,9 @@ export function runVehicleClientConformance(fixture: VehicleConformanceFixture):
 			const { client, cleanup } = await fixture.create();
 			try {
 				const oversized = "x".repeat(1024);
-				await expect(client.invoke("conformance.echo", 1, { value: oversized }, { permissions: ["conformance:echo"] })).rejects.toMatchObject({
+				await expect(
+					client.invoke("conformance.echo", 1, { value: oversized }, { permissions: ["conformance:echo"] }),
+				).rejects.toMatchObject({
 					code: "request-too-large",
 				});
 			} finally {
@@ -257,12 +264,17 @@ export function runVehicleClientConformance(fixture: VehicleConformanceFixture):
 			try {
 				const progress: unknown[] = [];
 				let resolved = false;
-				const result = await client.invoke<{ echoed: string }>("conformance.progress", 1, { value: "hi" }, {
-					onProgress: (p) => {
-						expect(resolved).toBe(false);
-						progress.push(p);
+				const result = await client.invoke<{ echoed: string }>(
+					"conformance.progress",
+					1,
+					{ value: "hi" },
+					{
+						onProgress: (p) => {
+							expect(resolved).toBe(false);
+							progress.push(p);
+						},
 					},
-				});
+				);
 				resolved = true;
 				expect(progress).toEqual([{ step: 1 }, { step: 2 }]);
 				expect(result).toEqual({ echoed: "hi" });
@@ -287,7 +299,9 @@ export function runVehicleClientConformance(fixture: VehicleConformanceFixture):
 		it("invoke() respects an explicit deadline that has already elapsed", async () => {
 			const { client, cleanup } = await fixture.create();
 			try {
-				await expect(client.invoke("conformance.echo", 1, { value: "hi" }, { permissions: ["conformance:echo"], deadline: Date.now() - 1 })).rejects.toMatchObject({
+				await expect(
+					client.invoke("conformance.echo", 1, { value: "hi" }, { permissions: ["conformance:echo"], deadline: Date.now() - 1 }),
+				).rejects.toMatchObject({
 					code: "deadline-exceeded",
 				});
 			} finally {

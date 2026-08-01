@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkpoint, openSqliteWithPragmas, optimize, runMigrations, type Migration, type SqliteMigrationRunner } from "../src/storage.ts";
+import { checkpoint, type Migration, openSqliteWithPragmas, optimize, runMigrations, type SqliteMigrationRunner } from "../src/storage.ts";
 
 /**
  * A deliberately non-bun:sqlite-shaped fake runner (a plain in-memory statement log, no
@@ -37,8 +37,20 @@ describe("openSqliteWithPragmas", () => {
 			const applied: number[] = [];
 			const db1 = openSqliteWithPragmas(path, {
 				migrations: [
-					{ version: 1, up: (d) => { d.exec("CREATE TABLE t (x INTEGER)"); applied.push(1); } },
-					{ version: 2, up: (d) => { d.exec("ALTER TABLE t ADD COLUMN y TEXT"); applied.push(2); } },
+					{
+						version: 1,
+						up: (d) => {
+							d.exec("CREATE TABLE t (x INTEGER)");
+							applied.push(1);
+						},
+					},
+					{
+						version: 2,
+						up: (d) => {
+							d.exec("ALTER TABLE t ADD COLUMN y TEXT");
+							applied.push(2);
+						},
+					},
 				],
 			});
 			db1.query("INSERT INTO t (x, y) VALUES (1, 'a')").run();
@@ -47,8 +59,20 @@ describe("openSqliteWithPragmas", () => {
 			// Re-opening with the same migrations must not re-run them.
 			const db2 = openSqliteWithPragmas(path, {
 				migrations: [
-					{ version: 1, up: (d) => { d.exec("CREATE TABLE t (x INTEGER)"); applied.push(1); } },
-					{ version: 2, up: (d) => { d.exec("ALTER TABLE t ADD COLUMN y TEXT"); applied.push(2); } },
+					{
+						version: 1,
+						up: (d) => {
+							d.exec("CREATE TABLE t (x INTEGER)");
+							applied.push(1);
+						},
+					},
+					{
+						version: 2,
+						up: (d) => {
+							d.exec("ALTER TABLE t ADD COLUMN y TEXT");
+							applied.push(2);
+						},
+					},
 				],
 			});
 			expect(applied).toEqual([1, 2]); // only from the first open
@@ -85,7 +109,10 @@ describe("openSqliteWithPragmas", () => {
 		try {
 			expect(() =>
 				openSqliteWithPragmas(path, {
-					migrations: [{ version: 1, up: (d) => d.exec("CREATE TABLE t (x INTEGER)") }, { version: 3, up: () => {} }],
+					migrations: [
+						{ version: 1, up: (d) => d.exec("CREATE TABLE t (x INTEGER)") },
+						{ version: 3, up: () => {} },
+					],
 				}),
 			).toThrow(/migration gap/);
 		} finally {
@@ -126,9 +153,9 @@ describe("openSqliteWithPragmas", () => {
 				],
 			});
 			db1.close();
-			expect(() =>
-				openSqliteWithPragmas(path, { migrations: [{ version: 1, up: (d) => d.exec("CREATE TABLE t (x INTEGER)") }] }),
-			).toThrow(/database schema 2 is newer than supported 1/);
+			expect(() => openSqliteWithPragmas(path, { migrations: [{ version: 1, up: (d) => d.exec("CREATE TABLE t (x INTEGER)") }] })).toThrow(
+				/database schema 2 is newer than supported 1/,
+			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -177,7 +204,12 @@ describe("runMigrations (generic engine, no bun:sqlite dependency)", () => {
 
 	it("rejects a migration list with a gap", () => {
 		const runner = fakeRunner();
-		expect(() => runMigrations(runner, [{ version: 1, up: () => {} }, { version: 3, up: () => {} }])).toThrow(/migration gap/);
+		expect(() =>
+			runMigrations(runner, [
+				{ version: 1, up: () => {} },
+				{ version: 3, up: () => {} },
+			]),
+		).toThrow(/migration gap/);
 	});
 
 	it("rejects a version newer than every supplied migration -- a downgrade, not silently opened", () => {

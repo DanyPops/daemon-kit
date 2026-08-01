@@ -58,7 +58,7 @@
 		"@types/bun": "latest",
 		"@types/node": "^22.0.0",
 		"env-paths": "^4",
-		"typescript": "latest"
+		"typescript": "^5.9.2"
 	},
 	"repository": {
 		"type": "git",

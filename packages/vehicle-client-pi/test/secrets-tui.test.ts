@@ -1,6 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+	type SecretRecord,
+	type SecretsBackend,
+	SecretsBackendUnsupportedOperationError,
+	type ServiceRecord,
+} from "../src/secrets-backend.ts";
+import { __resetSecretsRegistryForTests, listSecretsContributors } from "../src/secrets-registry.ts";
+import {
 	buildSecretsMenuItems,
 	buildServiceDetailItems,
 	buildServicesMenuItems,
@@ -11,20 +18,17 @@ import {
 	encodeSecretMenuValue,
 	loadAllSecrets,
 	mergeSecretsContributions,
+	type PickFromList,
 	performReveal,
 	performRevoke,
 	performRotate,
 	registerSecretsCommand,
 	registerSharedSecretsCommand,
 	runSecretsCommand,
-	SecretsBackendListError,
-	SECRETS_MENU,
 	SERVICES_MENU,
-	type PickFromList,
+	SecretsBackendListError,
 	type SecretsMenuAction,
 } from "../src/secrets-tui.ts";
-import { SecretsBackendUnsupportedOperationError, type SecretRecord, type SecretsBackend, type ServiceRecord } from "../src/secrets-backend.ts";
-import { __resetSecretsRegistryForTests, listSecretsContributors } from "../src/secrets-registry.ts";
 
 // ── Pure descriptions -- state in, string out, no I/O, no pick ─────────────
 
@@ -83,7 +87,9 @@ describe("describeService", () => {
 	});
 
 	it("flags unconfigured backends by count", () => {
-		expect(describeService({ name: "pipes", backends: ["github", "jenkins-ci"] }, new Set(["github"]))).toBe("2 backends \u2022 1 unconfigured");
+		expect(describeService({ name: "pipes", backends: ["github", "jenkins-ci"] }, new Set(["github"]))).toBe(
+			"2 backends \u2022 1 unconfigured",
+		);
 	});
 
 	it("appends a bound uid when present", () => {
@@ -114,7 +120,14 @@ function record(name: string, source: string, overrides: Partial<SecretRecord> =
 }
 
 function backendStub(source: string): SecretsBackend {
-	return { source, list: async () => [], get: async () => undefined, rotate: async () => {}, revoke: async () => {}, reveal: async () => undefined };
+	return {
+		source,
+		list: async () => [],
+		get: async () => undefined,
+		rotate: async () => {},
+		revoke: async () => {},
+		reveal: async () => undefined,
+	};
 }
 
 describe("buildSecretsMenuItems", () => {
@@ -182,7 +195,10 @@ describe("loadAllSecrets", () => {
 
 // ── Mutating actions -- directly callable, no pick() sequence needed at all ──
 
-function fakeCtx(overrides: { confirm?: boolean; hasUI?: boolean; mode?: string } = {}): { ctx: ExtensionCommandContext; notifications: Array<{ text: string; level: string }> } {
+function fakeCtx(overrides: { confirm?: boolean; hasUI?: boolean; mode?: string } = {}): {
+	ctx: ExtensionCommandContext;
+	notifications: Array<{ text: string; level: string }>;
+} {
 	const notifications: Array<{ text: string; level: string }> = [];
 	const ctx = {
 		hasUI: overrides.hasUI ?? true,
@@ -294,7 +310,9 @@ describe("performReveal", () => {
 		};
 		await performReveal(ctx, backend, "github");
 		expect(called).toBe(false);
-		expect(notifications).toEqual([{ text: "github: reveal requires an interactive terminal session, not available over RPC/print/JSON.", level: "error" }]);
+		expect(notifications).toEqual([
+			{ text: "github: reveal requires an interactive terminal session, not available over RPC/print/JSON.", level: "error" },
+		]);
 	});
 });
 
@@ -357,9 +375,13 @@ describe("runSecretsCommand: wiring smoke tests", () => {
 describe("registerSecretsCommand", () => {
 	it("registers under 'secrets' by default", () => {
 		const registered: Array<{ name: string; description: string }> = [];
-		const pi = { registerCommand: (name: string, def: { description: string }) => registered.push({ name, description: def.description }) } as unknown as ExtensionAPI;
+		const pi = {
+			registerCommand: (name: string, def: { description: string }) => registered.push({ name, description: def.description }),
+		} as unknown as ExtensionAPI;
 		registerSecretsCommand(pi, () => ({ backends: [] }));
-		expect(registered).toEqual([{ name: "secrets", description: "Manage credentials: view status, rotate, or revoke, across every configured backend" }]);
+		expect(registered).toEqual([
+			{ name: "secrets", description: "Manage credentials: view status, rotate, or revoke, across every configured backend" },
+		]);
 	});
 
 	it("registers under a caller-supplied name instead, for a consumer that genuinely wants its own standalone command", () => {
@@ -372,8 +394,22 @@ describe("registerSecretsCommand", () => {
 
 describe("mergeSecretsContributions", () => {
 	it("concatenates backends and extraActions across every contribution", () => {
-		const a: SecretsBackend = { source: "a", list: async () => [], get: async () => undefined, rotate: async () => {}, revoke: async () => {}, reveal: async () => undefined };
-		const b: SecretsBackend = { source: "b", list: async () => [], get: async () => undefined, rotate: async () => {}, revoke: async () => {}, reveal: async () => undefined };
+		const a: SecretsBackend = {
+			source: "a",
+			list: async () => [],
+			get: async () => undefined,
+			rotate: async () => {},
+			revoke: async () => {},
+			reveal: async () => undefined,
+		};
+		const b: SecretsBackend = {
+			source: "b",
+			list: async () => [],
+			get: async () => undefined,
+			rotate: async () => {},
+			revoke: async () => {},
+			reveal: async () => undefined,
+		};
 		const action: SecretsMenuAction = { value: "login", label: "+ Log in", run: async () => {} };
 		const merged = mergeSecretsContributions([{ backends: [a], extraActions: [action] }, { backends: [b] }]);
 		expect(merged.backends).toEqual([a, b]);

@@ -139,9 +139,7 @@ export interface TokenProviderOptions<T extends RefreshableAccessToken> {
  * the in-flight promise happens synchronously, so a second caller can only
  * ever observe the flag after the first caller has set it.
  */
-export function createTokenProvider<T extends RefreshableAccessToken>(
-	options: TokenProviderOptions<T>,
-): () => Promise<string | undefined> {
+export function createTokenProvider<T extends RefreshableAccessToken>(options: TokenProviderOptions<T>): () => Promise<string | undefined> {
 	let inFlight: Promise<T | undefined> | undefined;
 
 	return async function getToken(): Promise<string | undefined> {

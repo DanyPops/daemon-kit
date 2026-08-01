@@ -20,7 +20,7 @@
 	"devDependencies": {
 		"@danypops/vehicle-client": "workspace:*",
 		"@types/node": "^22.0.0",
-		"typescript": "latest"
+		"typescript": "^5.9.2"
 	},
 	"repository": {
 		"type": "git",

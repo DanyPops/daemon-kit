@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { createEnvSecretsBackend } from "../src/secrets-backend-env.ts";
 import { SecretsBackendUnsupportedOperationError } from "../src/secrets-backend.ts";
+import { createEnvSecretsBackend } from "../src/secrets-backend-env.ts";
 
 describe("createEnvSecretsBackend", () => {
 	it("lists every declared name, marking configured true only when its env var is actually set", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { VehicleEffect, VehicleOperationDescriptor } from "@danypops/vehicle-core";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { renderVehicleCall, renderVehicleResult } from "../src/vehicle-render.ts";
 
 // Theme is a class with private fields; a plain fake can't satisfy it
@@ -82,7 +82,15 @@ describe("renderVehicleResult", () => {
 	it("renders a Table for an array-of-objects output", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),
-			{ content: [], details: { output: [{ id: "1", title: "First" }, { id: "2", title: "Second" }] } },
+			{
+				content: [],
+				details: {
+					output: [
+						{ id: "1", title: "First" },
+						{ id: "2", title: "Second" },
+					],
+				},
+			},
 			{ isPartial: false, expanded: false },
 			fakeTheme,
 			resultContext(),

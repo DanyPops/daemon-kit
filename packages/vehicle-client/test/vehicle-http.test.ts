@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { bindVehicleOperation, defineVehicleOperation, defineVehicleSchema, VehicleError, type JsonValue } from "@danypops/vehicle-core";
+import { bindVehicleOperation, defineVehicleOperation, defineVehicleSchema, type JsonValue, VehicleError } from "@danypops/vehicle-core";
 import { VehicleRegistry } from "@danypops/vehicle-server";
 import { createVehicleHttpApp } from "@danypops/vehicle-server/http";
 import { RemoteVehicleClient } from "../src/vehicle-http-client.ts";
@@ -13,13 +13,15 @@ const objectSchema = <T extends Record<string, unknown>>(properties: Record<stri
 		},
 	});
 
-const inputSchema = objectSchema<{ value: string }>(
-	{ value: { type: "string" } },
-	(value) => (typeof value === "object" && value !== null && typeof (value as { value?: unknown }).value === "string" ? { value: (value as { value: string }).value } : undefined),
+const inputSchema = objectSchema<{ value: string }>({ value: { type: "string" } }, (value) =>
+	typeof value === "object" && value !== null && typeof (value as { value?: unknown }).value === "string"
+		? { value: (value as { value: string }).value }
+		: undefined,
 );
-const outputSchema = objectSchema<{ echoed: string }>(
-	{ echoed: { type: "string" } },
-	(value) => (typeof value === "object" && value !== null && typeof (value as { echoed?: unknown }).echoed === "string" ? { echoed: (value as { echoed: string }).echoed } : undefined),
+const outputSchema = objectSchema<{ echoed: string }>({ echoed: { type: "string" } }, (value) =>
+	typeof value === "object" && value !== null && typeof (value as { echoed?: unknown }).echoed === "string"
+		? { echoed: (value as { echoed: string }).echoed }
+		: undefined,
 );
 
 const LIMITS = { defaultTimeoutMs: 1_000, maxTimeoutMs: 5_000, maxRequestBytes: 4_096, maxResponseBytes: 4_096 } as const;

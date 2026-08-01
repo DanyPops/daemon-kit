@@ -21,7 +21,7 @@ export function readPackageVersion(packageJsonUrl: URL, projectLabel: string): s
 	if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) {
 		throw new Error(`${projectLabel} package manifest must be an object`);
 	}
-	const version = (manifest as Record<string, unknown>)["version"];
+	const version = (manifest as Record<string, unknown>).version;
 	if (typeof version !== "string" || !SEMVER_RE.test(version)) {
 		throw new Error(`${projectLabel} package manifest has an invalid version`);
 	}

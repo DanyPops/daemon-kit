@@ -18,8 +18,15 @@
  * error.
  */
 import { randomUUID } from "node:crypto";
+import type {
+	JsonValue,
+	VehicleClient,
+	VehicleFailureCategory,
+	VehicleInvocationOptions,
+	VehicleManifest,
+	VehicleRecovery,
+} from "@danypops/vehicle-core";
 import { VehicleError } from "@danypops/vehicle-core";
-import type { JsonValue, VehicleClient, VehicleFailureCategory, VehicleInvocationOptions, VehicleManifest, VehicleRecovery } from "@danypops/vehicle-core";
 
 const KNOWN_FAILURE_CATEGORIES: readonly VehicleFailureCategory[] = [
 	"validation",
@@ -34,7 +41,9 @@ const KNOWN_FAILURE_CATEGORIES: readonly VehicleFailureCategory[] = [
 ];
 
 function parseFailureCategory(value: unknown): VehicleFailureCategory {
-	return typeof value === "string" && (KNOWN_FAILURE_CATEGORIES as readonly string[]).includes(value) ? (value as VehicleFailureCategory) : "internal";
+	return typeof value === "string" && (KNOWN_FAILURE_CATEGORIES as readonly string[]).includes(value)
+		? (value as VehicleFailureCategory)
+		: "internal";
 }
 
 export interface RemoteVehicleClientOptions {
@@ -93,9 +102,7 @@ export class RemoteVehicleClient implements VehicleClient {
 		const onAbort = options.signal ? (): void => void this.cancel(operationId) : undefined;
 		if (onAbort) options.signal!.addEventListener("abort", onAbort, { once: true });
 		try {
-			return options.onProgress
-				? await this.invokeStreaming<Output>(body, options)
-				: await this.invokePlain<Output>(body, options.signal);
+			return options.onProgress ? await this.invokeStreaming<Output>(body, options) : await this.invokePlain<Output>(body, options.signal);
 		} finally {
 			if (onAbort) options.signal!.removeEventListener("abort", onAbort);
 		}
@@ -184,7 +191,10 @@ export class RemoteVehicleClient implements VehicleClient {
 		const failure = payload?.error;
 		if (failure && typeof failure.code === "string" && typeof failure.message === "string") {
 			const recovery =
-				failure.recovery && typeof failure.recovery === "object" && "message" in failure.recovery && typeof (failure.recovery as VehicleRecovery).message === "string"
+				failure.recovery &&
+				typeof failure.recovery === "object" &&
+				"message" in failure.recovery &&
+				typeof (failure.recovery as VehicleRecovery).message === "string"
 					? (failure.recovery as VehicleRecovery)
 					: undefined;
 			return new VehicleError(failure.code, failure.message, {

@@ -1,10 +1,4 @@
 import type {
-	ExtensionAPI,
-	ExtensionContext,
-	ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
-import type { TSchema } from "typebox";
-import type {
 	VehicleClient,
 	VehicleFailure,
 	VehicleInvocationOptions,
@@ -13,7 +7,9 @@ import type {
 	VehicleOperationDescriptor,
 	VehiclePrincipal,
 } from "@danypops/vehicle-core";
-import { VehicleError, extractVehicleContent } from "@danypops/vehicle-core";
+import { extractVehicleContent, VehicleError } from "@danypops/vehicle-core";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { TSchema } from "typebox";
 import { guardExtensionRuntimeInitialized, syncManagedActiveTools } from "./pi-tool-availability.js";
 import { renderVehicleCall, renderVehicleResult } from "./vehicle-render.js";
 
@@ -134,11 +130,7 @@ function formatJson(value: unknown): string {
 	return text;
 }
 
-function vehicleIdentity(
-	manifest: VehicleManifest,
-	descriptor: VehicleOperationDescriptor,
-	toolCallId: string,
-): PiVehicleIdentity {
+function vehicleIdentity(manifest: VehicleManifest, descriptor: VehicleOperationDescriptor, toolCallId: string): PiVehicleIdentity {
 	return {
 		name: manifest.name,
 		version: manifest.version,
@@ -173,10 +165,7 @@ function projectedNames(
 	}));
 }
 
-function assertNamesAvailable(
-	pi: ExtensionAPI,
-	projected: readonly { descriptor: VehicleManifestOperation; toolName: string }[],
-): void {
+function assertNamesAvailable(pi: ExtensionAPI, projected: readonly { descriptor: VehicleManifestOperation; toolName: string }[]): void {
 	const owners = new Map<string, string>();
 	for (const { descriptor, toolName } of projected) {
 		if (!/^[a-zA-Z0-9_-]+$/.test(toolName)) {
@@ -216,7 +205,8 @@ function createTool(
 		parameters: descriptor.inputSchema as TSchema,
 		renderCall: overrides?.renderCall ?? ((args, theme, context) => renderVehicleCall(descriptor, args, theme, context)),
 		renderResult:
-			overrides?.renderResult ?? ((result, resultOptions, theme, context) => renderVehicleResult(descriptor, result, resultOptions, theme, context)),
+			overrides?.renderResult ??
+			((result, resultOptions, theme, context) => renderVehicleResult(descriptor, result, resultOptions, theme, context)),
 		async execute(toolCallId, input, signal, onUpdate, context) {
 			const identity = vehicleIdentity(manifest, descriptor, toolCallId);
 			const resolved = await options.resolveInvocation?.({
@@ -250,9 +240,7 @@ function createTool(
 				correlationId: resolved?.correlationId ?? context.sessionManager.getSessionId(),
 				signal,
 				onProgress: reportProgress,
-				...(descriptor.idempotency.mode === "keyed" && !resolved?.idempotencyKey
-					? { idempotencyKey: toolCallId }
-					: {}),
+				...(descriptor.idempotency.mode === "keyed" && !resolved?.idempotencyKey ? { idempotencyKey: toolCallId } : {}),
 			};
 
 			let output: unknown;

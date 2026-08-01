@@ -223,7 +223,9 @@ export async function performRotate(ctx: ExtensionCommandContext, backend: Secre
 
 /** Resolves true if the credential was actually revoked (confirmed and no error), false if declined or failed. */
 export async function performRevoke(ctx: ExtensionCommandContext, backend: SecretsBackend, name: string): Promise<boolean> {
-	const confirmed = ctx.hasUI ? await ctx.ui.confirm(`Revoke ${name}?`, "This deletes the stored credential. Re-authenticate to restore it.") : false;
+	const confirmed = ctx.hasUI
+		? await ctx.ui.confirm(`Revoke ${name}?`, "This deletes the stored credential. Re-authenticate to restore it.")
+		: false;
 	if (!confirmed) return false;
 	try {
 		await backend.revoke(name);
@@ -271,7 +273,12 @@ export async function performReveal(ctx: ExtensionCommandContext, backend: Secre
 async function manageSecret(ctx: ExtensionCommandContext, backend: SecretsBackend, name: string, pick: PickFromList): Promise<void> {
 	for (;;) {
 		const record = await backend.get(name);
-		const action = await pick(ctx, `${name} (${backend.source}) \u2014 ${describeSecret(record)}`, SECRET_ACTION_ITEMS, "\u2191\u2193 navigate \u2022 enter select \u2022 esc back");
+		const action = await pick(
+			ctx,
+			`${name} (${backend.source}) \u2014 ${describeSecret(record)}`,
+			SECRET_ACTION_ITEMS,
+			"\u2191\u2193 navigate \u2022 enter select \u2022 esc back",
+		);
 		if (!action || action === "back") return;
 		if (action === "rotate") {
 			await performRotate(ctx, backend, name);
@@ -285,7 +292,12 @@ async function manageSecret(ctx: ExtensionCommandContext, backend: SecretsBacken
 	}
 }
 
-async function secretsMenu(ctx: ExtensionCommandContext, backends: SecretsBackend[], pick: PickFromList, extraActions: SecretsMenuAction[]): Promise<void> {
+async function secretsMenu(
+	ctx: ExtensionCommandContext,
+	backends: SecretsBackend[],
+	pick: PickFromList,
+	extraActions: SecretsMenuAction[],
+): Promise<void> {
 	for (;;) {
 		const entries = await loadAllSecretsOrNotify(ctx, backends);
 		if (!entries) return;
@@ -309,14 +321,29 @@ async function secretsMenu(ctx: ExtensionCommandContext, backends: SecretsBacken
 	}
 }
 
-async function manageService(ctx: ExtensionCommandContext, service: ServiceRecord, backends: SecretsBackend[], pick: PickFromList): Promise<void> {
+async function manageService(
+	ctx: ExtensionCommandContext,
+	service: ServiceRecord,
+	backends: SecretsBackend[],
+	pick: PickFromList,
+): Promise<void> {
 	const allSecrets = await loadAllSecretsOrNotify(ctx, backends);
 	if (!allSecrets) return;
 	const byName = new Map(allSecrets.map(({ record }) => [record.name, record]));
-	await pick(ctx, `${service.name} \u2014 secrets in use`, buildServiceDetailItems(service, byName), "\u2191\u2193 navigate \u2022 esc back");
+	await pick(
+		ctx,
+		`${service.name} \u2014 secrets in use`,
+		buildServiceDetailItems(service, byName),
+		"\u2191\u2193 navigate \u2022 esc back",
+	);
 }
 
-async function servicesMenu(ctx: ExtensionCommandContext, registry: ServicesRegistry, backends: SecretsBackend[], pick: PickFromList): Promise<void> {
+async function servicesMenu(
+	ctx: ExtensionCommandContext,
+	registry: ServicesRegistry,
+	backends: SecretsBackend[],
+	pick: PickFromList,
+): Promise<void> {
 	for (;;) {
 		const services = await registry.list();
 		if (services.length === 0) {
@@ -326,7 +353,12 @@ async function servicesMenu(ctx: ExtensionCommandContext, registry: ServicesRegi
 		const entries = await loadAllSecretsOrNotify(ctx, backends);
 		if (!entries) return;
 		const allSecretNames = new Set(entries.map(({ record }) => record.name));
-		const selected = await pick(ctx, "Services", buildServicesMenuItems(services, allSecretNames), "\u2191\u2193 navigate \u2022 enter select \u2022 esc back");
+		const selected = await pick(
+			ctx,
+			"Services",
+			buildServicesMenuItems(services, allSecretNames),
+			"\u2191\u2193 navigate \u2022 enter select \u2022 esc back",
+		);
 		if (!selected) return;
 		const service = services.find((s) => s.name === selected);
 		if (service) await manageService(ctx, service, backends, pick);
@@ -430,7 +462,12 @@ export function registerSharedSecretsCommand(pi: ExtensionAPI, contributor: Secr
 	});
 }
 
-export { findServicesUsingSecret };
-export type { SecretRecord, SecretsBackend, ServiceRecord, ServicesRegistry };
 export type { SecretsContribution, SecretsContributor } from "./secrets-registry.ts";
-export { registerSecretsContributor, unregisterSecretsContributor, listSecretsContributors, claimSecretsCommandName } from "./secrets-registry.ts";
+export {
+	claimSecretsCommandName,
+	listSecretsContributors,
+	registerSecretsContributor,
+	unregisterSecretsContributor,
+} from "./secrets-registry.ts";
+export type { SecretRecord, SecretsBackend, ServiceRecord, ServicesRegistry };
+export { findServicesUsingSecret };

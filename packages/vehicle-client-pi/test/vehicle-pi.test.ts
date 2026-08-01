@@ -1,19 +1,14 @@
 import { describe, expect, it } from "bun:test";
+import type { VehicleClient, VehicleInvocationOptions, VehicleManifest, VehicleManifestOperation } from "@danypops/vehicle-core";
+import { VehicleError } from "@danypops/vehicle-core";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Check } from "typebox/value";
 import {
 	PiVehicleInvocationError,
+	type PiVehicleToolDetails,
 	refreshVehicleToolAvailability,
 	registerVehicleTools,
-	type PiVehicleToolDetails,
 } from "../src/vehicle-pi.ts";
-import type {
-	VehicleClient,
-	VehicleInvocationOptions,
-	VehicleManifest,
-	VehicleManifestOperation,
-} from "@danypops/vehicle-core";
-import { VehicleError } from "@danypops/vehicle-core";
 
 const limits = {
 	defaultTimeoutMs: 1_000,
@@ -22,11 +17,7 @@ const limits = {
 	maxResponseBytes: 1_024,
 };
 
-function operation(
-	name: string,
-	version = 1,
-	overrides: Partial<VehicleManifestOperation> = {},
-): VehicleManifestOperation {
+function operation(name: string, version = 1, overrides: Partial<VehicleManifestOperation> = {}): VehicleManifestOperation {
 	return {
 		name,
 		version,
@@ -67,12 +58,7 @@ class FakeClient implements VehicleClient {
 		return Promise.resolve(this.value);
 	}
 
-	async invoke<Output = unknown>(
-		name: string,
-		version: number,
-		input: unknown,
-		options?: VehicleInvocationOptions,
-	): Promise<Output> {
+	async invoke<Output = unknown>(name: string, version: number, input: unknown, options?: VehicleInvocationOptions): Promise<Output> {
 		this.calls.push({ name, version, input, options });
 		options?.onProgress?.({ phase: "half" });
 		if (this.error) throw this.error;
@@ -116,15 +102,16 @@ function fakePi(existingNames: string[] = []) {
 	return { pi, tools, handlers, activeTools: () => [...active], setCallCount: () => setCalls };
 }
 
-async function execute(
-	tool: ToolDefinition,
-	input: unknown,
-	signal?: AbortSignal,
-	onUpdate?: (update: unknown) => void,
-) {
-	return tool.execute("pi-call-1", input as never, signal, onUpdate as never, {
-		sessionManager: { getSessionId: () => "session-1" },
-	} as never);
+async function execute(tool: ToolDefinition, input: unknown, signal?: AbortSignal, onUpdate?: (update: unknown) => void) {
+	return tool.execute(
+		"pi-call-1",
+		input as never,
+		signal,
+		onUpdate as never,
+		{
+			sessionManager: { getSessionId: () => "session-1" },
+		} as never,
+	);
 }
 
 describe("registerVehicleTools", () => {
@@ -135,9 +122,7 @@ describe("registerVehicleTools", () => {
 
 		const registered = await registerVehicleTools(pi, client);
 
-		expect(registered.tools).toEqual([
-			{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1, available: true },
-		]);
+		expect(registered.tools).toEqual([{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1, available: true }]);
 		expect(tools).toHaveLength(1);
 		expect(tools[0]?.description).toBe(descriptor.description);
 		expect(JSON.parse(JSON.stringify(tools[0]?.parameters))).toEqual(descriptor.inputSchema);
@@ -169,17 +154,14 @@ describe("registerVehicleTools", () => {
 
 		const collisionPi = fakePi();
 		await expect(
-			registerVehicleTools(
-				collisionPi.pi,
-				new FakeClient(manifest([operation("issues.search"), operation("issues_search")])),
-			),
+			registerVehicleTools(collisionPi.pi, new FakeClient(manifest([operation("issues.search"), operation("issues_search")]))),
 		).rejects.toThrow("collision");
 		expect(collisionPi.tools).toHaveLength(0);
 
 		const existing = fakePi(["issues_search"]);
-		await expect(
-			registerVehicleTools(existing.pi, new FakeClient(manifest([operation("issues.search")]))),
-		).rejects.toThrow("already registered");
+		await expect(registerVehicleTools(existing.pi, new FakeClient(manifest([operation("issues.search")])))).rejects.toThrow(
+			"already registered",
+		);
 		expect(existing.tools).toHaveLength(0);
 	});
 
@@ -274,7 +256,11 @@ describe("registerVehicleTools", () => {
 		client.error = new VehicleError("upstream-busy", "Provider is busy", { category: "unavailable", retryable: true });
 		const { pi, tools } = fakePi();
 		let called = false;
-		await registerVehicleTools(pi, client, { onInvoked: () => { called = true; } });
+		await registerVehicleTools(pi, client, {
+			onInvoked: () => {
+				called = true;
+			},
+		});
 		await expect(execute(tools[0]!, { value: "go" })).rejects.toThrow();
 		expect(called).toBe(false);
 	});
@@ -335,7 +321,7 @@ describe("registerVehicleTools", () => {
 		expect(activeTools().sort()).toEqual(["edit", "read"]);
 	});
 
-	it("turns Pi's cryptic \"Extension runtime not initialized\" error (calling registerVehicleTools from the top-level factory body) into a clear, actionable one", async () => {
+	it('turns Pi\'s cryptic "Extension runtime not initialized" error (calling registerVehicleTools from the top-level factory body) into a clear, actionable one', async () => {
 		const client = new FakeClient(manifest([operation("issues.search")]));
 		const { pi } = fakePi();
 		const notInitialized = new Error("Extension runtime not initialized. Action methods cannot be called during extension loading.");
@@ -354,7 +340,7 @@ describe("registerVehicleTools", () => {
 		}
 	});
 
-	it("sets promptSnippet so Pi's \"Available tools\" system-prompt section lists the tool -- omitted entirely otherwise, confirmed live", async () => {
+	it('sets promptSnippet so Pi\'s "Available tools" system-prompt section lists the tool -- omitted entirely otherwise, confirmed live', async () => {
 		const descriptor = operation("issues.search");
 		const client = new FakeClient(manifest([descriptor]));
 		const { pi, tools } = fakePi();
@@ -462,9 +448,7 @@ describe("refreshVehicleToolAvailability", () => {
 
 		expect(tools).toHaveLength(1); // still exactly one registerTool call ever
 		expect(activeTools()).toEqual(["jira_search"]);
-		expect(refreshed.tools).toEqual([
-			{ toolName: "jira_search", operationName: "jira.search", operationVersion: 1, available: true },
-		]);
+		expect(refreshed.tools).toEqual([{ toolName: "jira_search", operationName: "jira.search", operationVersion: 1, available: true }]);
 	});
 
 	it("deactivates a tool whose operation just became unavailable", async () => {

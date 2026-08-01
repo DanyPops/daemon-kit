@@ -151,7 +151,10 @@ const NULL_BREAKER: Pick<CircuitBreaker, "isOpen" | "recordFailure" | "recordSuc
  * failed connection attempt is never cached, so the very next call retries
  * once the daemon is actually reachable.
  */
-export function createRetryingClient<Client>(connect: () => Promise<Client>, options: CreateRetryingClientOptions = {}): RetryingClient<Client> {
+export function createRetryingClient<Client>(
+	connect: () => Promise<Client>,
+	options: CreateRetryingClientOptions = {},
+): RetryingClient<Client> {
 	const isStale = options.isStaleConnectionError ?? isLikelyStaleConnectionError;
 	const label = options.label ?? "daemon";
 	const breaker =
@@ -261,7 +264,9 @@ export interface ConnectPolicyOptions<Handle extends DaemonHandleLike, Client> {
  * consistent with these daemons' loopback-only, nothing-happens-by-default
  * security posture.
  */
-export async function connectWithPolicy<Handle extends DaemonHandleLike, Client>(options: ConnectPolicyOptions<Handle, Client>): Promise<Client> {
+export async function connectWithPolicy<Handle extends DaemonHandleLike, Client>(
+	options: ConnectPolicyOptions<Handle, Client>,
+): Promise<Client> {
 	const handle = options.readHandle();
 	if (handle) return options.buildClient(handle);
 
@@ -459,7 +464,9 @@ function defaultIsPidAlive(pid: number): boolean {
  * every consumer's CLI can expose as `<name> status` for parity with the
  * rest of this house's daemon-backed CLIs.
  */
-export async function daemonStatus<Handle extends DaemonHandleLike, Client>(options: DaemonStatusOptions<Handle, Client>): Promise<DaemonStatus> {
+export async function daemonStatus<Handle extends DaemonHandleLike, Client>(
+	options: DaemonStatusOptions<Handle, Client>,
+): Promise<DaemonStatus> {
 	const breaker = options.breaker?.();
 	const handle = options.readHandle();
 	if (!handle) return { state: "not-running", breaker, summary: "not running" };
@@ -477,7 +484,14 @@ export async function daemonStatus<Handle extends DaemonHandleLike, Client>(opti
 		return { state: "running", pid: handle.pid, version, uptimeMs, breaker, summary: `running (pid ${handle.pid}${versionSuffix})` };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		return { state: "unreachable", pid: handle.pid, uptimeMs, breaker, lastError: message, summary: `process is alive (pid ${handle.pid}) but not responding: ${message}` };
+		return {
+			state: "unreachable",
+			pid: handle.pid,
+			uptimeMs,
+			breaker,
+			lastError: message,
+			summary: `process is alive (pid ${handle.pid}) but not responding: ${message}`,
+		};
 	}
 }
 

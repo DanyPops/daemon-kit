@@ -1,5 +1,5 @@
-import { VehicleRegistry } from "@danypops/vehicle-server";
 import { LocalVehicleClient } from "@danypops/vehicle-client/local";
+import { VehicleRegistry } from "@danypops/vehicle-server";
 import { registerConformanceOperations, runVehicleClientConformance } from "../src/vehicle-conformance.ts";
 
 runVehicleClientConformance({

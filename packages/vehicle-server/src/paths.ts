@@ -78,10 +78,10 @@ export function resolveDaemonPaths(names: DaemonPathNames, options: PathEnvironm
 function resolveLinuxDaemonPaths(names: DaemonPathNames, options: PathEnvironment, home: string): DaemonPaths {
 	const env = options.env ?? process.env;
 	const uid = options.uid ?? process.getuid?.() ?? 0;
-	const dataHome = env["XDG_DATA_HOME"] ?? join(home, ".local", "share");
-	const stateHome = env["XDG_STATE_HOME"] ?? join(home, ".local", "state");
-	const runtimeHome = env["XDG_RUNTIME_DIR"] ?? join("/run", "user", String(uid));
-	const configHome = env["XDG_CONFIG_HOME"] ?? join(home, ".config");
+	const dataHome = env.XDG_DATA_HOME ?? join(home, ".local", "share");
+	const stateHome = env.XDG_STATE_HOME ?? join(home, ".local", "state");
+	const runtimeHome = env.XDG_RUNTIME_DIR ?? join("/run", "user", String(uid));
+	const configHome = env.XDG_CONFIG_HOME ?? join(home, ".config");
 	return {
 		database: join(dataHome, names.stateDirectoryName, names.databaseFilename),
 		token: join(stateHome, names.stateDirectoryName, names.tokenFilename),
@@ -105,8 +105,8 @@ function resolveWindowsDaemonPaths(names: DaemonPathNames, env: Record<string, s
 	// path.win32 (not the bare, host-dependent `join`) so this produces real
 	// backslash-separated Windows paths even when resolved on a Linux/macOS
 	// dev or CI host -- the only way this is testable off real Windows.
-	const localAppData = env["LOCALAPPDATA"] ?? win32.join(home, "AppData", "Local");
-	const appData = env["APPDATA"] ?? win32.join(home, "AppData", "Roaming");
+	const localAppData = env.LOCALAPPDATA ?? win32.join(home, "AppData", "Local");
+	const appData = env.APPDATA ?? win32.join(home, "AppData", "Roaming");
 	const dataDir = win32.join(localAppData, names.stateDirectoryName, "Data");
 	return {
 		database: win32.join(dataDir, names.databaseFilename),

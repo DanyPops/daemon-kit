@@ -26,8 +26,8 @@
  * a local caller would have seen.
  */
 import { randomUUID } from "node:crypto";
-import { VehicleError } from "@danypops/vehicle-core";
 import type { VehicleFailure, VehicleFailureCategory, VehicleInvocationOptions, VehiclePrincipal } from "@danypops/vehicle-core";
+import { VehicleError } from "@danypops/vehicle-core";
 import { errorResponse, jsonResponse, requireBearerToken } from "./http.js";
 import type { VehicleRegistry } from "./vehicle-registry.js";
 
@@ -70,7 +70,6 @@ function statusForCategory(category: VehicleFailureCategory): number {
 			return 400;
 		case "unavailable":
 			return 503;
-		case "internal":
 		default:
 			return 500;
 	}
