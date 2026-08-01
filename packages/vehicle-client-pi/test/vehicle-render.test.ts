@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import type { VehicleEffect, VehicleOperationDescriptor } from "@danypops/vehicle-core";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { renderVehicleCall, renderVehicleResult } from "../src/vehicle-render.ts";
+
+// keyHint() (used by the row-truncation "more" note) reads pi's global theme singleton,
+// independent of the fakeTheme/flatTheme fakes below -- it throws "Theme not initialized" without this.
+initTheme();
 
 // Theme is a class with private fields; a plain fake can't satisfy it
 // structurally. Cast through unknown -- documented, not a real runtime
@@ -100,6 +104,61 @@ describe("renderVehicleResult", () => {
 		expect(text).toContain("title");
 		expect(text).toContain("First");
 		expect(text).toContain("Second");
+	});
+
+	it("shows a clear message for an empty array output, not raw JSON '[]'", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: [] } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).not.toContain("[]");
+		expect(text.toLowerCase()).toContain("no results");
+	});
+
+	it("bounds a large array output to the default visible row count and reports how many more remain, using Pi's own expanded flag", () => {
+		const rows = Array.from({ length: 30 }, (_, i) => ({ id: `row-${i}` }));
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: rows } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).toContain("row-0");
+		expect(text).not.toContain("row-29"); // well past the default visible cap
+		expect(text).toContain("more");
+	});
+
+	it("shows every row with no truncation note when expanded is true", () => {
+		const rows = Array.from({ length: 30 }, (_, i) => ({ id: `row-${i}` }));
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: rows } },
+			{ isPartial: false, expanded: true },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).toContain("row-29");
+		expect(text).not.toContain("more");
+	});
+
+	it("adds no truncation note when the array is already under the default visible row count", () => {
+		const rows = Array.from({ length: 3 }, (_, i) => ({ id: `${i}` }));
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: rows } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).not.toContain("more");
 	});
 
 	it("falls back to collapsible JSON for a non-tabular output", () => {
