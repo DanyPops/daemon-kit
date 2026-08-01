@@ -28,6 +28,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
 
       - run: bun install
+      - run: bun run check
       - run: bun run build
 
       # Tag prefixes are checked longest-first (vehicle-client-pi- before
