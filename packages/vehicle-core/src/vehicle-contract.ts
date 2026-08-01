@@ -213,6 +213,8 @@ export interface VehicleOperationContext<Input> {
 	readonly idempotencyKey?: string;
 	readonly expectedRevision?: string | number;
 	readonly approvalCapability?: string;
+	/** Set only for a job execution (VehicleJobStore.submit()); undefined for a plain invoke(). A handler that wants mid-flight input opts in with `for await (const input of context.steerInputs ?? [])`. */
+	readonly steerInputs?: AsyncIterable<unknown>;
 	reportProgress(progress: unknown): void;
 }
 

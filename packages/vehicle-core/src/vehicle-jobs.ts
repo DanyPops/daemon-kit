@@ -2,8 +2,8 @@
 
 export type VehicleJobStatus = "running" | "succeeded" | "failed" | "canceled";
 
-/** Highest precedence first -- an explicit cancel always wins even if the handler also settled around the same time. */
-export const VEHICLE_JOB_TERMINATION_PRECEDENCE = ["canceled", "timeout", "failed", "succeeded"] as const;
+/** Highest precedence first -- an explicit cancel always wins even if the handler also settled around the same time. "orphaned" is a restart-reconciliation outcome: a job that was still "running" when its process died, so nothing ever really failed or succeeded -- the record's own status just goes stale. */
+export const VEHICLE_JOB_TERMINATION_PRECEDENCE = ["canceled", "timeout", "orphaned", "failed", "succeeded"] as const;
 export type VehicleJobTerminationReason = (typeof VEHICLE_JOB_TERMINATION_PRECEDENCE)[number];
 
 export function resolveVehicleJobTerminationReason(candidates: readonly VehicleJobTerminationReason[]): VehicleJobTerminationReason {
@@ -111,4 +111,145 @@ function fnv1aHash(value: string): string {
 		hash = Math.imul(hash, 0x01000193);
 	}
 	return (hash >>> 0).toString(16);
+}
+
+/** Read-only replay side of a wake log -- both a live VehicleJobWakeLog and a restored (no-longer-appendable) job satisfy this with the same tail() semantics. */
+export interface VehicleJobWakeLogReader {
+	since(cursor: number): readonly VehicleJobWakeEntry[];
+	readonly cursor: number;
+}
+
+/** Wraps a fixed, already-finalized list of entries (e.g. restored from disk) in the same reader shape a live VehicleJobWakeLog exposes, so VehicleJobStore.tail() doesn't need to special-case a restored job. */
+export function createStaticVehicleJobWakeLog(entries: readonly VehicleJobWakeEntry[]): VehicleJobWakeLogReader {
+	const sorted = [...entries].sort((a, b) => a.seq - b.seq);
+	const cursor = sorted.length > 0 ? sorted[sorted.length - 1]!.seq : 0;
+	return {
+		since: (cursorArg) => sorted.filter((entry) => entry.seq > cursorArg),
+		cursor,
+	};
+}
+
+/**
+ * A job's mid-flight input channel -- the "steer" primitive. Bounded FIFO:
+ * push() while a handler isn't yet reading buffers up to maxQueueSize, then
+ * refuses further input rather than growing unboundedly or silently
+ * overwriting an unread entry. A handler consumes it via `for await (const
+ * input of context.steerInputs)`, which ends cleanly once close() is
+ * called (VehicleJobStore does this at job finalization).
+ */
+export interface VehicleJobSteerPushResult {
+	readonly accepted: boolean;
+	readonly dropReason?: "queue-full" | "channel-closed";
+}
+
+export class VehicleJobSteerChannel implements AsyncIterable<unknown> {
+	private readonly buffer: unknown[] = [];
+	private readonly waiters: ((result: IteratorResult<unknown>) => void)[] = [];
+	private closed = false;
+
+	constructor(private readonly maxQueueSize: number = 64) {}
+
+	push(value: unknown): VehicleJobSteerPushResult {
+		if (this.closed) return { accepted: false, dropReason: "channel-closed" };
+		const waiter = this.waiters.shift();
+		if (waiter) {
+			waiter({ value, done: false });
+			return { accepted: true };
+		}
+		if (this.buffer.length >= this.maxQueueSize) return { accepted: false, dropReason: "queue-full" };
+		this.buffer.push(value);
+		return { accepted: true };
+	}
+
+	/** Ends every pending and future iteration with done:true; further push() calls report "channel-closed". Idempotent. */
+	close(): void {
+		if (this.closed) return;
+		this.closed = true;
+		for (const waiter of this.waiters.splice(0)) waiter({ value: undefined, done: true });
+	}
+
+	[Symbol.asyncIterator](): AsyncIterator<unknown> {
+		return {
+			next: (): Promise<IteratorResult<unknown>> => {
+				if (this.buffer.length > 0) return Promise.resolve({ value: this.buffer.shift(), done: false });
+				if (this.closed) return Promise.resolve({ value: undefined, done: true });
+				return new Promise((resolve) => this.waiters.push(resolve));
+			},
+		};
+	}
+}
+
+/**
+ * Vehicle Jobs run as in-process promises, not child processes -- there is
+ * no PID to reuse, but the same identity-confusion risk vstack's
+ * {pid, startToken, comm} design guards against still applies in a
+ * generalized form: a persisted job record written by one process
+ * instance must never be mistaken for one this (possibly restarted)
+ * instance can still resolve. Each VehicleJobStore construction gets a
+ * fresh random instanceToken; a persisted record's own stamped token only
+ * ever matches the instance that wrote it. A mismatch means "the original
+ * run is gone", the same conclusion vstack's identityMatches() reaches by
+ * comparing a live process's actual pid/start-time/command against a
+ * stored snapshot -- this is that same check with no process to inspect.
+ */
+export function vehicleJobIdentityMatches(recordInstanceToken: string, currentInstanceToken: string): boolean {
+	return recordInstanceToken === currentInstanceToken;
+}
+
+/** Minimal shape selectVehicleJobsForEviction needs from a job record -- kept separate from VehicleJobSnapshot so vehicle-server doesn't have to construct a full snapshot just to ask "should this be swept". */
+export interface VehicleJobEvictionCandidate {
+	readonly jobId: string;
+	readonly status: VehicleJobStatus;
+	readonly delivered: boolean;
+	readonly updatedAt: number;
+}
+
+export interface VehicleJobRetentionOptions {
+	/** Hard cap on total retained job records (of any status). A running job is never evicted regardless of this cap. */
+	readonly maxRetainedJobs: number;
+	/** A delivered terminal job becomes eligible for eviction once this many ms have passed since it was delivered (== updatedAt at delivery time). */
+	readonly deliveredRetentionMs: number;
+	readonly now: number;
+}
+
+/**
+ * Pure eviction-selection policy, kept separate from VehicleJobStore's own
+ * bookkeeping so the bounded-retention rule is independently testable.
+ * Preference order: (1) delivered and past deliveredRetentionMs, oldest
+ * first; (2) once still over maxRetainedJobs, any delivered terminal job,
+ * oldest first; (3) only as a last resort, an undelivered terminal job,
+ * oldest first -- a real loss (a caller may still want that result), but
+ * an unbounded store is a worse failure mode. A running job is never a
+ * candidate.
+ */
+export function selectVehicleJobsForEviction(
+	candidates: readonly VehicleJobEvictionCandidate[],
+	options: VehicleJobRetentionOptions,
+): readonly string[] {
+	const terminal = candidates.filter((candidate) => candidate.status !== "running");
+	const byAgeAscending = (a: VehicleJobEvictionCandidate, b: VehicleJobEvictionCandidate) => a.updatedAt - b.updatedAt;
+
+	const evicted = new Set<string>();
+	for (const candidate of terminal) {
+		if (candidate.delivered && options.now - candidate.updatedAt >= options.deliveredRetentionMs) evicted.add(candidate.jobId);
+	}
+
+	const remainingCount = () => candidates.length - evicted.size;
+	if (remainingCount() > options.maxRetainedJobs) {
+		const deliveredOldestFirst = terminal.filter((candidate) => candidate.delivered && !evicted.has(candidate.jobId)).sort(byAgeAscending);
+		for (const candidate of deliveredOldestFirst) {
+			if (remainingCount() <= options.maxRetainedJobs) break;
+			evicted.add(candidate.jobId);
+		}
+	}
+	if (remainingCount() > options.maxRetainedJobs) {
+		const undeliveredOldestFirst = terminal
+			.filter((candidate) => !candidate.delivered && !evicted.has(candidate.jobId))
+			.sort(byAgeAscending);
+		for (const candidate of undeliveredOldestFirst) {
+			if (remainingCount() <= options.maxRetainedJobs) break;
+			evicted.add(candidate.jobId);
+		}
+	}
+	return [...evicted];
 }

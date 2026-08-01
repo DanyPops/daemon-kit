@@ -27,7 +27,9 @@ export type VehicleCoreErrorCode =
 	| "client-closed"
 	| "operation-unavailable"
 	| "background-not-supported"
-	| "job-not-found";
+	| "job-not-found"
+	| "job-not-steerable"
+	| "job-steer-queue-full";
 
 export interface VehicleRecovery {
 	readonly operation?: string;

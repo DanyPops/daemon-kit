@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { bindVehicleOperation, defineVehicleOperation, defineVehicleSchema, type VehicleOperationBinding } from "@danypops/vehicle-core";
+import type { VehicleJobPersistedSnapshot, VehicleJobPersistenceAdapter } from "../src/vehicle-job-persistence.ts";
 import { VehicleJobStore } from "../src/vehicle-job-store.ts";
 import { VehicleRegistry } from "../src/vehicle-registry.ts";
 
@@ -218,3 +219,231 @@ describe("VehicleJobStore", () => {
 function flush(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+/** In-memory stand-in for a real file-backed adapter -- persistence-behavior tests care about what VehicleJobStore writes/restores, not about disk I/O itself (that's createFileVehicleJobPersistence's own test file). */
+function memoryPersistence(): VehicleJobPersistenceAdapter & { saved?: VehicleJobPersistedSnapshot; saveCount: number } {
+	const adapter = {
+		saved: undefined as VehicleJobPersistedSnapshot | undefined,
+		saveCount: 0,
+		async save(snapshot: VehicleJobPersistedSnapshot) {
+			adapter.saved = snapshot;
+			adapter.saveCount++;
+		},
+		async load() {
+			return adapter.saved;
+		},
+	};
+	return adapter;
+}
+
+describe("VehicleJobStore: steer", () => {
+	it("delivers a steer input to a handler that opts in via context.steerInputs", async () => {
+		const operation = backgroundOperation("test.steer");
+		const received: unknown[] = [];
+		const binding = bindVehicleOperation(operation, () => (context) => {
+			return (async () => {
+				for await (const input of context.steerInputs ?? []) {
+					received.push(input);
+					if (received.length === 2) return { done: true };
+				}
+				return { done: true };
+			})();
+		});
+		const store = new VehicleJobStore(registryWith(binding));
+		const { jobId } = store.submit("test.steer", 1, {});
+		store.steer(jobId, { step: "a" });
+		store.steer(jobId, { step: "b" });
+		await flush();
+		expect(received).toEqual([{ step: "a" }, { step: "b" }]);
+		expect(store.poll(jobId).status).toBe("succeeded");
+	});
+
+	it("steering does not cancel or otherwise disturb the job -- it keeps running until the handler itself finishes", async () => {
+		const job = deferredJob("test.steer-no-cancel");
+		const store = new VehicleJobStore(registryWith(job.binding));
+		const { jobId } = store.submit("test.steer-no-cancel", 1, {});
+		store.steer(jobId, "ping");
+		expect(store.poll(jobId).status).toBe("running");
+		job.resolve({ ok: true });
+		await flush();
+		expect(store.poll(jobId).status).toBe("succeeded");
+	});
+
+	it("refuses to steer an unknown job id", () => {
+		const store = new VehicleJobStore(registryWith(deferredJob("test.steer-unknown").binding));
+		expect(() => store.steer("nonexistent", {})).toThrow("No Vehicle job found");
+	});
+
+	it("refuses to steer an already-terminal job", async () => {
+		const job = deferredJob("test.steer-terminal");
+		const store = new VehicleJobStore(registryWith(job.binding));
+		const { jobId } = store.submit("test.steer-terminal", 1, {});
+		job.resolve({});
+		await flush();
+		expect(() => store.steer(jobId, "too late")).toThrow("cannot accept new input");
+	});
+
+	it("surfaces a full steer queue as a distinct, caller-actionable error rather than silently dropping it", () => {
+		const operation = backgroundOperation("test.steer-full");
+		const binding = bindVehicleOperation(operation, () => () => new Promise(() => {})); // never reads steerInputs
+		const store = new VehicleJobStore(registryWith(binding), { maxSteerQueueSize: 1 });
+		const { jobId } = store.submit("test.steer-full", 1, {});
+		store.steer(jobId, "one");
+		expect(() => store.steer(jobId, "two")).toThrow("steer input queue is full");
+	});
+});
+
+describe("VehicleJobStore: persistence and restore", () => {
+	it("persists a running, then completed, job's state so a fresh store restores it", async () => {
+		const job = deferredJob("test.persist");
+		const persistence = memoryPersistence();
+		const store = new VehicleJobStore(registryWith(job.binding), { persistence });
+		const { jobId } = store.submit("test.persist", 1, {});
+		job.progress({ step: 1 });
+		job.resolve({ answer: 42 });
+		await flush();
+		await store.flushPersistence();
+
+		const restoredStore = new VehicleJobStore(registryWith(deferredJob("test.persist").binding), { persistence });
+		const result = await restoredStore.restore();
+		expect(result).toEqual({ restoredCount: 1, orphanedCount: 0 });
+		expect(restoredStore.poll(jobId)).toMatchObject({ status: "succeeded", output: { answer: 42 } });
+		expect(restoredStore.tail(jobId).entries.map((entry) => entry.progress)).toEqual([{ step: 1 }]);
+	});
+
+	it("a job still 'running' when persisted is restored as orphaned -- there is no process left to resume it", async () => {
+		const job = deferredJob("test.orphan");
+		const persistence = memoryPersistence();
+		const store = new VehicleJobStore(registryWith(job.binding), { persistence });
+		const { jobId } = store.submit("test.orphan", 1, {});
+		await store.flushPersistence(); // never resolved -- simulates the daemon dying mid-job
+
+		const restoredStore = new VehicleJobStore(registryWith(deferredJob("test.orphan").binding), { persistence });
+		const result = await restoredStore.restore();
+		expect(result).toEqual({ restoredCount: 1, orphanedCount: 1 });
+		expect(restoredStore.poll(jobId)).toMatchObject({ status: "failed", terminationReason: "orphaned" });
+		expect(restoredStore.poll(jobId).error?.code).toBe("job-orphaned-by-restart");
+	});
+
+	it("restore() is a no-op when no persistence adapter is configured", async () => {
+		const store = new VehicleJobStore(registryWith(deferredJob("test.no-persistence").binding));
+		await expect(store.restore()).resolves.toEqual({ restoredCount: 0, orphanedCount: 0 });
+	});
+
+	it("restore() is a no-op when the persistence adapter has nothing saved", async () => {
+		const store = new VehicleJobStore(registryWith(deferredJob("test.nothing-saved").binding), { persistence: memoryPersistence() });
+		await expect(store.restore()).resolves.toEqual({ restoredCount: 0, orphanedCount: 0 });
+	});
+
+	it("a persist failure is reported via onPersistError and does not break the job's own execution", async () => {
+		const job = deferredJob("test.persist-fails");
+		const errors: unknown[] = [];
+		const failingPersistence: VehicleJobPersistenceAdapter = {
+			save: async () => {
+				throw new Error("disk full");
+			},
+			load: async () => undefined,
+		};
+		const store = new VehicleJobStore(registryWith(job.binding), {
+			persistence: failingPersistence,
+			onPersistError: (error) => errors.push(error),
+		});
+		const { jobId } = store.submit("test.persist-fails", 1, {});
+		job.resolve({ ok: true });
+		await flush();
+		await store.flushPersistence();
+		expect(errors.length).toBeGreaterThan(0);
+		expect(store.poll(jobId).status).toBe("succeeded"); // the job itself is unaffected
+	});
+});
+
+describe("VehicleJobStore: delivery confirmation and retention sweep", () => {
+	it("a completed job's result stays retrievable after markDelivered -- delivery just makes it eviction-eligible, not gone", async () => {
+		const job = deferredJob("test.delivered");
+		const store = new VehicleJobStore(registryWith(job.binding));
+		const { jobId } = store.submit("test.delivered", 1, {});
+		job.resolve({ ok: true });
+		await flush();
+		expect(store.poll(jobId).delivered).toBe(false);
+		store.markDelivered(jobId);
+		expect(store.poll(jobId)).toMatchObject({ delivered: true, status: "succeeded", output: { ok: true } });
+	});
+
+	it("markDelivered is idempotent and refuses an unknown job id like every other lookup", async () => {
+		const job = deferredJob("test.delivered-idempotent");
+		const store = new VehicleJobStore(registryWith(job.binding));
+		const { jobId } = store.submit("test.delivered-idempotent", 1, {});
+		job.resolve({});
+		await flush();
+		store.markDelivered(jobId);
+		expect(() => store.markDelivered(jobId)).not.toThrow();
+		expect(() => store.markDelivered("nonexistent")).toThrow("No Vehicle job found");
+	});
+
+	it("an undelivered terminal job is never evicted just for aging past deliveredRetentionMs", async () => {
+		let now = 0;
+		const kept = deferredJob("test.undelivered-kept");
+		const trigger = deferredJob("test.undelivered-kept-trigger");
+		const store = new VehicleJobStore(registryWith(kept.binding, trigger.binding), {
+			now: () => now,
+			deliveredRetentionMs: 10,
+			maxRetainedJobs: 100,
+		});
+		const { jobId } = store.submit("test.undelivered-kept", 1, {});
+		kept.resolve({});
+		await flush();
+		now = 1_000_000; // far past deliveredRetentionMs
+		const { jobId: triggerId } = store.submit("test.undelivered-kept-trigger", 1, {});
+		trigger.resolve({}); // this job's own finalize() runs a sweep as a side effect, without ever delivering `kept`
+		await flush();
+		expect(store.poll(jobId).status).toBe("succeeded"); // still present -- never delivered, so never eviction-eligible
+		expect(store.poll(triggerId).status).toBe("succeeded");
+	});
+
+	it("a delivered job becomes eviction-eligible once past deliveredRetentionMs, on the next sweep", async () => {
+		let now = 0;
+		const job = deferredJob("test.sweep-by-age");
+		const store = new VehicleJobStore(registryWith(job.binding), { now: () => now, deliveredRetentionMs: 10, maxRetainedJobs: 100 });
+		const { jobId } = store.submit("test.sweep-by-age", 1, {});
+		job.resolve({});
+		await flush();
+		store.markDelivered(jobId); // age 0 at delivery time -- not evicted yet
+		expect(store.poll(jobId).status).toBe("succeeded");
+		now = 1_000; // now well past deliveredRetentionMs
+		store.markDelivered(jobId); // idempotent for the flag itself, but still re-runs the sweep against the new `now`
+		expect(() => store.poll(jobId)).toThrow("No Vehicle job found");
+	});
+
+	it("evicts down to maxRetainedJobs, preferring delivered jobs oldest-first, once the cap is exceeded", async () => {
+		let now = 0;
+		const jobs = [deferredJob("test.cap-1"), deferredJob("test.cap-2"), deferredJob("test.cap-3"), deferredJob("test.cap-4")];
+		const store = new VehicleJobStore(registryWith(...jobs.map((job) => job.binding)), {
+			now: () => now,
+			maxRetainedJobs: 3,
+			deliveredRetentionMs: 1_000_000_000,
+		});
+
+		const ids: string[] = [];
+		for (const [index, job] of jobs.slice(0, 3).entries()) {
+			now = index * 10;
+			ids.push(store.submit(`test.cap-${index + 1}`, 1, {}).jobId);
+			job.resolve({ index });
+			await flush(); // settles (and sweeps) before the next submit, so each record gets a distinct, ordered updatedAt
+		}
+		// Cap is 3 and exactly 3 terminal jobs exist -- nothing evicted yet.
+		store.markDelivered(ids[0]!);
+		store.markDelivered(ids[1]!);
+		expect(store.poll(ids[0]!).status).toBe("succeeded");
+
+		now = 100;
+		const fourthId = store.submit("test.cap-4", 1, {}).jobId;
+		jobs[3]!.resolve({ index: 3 });
+		await flush(); // 4 terminal jobs now exist against a cap of 3 -- finalize()'s own sweep must evict one
+
+		// ids[2] was never delivered, so it's protected; the oldest *delivered* job (ids[0]) is evicted instead.
+		expect(() => store.poll(ids[0]!)).toThrow("No Vehicle job found");
+		expect(store.poll(ids[1]!).status).toBe("succeeded");
+		expect(store.poll(ids[2]!).status).toBe("succeeded");
+		expect(store.poll(fourthId).status).toBe("succeeded");
+	});
+});
