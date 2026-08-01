@@ -10,7 +10,7 @@ import type { AtomicJsonFsAdapter } from "@danypops/vehicle-core";
 
 export function createNodeAtomicJsonFsAdapter(): AtomicJsonFsAdapter {
 	return {
-		writeFile: (path, data) => writeFile(path, data, "utf8"),
+		writeFile: (path, data, mode) => writeFile(path, data, mode !== undefined ? { encoding: "utf8", mode } : "utf8"),
 		rename: (oldPath, newPath) => rename(oldPath, newPath),
 		unlink: (path) => unlink(path),
 		readFile: (path) => readFile(path, "utf8"),

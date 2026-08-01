@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAtomicJsonWriter } from "@danypops/vehicle-core";
@@ -39,5 +39,23 @@ describe("createNodeAtomicJsonFsAdapter", () => {
 	test("read() of a file that was never written returns undefined", async () => {
 		const writer = createAtomicJsonWriter({ fs: createNodeAtomicJsonFsAdapter() });
 		await expect(writer.read(join(dir, "missing.json"))).resolves.toBeUndefined();
+	});
+
+	test("an explicit mode really lands on the real file, surviving the rename", async () => {
+		const writer = createAtomicJsonWriter({ fs: createNodeAtomicJsonFsAdapter() });
+		const filePath = join(dir, "secret.json");
+		await writer.write(filePath, { token: "x" }, { mode: 0o600 });
+
+		const stats = await stat(filePath);
+		expect(stats.mode & 0o777).toBe(0o600);
+	});
+
+	test("pretty:true really produces indented JSON on the real filesystem", async () => {
+		const writer = createAtomicJsonWriter({ fs: createNodeAtomicJsonFsAdapter() });
+		const filePath = join(dir, "pretty.json");
+		await writer.write(filePath, { a: 1 }, { pretty: true });
+
+		const raw = await readFile(filePath, "utf8");
+		expect(raw).toBe(JSON.stringify({ a: 1 }, null, 2));
 	});
 });

@@ -19,10 +19,18 @@
  */
 
 export interface AtomicJsonFsAdapter {
-	writeFile(path: string, data: string): Promise<void>;
+	/** `mode` is a POSIX file-mode bitmask (e.g. 0o600); omitted means the platform/adapter's own default. */
+	writeFile(path: string, data: string, mode?: number): Promise<void>;
 	rename(oldPath: string, newPath: string): Promise<void>;
 	unlink(path: string): Promise<void>;
 	readFile(path: string): Promise<string>;
+}
+
+export interface AtomicJsonWriteOptions {
+	/** POSIX file-mode bitmask for the written file (e.g. 0o600 for a secret/credential-adjacent file). Omitted means the adapter's own default. */
+	readonly mode?: number;
+	/** Pretty-prints with 2-space indentation (matching JSON.stringify(value, null, 2)) for a human-editable file. Defaults to false (compact). */
+	readonly pretty?: boolean;
 }
 
 export interface AtomicJsonWriterOptions {
@@ -49,7 +57,7 @@ export interface AtomicJsonWriterOptions {
 
 export interface AtomicJsonWriter {
 	/** Serializes `value` to JSON and writes it to `filePath` atomically (temp file + rename). */
-	write(filePath: string, value: unknown): Promise<void>;
+	write(filePath: string, value: unknown, options?: AtomicJsonWriteOptions): Promise<void>;
 	/** Reads and JSON.parses `filePath`. Returns undefined if the file doesn't exist (fs.readFile throws ENOENT); rethrows any other error. */
 	read(filePath: string): Promise<unknown | undefined>;
 }
@@ -102,17 +110,17 @@ export function createAtomicJsonWriter(options: AtomicJsonWriterOptions): Atomic
 	}
 
 	return {
-		async write(filePath, value) {
+		async write(filePath, value, options) {
 			let serialized: string | undefined;
 			try {
-				serialized = JSON.stringify(value);
+				serialized = options?.pretty ? JSON.stringify(value, null, 2) : JSON.stringify(value);
 			} catch (error) {
 				throw new Error(`atomic-json: value for ${filePath} is not JSON-serializable`, { cause: error });
 			}
 			if (serialized === undefined) throw new Error(`atomic-json: value for ${filePath} is not JSON-serializable`);
 			const { dir, base } = dirAndBase(filePath);
 			const tempPath = `${dir}/.${base}.${pid()}.${now()}.${random()}.tmp`;
-			await fsAdapter.writeFile(tempPath, serialized);
+			await fsAdapter.writeFile(tempPath, serialized, options?.mode);
 			try {
 				await renameWithRetry(tempPath, filePath);
 			} catch (error) {

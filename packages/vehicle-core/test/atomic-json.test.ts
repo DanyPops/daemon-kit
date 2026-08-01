@@ -2,13 +2,20 @@ import { describe, expect, test } from "bun:test";
 import type { AtomicJsonFsAdapter } from "../src/atomic-json.ts";
 import { createAtomicJsonWriter } from "../src/atomic-json.ts";
 
-function createFakeFs(): AtomicJsonFsAdapter & { readonly files: Map<string, string>; renameCalls: number } {
+function createFakeFs(): AtomicJsonFsAdapter & {
+	readonly files: Map<string, string>;
+	readonly modes: Map<string, number | undefined>;
+	renameCalls: number;
+} {
 	const files = new Map<string, string>();
+	const modes = new Map<string, number | undefined>();
 	return {
 		files,
+		modes,
 		renameCalls: 0,
-		async writeFile(path, data) {
+		async writeFile(path, data, mode) {
 			files.set(path, data);
+			modes.set(path, mode);
 		},
 		async rename(oldPath, newPath) {
 			this.renameCalls++;
@@ -83,6 +90,34 @@ describe("createAtomicJsonWriter", () => {
 		};
 		const writer = createAtomicJsonWriter({ fs });
 		await expect(writer.read("/state/jobs.json")).rejects.toThrow("EACCES");
+	});
+
+	test("write() forwards an explicit mode to the fs adapter's writeFile", async () => {
+		const fs = createFakeFs();
+		const writer = createAtomicJsonWriter({ fs, pid: () => 1, now: () => 1, random: () => "a" });
+		await writer.write("/state/secret.json", { ok: true }, { mode: 0o600 });
+		expect(fs.modes.get("/state/.secret.json.1.1.a.tmp")).toBe(0o600);
+	});
+
+	test("write() omits mode by default, leaving the adapter's own default in effect", async () => {
+		const fs = createFakeFs();
+		const writer = createAtomicJsonWriter({ fs, pid: () => 1, now: () => 1, random: () => "a" });
+		await writer.write("/state/plain.json", { ok: true });
+		expect(fs.modes.get("/state/.plain.json.1.1.a.tmp")).toBeUndefined();
+	});
+
+	test("write() with pretty:true matches JSON.stringify(value, null, 2)", async () => {
+		const fs = createFakeFs();
+		const writer = createAtomicJsonWriter({ fs });
+		await writer.write("/state/pretty.json", { a: 1, b: [2, 3] }, { pretty: true });
+		expect(fs.files.get("/state/pretty.json")).toBe(JSON.stringify({ a: 1, b: [2, 3] }, null, 2));
+	});
+
+	test("write() without pretty stays compact (unchanged default)", async () => {
+		const fs = createFakeFs();
+		const writer = createAtomicJsonWriter({ fs });
+		await writer.write("/state/compact.json", { a: 1 });
+		expect(fs.files.get("/state/compact.json")).toBe(JSON.stringify({ a: 1 }));
 	});
 
 	test("write() rejects a non-JSON-serializable value without touching the filesystem", async () => {
