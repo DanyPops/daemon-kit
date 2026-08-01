@@ -16,7 +16,11 @@
 		"./secrets-backend-env": "./src/secrets-backend-env.ts",
 		"./secrets-backend-local": "./src/secrets-backend-local.ts",
 		"./secrets-registry": "./src/secrets-registry.ts",
-		"./secrets-tui": "./src/secrets-tui.ts"
+		"./secrets-tui": "./src/secrets-tui.ts",
+		"./vehicle-render": {
+			"types": "./dist/vehicle-render.d.ts",
+			"default": "./dist/vehicle-render.js"
+		}
 	},
 	"scripts": {
 		"build": "rm -rf dist && tsc -p tsconfig.build.json",
