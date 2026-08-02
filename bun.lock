@@ -27,7 +27,7 @@
     },
     "packages/vehicle-client": {
       "name": "@danypops/vehicle-client",
-      "version": "0.1.1",
+      "version": "0.3.0",
       "dependencies": {
         "@danypops/vehicle-core": "workspace:*",
         "@danypops/vehicle-server": "workspace:*",
@@ -40,8 +40,9 @@
     },
     "packages/vehicle-client-pi": {
       "name": "@danypops/vehicle-client-pi",
-      "version": "0.4.0",
+      "version": "0.5.2",
       "dependencies": {
+        "@danypops/vehicle-client": "workspace:*",
         "@danypops/vehicle-core": "workspace:*",
         "@danypops/vehicle-server": "workspace:*",
         "malevich-tui-components": "^0.19.0",
@@ -75,7 +76,7 @@
     },
     "packages/vehicle-core": {
       "name": "@danypops/vehicle-core",
-      "version": "0.2.0",
+      "version": "0.7.0",
       "devDependencies": {
         "@types/node": "^22.0.0",
         "typescript": "^5.9.2",
@@ -83,7 +84,7 @@
     },
     "packages/vehicle-server": {
       "name": "@danypops/vehicle-server",
-      "version": "0.3.2",
+      "version": "0.8.0",
       "dependencies": {
         "@danypops/vehicle-core": "workspace:*",
         "pino": "^10.3.1",

@@ -45,6 +45,10 @@
 			"types": "./dist/vehicle-job-store.d.ts",
 			"default": "./dist/vehicle-job-store.js"
 		},
+		"./watchers": {
+			"types": "./dist/vehicle-watchers.d.ts",
+			"default": "./dist/vehicle-watchers.js"
+		},
 		"./job-persistence": {
 			"types": "./dist/vehicle-job-persistence.d.ts",
 			"default": "./dist/vehicle-job-persistence.js"
