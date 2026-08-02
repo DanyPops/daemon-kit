@@ -101,6 +101,7 @@
       "name": "@danypops/vehicle-server",
       "version": "0.13.0",
       "dependencies": {
+        "@danypops/armada": "workspace:*",
         "@danypops/vehicle-core": "workspace:*",
         "pino": "^10.3.1",
       },

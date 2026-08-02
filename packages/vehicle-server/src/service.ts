@@ -1,67 +1,34 @@
 /**
- * Cross-platform login/boot persistence for an auto-spawned daemon --
- * generalizes web-spider-daemon's own bespoke systemd --user unit writer
- * (cli.ts) and adds the macOS and Windows equivalents that never existed
- * anywhere in this house's daemons.
- *
- * Scope is deliberately narrower than a process supervisor: connectWithPolicy's
- * auto-spawn plus startDaemon's single-instance lock (see pi-client.ts and
- * daemon.ts) already resurrect the daemon lazily on the next tool call
- * regardless of what, if anything, supervises it. This module's only job is
- * making sure one gets started once after login/reboot with the right
- * environment -- not restart-on-crash supervision, which would just
- * duplicate what auto-spawn already provides for free on every platform.
- *
- * Linux: a systemd --user unit (no elevation), matching web-spider's
- * existing approach. Init-system detection is by binary presence (pm2's
- * own technique, read directly from its lib/API/Startup.js) rather than
- * assuming systemd from process.platform alone -- an unsupported init
- * system fails with a clear, specific error instead of silently guessing.
- * macOS: a user-scoped ~/Library/LaunchAgents/<label>.plist with
- * RunAtLoad, loaded via `launchctl bootstrap gui/<uid>` -- the
- * headless-daemon-correct model (pm2's own launchd path), not an
- * AppleScript-driven Login Item (auto-launch's model, built for GUI apps
- * with a Dock presence, the wrong shape for a background CLI process).
- * Windows: an HKCU\...\Run registry value via the OS-provided `reg.exe`
- * (no native dependency, matching pi-client.ts's zero-runtime-dependency
- * posture) -- the same mechanism both pm2-windows-startup and auto-launch
- * ship, just shelled out to directly instead of via the `winreg` package.
- * No elevation required.
+ * Projects Vehicle service declarations into Armada's authoritative fleet.
+ * Native descriptor generators remain available for inspection during migration,
+ * but installation and removal never mutate service-manager state directly.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 
 export interface ServiceSpec {
 	/** Used in filenames/labels, e.g. "web-spider". Must be filesystem/registry-value-name safe. */
 	name: string;
 	/** Human display name, e.g. "Web Spider". Defaults to `name`. */
 	displayName?: string;
+	/** Installed package or daemon version projected into Armada desired state. */
+	version: string;
 	/** Absolute path to the daemon's entry point (e.g. a `#!/usr/bin/env bun` cli.ts). */
 	binPath: string;
 	args?: string[];
 	env?: Record<string, string>;
-	/** Where the generated descriptor is written -- resolveDaemonPaths().serviceDescriptor. */
-	descriptorPath: string;
-	/**
-	 * Adds Restart=always (systemd) / KeepAlive (launchd) so the init system itself
-	 * relaunches a crashed or exited process. Only for a daemon whose client never
-	 * auto-spawns (connectWithPolicy's autoStart) -- otherwise this duplicates recovery
-	 * the client side already provides for free, on every platform. Linux only for now;
-	 * has no effect on macOS/Windows.
-	 */
+	/** Absolute Vehicle handle path used for bounded readiness checks. */
+	handlePath: string;
+	workingDirectory?: string;
+	/** Requests Armada-managed on-failure restart. */
 	restartOnFailure?: boolean;
-	/** RestartSec, in seconds -- only applied alongside restartOnFailure. Omit to use systemd's own default (100ms), too aggressive for a daemon that could genuinely crash-loop. */
+	/** Restart delay in seconds, applied with restartOnFailure. */
 	restartSec?: number;
-	/** Adds NoNewPrivileges=true (systemd only) -- the process and its children can never gain new privileges via setuid/setgid/capabilities, regardless of the daemon's own logic. Cheap, no functional cost for a daemon that never needs to. */
+	/** Legacy systemd renderer option; Armada installation rejects it rather than ignoring it. */
 	noNewPrivileges?: boolean;
-	/** Adds PrivateTmp=true (systemd only) -- gives the unit its own /tmp and /var/tmp, invisible to and isolated from every other process on the host. */
+	/** Legacy systemd renderer option; Armada installation rejects it rather than ignoring it. */
 	privateTmp?: boolean;
-	/**
-	 * Adds `network-online.target` to After=/Wants= (systemd only) -- for a daemon that talks to
-	 * external services (search providers, model APIs) at startup and would otherwise race a
-	 * --user unit's own login-time network bring-up. Omit for a daemon with no real network
-	 * dependency of its own (e.g. a local-only graph store).
-	 */
+	/** Legacy systemd renderer option; Armada installation rejects it rather than ignoring it. */
 	waitForNetwork?: boolean;
 }
 
@@ -71,19 +38,10 @@ export interface RunResult {
 }
 
 export interface ServiceInstallDeps {
-	/** Defaults to process.platform. Injectable for tests. */
-	platform?: NodeJS.Platform;
-	writeFile: (path: string, content: string) => void;
-	readFile: (path: string) => string | null;
-	removeFile: (path: string) => void;
-	fileExists: (path: string) => boolean;
-	mkdirp: (path: string) => void;
 	/** Runs a command to completion. Never throws -- failures are reported via `ok: false`. */
-	runCommand: (command: string, args: string[]) => RunResult;
-	/** True when `binary` is resolvable on PATH. */
-	which: (binary: string) => boolean;
-	/** Linux only -- current numeric uid, used in `launchctl`-equivalent addressing on other platforms is not needed, kept here only for symmetry/tests. */
-	uid?: number;
+	runCommand: (command: string, args: string[], input?: string) => RunResult;
+	/** Resolved published Armada CLI entrypoint. */
+	armadaCliPath: string;
 }
 
 export type ServiceInstallResult = { installed: true } | { installed: false; reason: string };
@@ -205,158 +163,75 @@ export function windowsRunCommand(spec: ServiceSpec): string {
 	return [spec.binPath, ...(spec.args ?? [])].map((value) => `"${value}"`).join(" ");
 }
 
-const LAUNCHD_LABEL_PREFIX = "com.danypops.";
-
-function launchdLabel(name: string): string {
-	return `${LAUNCHD_LABEL_PREFIX}${name}`;
+function armadaVehicle(spec: ServiceSpec): string {
+	return JSON.stringify({
+		name: spec.name,
+		version: spec.version,
+		executable: spec.binPath,
+		arguments: spec.args ?? [],
+		...(spec.workingDirectory === undefined ? {} : { workingDirectory: spec.workingDirectory }),
+		handlePath: spec.handlePath,
+		restart: spec.restartOnFailure
+			? {
+					policy: "on-failure",
+					delayMs: Math.max(100, (spec.restartSec ?? 1) * 1_000),
+					maxAttempts: 10,
+					windowMs: 60_000,
+				}
+			: { policy: "never" },
+		readiness: { timeoutMs: 10_000, pollIntervalMs: 100 },
+	});
 }
 
-/**
- * Installs login/boot persistence for `spec` on the current (or injected)
- * platform. Idempotent -- re-running after an existing install overwrites
- * the descriptor and re-registers it, rather than erroring or duplicating.
- */
+/** Delegates desired-state mutation and native reconciliation to Armada. */
 export function installUserService(spec: ServiceSpec, deps: ServiceInstallDeps): ServiceInstallResult {
-	const platform = deps.platform ?? process.platform;
-
-	if (platform === "linux") {
-		const initSystem = detectLinuxInitSystem(deps.which);
-		if (initSystem !== "systemd") {
-			return {
-				installed: false,
-				reason: initSystem
-					? `unsupported Linux init system "${initSystem}" -- only systemd --user is supported; install/start ${spec.binPath} manually`
-					: "no supported Linux init system was detected (checked for systemctl/rc-update/update-rc.d/chkconfig)",
-			};
-		}
-		deps.mkdirp(dirnameOf(spec.descriptorPath));
-		deps.writeFile(spec.descriptorPath, generateSystemdUnit(spec));
-		const reload = deps.runCommand("systemctl", ["--user", "daemon-reload"]);
-		if (!reload.ok) return { installed: false, reason: `systemctl --user daemon-reload failed: ${reload.output}` };
-		const enable = deps.runCommand("systemctl", ["--user", "enable", "--now", basenameOf(spec.descriptorPath)]);
-		if (!enable.ok) return { installed: false, reason: `systemctl --user enable --now failed: ${enable.output}` };
-		return { installed: true };
+	if (spec.env && Object.keys(spec.env).length > 0) {
+		return { installed: false, reason: "Armada service declarations cannot contain environment or credential material" };
 	}
-
-	if (platform === "darwin") {
-		deps.mkdirp(dirnameOf(spec.descriptorPath));
-		deps.writeFile(spec.descriptorPath, generateLaunchdPlist(spec));
-		const uid = deps.uid ?? process.getuid?.() ?? 0;
-		const bootstrap = deps.runCommand("launchctl", ["bootstrap", `gui/${uid}`, spec.descriptorPath]);
-		if (!bootstrap.ok && !/already bootstrapped|service already loaded/i.test(bootstrap.output)) {
-			return { installed: false, reason: `launchctl bootstrap failed: ${bootstrap.output}` };
-		}
-		return { installed: true };
+	if (spec.noNewPrivileges || spec.privateTmp || spec.waitForNetwork) {
+		return { installed: false, reason: "legacy systemd-only service controls cannot be projected into Armada" };
 	}
-
-	if (platform === "win32") {
-		const result = deps.runCommand("reg.exe", [
-			"add",
-			"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-			"/v",
-			spec.name,
-			"/t",
-			"REG_SZ",
-			"/d",
-			windowsRunCommand(spec),
-			"/f",
-		]);
-		if (!result.ok) return { installed: false, reason: `reg.exe add failed: ${result.output}` };
-		return { installed: true };
-	}
-
-	return { installed: false, reason: `unsupported platform: ${platform}` };
+	const upsert = deps.runCommand(process.execPath, [deps.armadaCliPath, "upsert", "--vehicle-file", "-", "--json"], armadaVehicle(spec));
+	if (!upsert.ok) return { installed: false, reason: `armada upsert failed: ${upsert.output}` };
+	const reconcile = deps.runCommand(process.execPath, [deps.armadaCliPath, "reconcile", "--json"]);
+	if (!reconcile.ok) return { installed: false, reason: `armada reconcile failed: ${reconcile.output}` };
+	return { installed: true };
 }
 
 export function uninstallUserService(spec: ServiceSpec, deps: ServiceInstallDeps): ServiceInstallResult {
-	const platform = deps.platform ?? process.platform;
-
-	if (platform === "linux") {
-		const disable = deps.runCommand("systemctl", ["--user", "disable", "--now", basenameOf(spec.descriptorPath)]);
-		deps.removeFile(spec.descriptorPath);
-		if (!disable.ok && deps.fileExists(spec.descriptorPath)) {
-			return { installed: false, reason: `systemctl --user disable --now failed: ${disable.output}` };
-		}
-		return { installed: true };
-	}
-
-	if (platform === "darwin") {
-		const uid = deps.uid ?? process.getuid?.() ?? 0;
-		deps.runCommand("launchctl", ["bootout", `gui/${uid}/${launchdLabel(spec.name)}`]);
-		deps.removeFile(spec.descriptorPath);
-		return { installed: true };
-	}
-
-	if (platform === "win32") {
-		const result = deps.runCommand("reg.exe", ["delete", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", spec.name, "/f"]);
-		if (!result.ok && !/unable to find the specified registry|cannot find/i.test(result.output)) {
-			return { installed: false, reason: `reg.exe delete failed: ${result.output}` };
-		}
-		return { installed: true };
-	}
-
-	return { installed: false, reason: `unsupported platform: ${platform}` };
+	const result = deps.runCommand(process.execPath, [deps.armadaCliPath, "remove", spec.name, "--json"]);
+	if (!result.ok) return { installed: false, reason: `armada remove failed: ${result.output}` };
+	return { installed: true };
 }
 
-/** Whether spec's descriptor is present. On Linux/macOS this is the generated file; Windows checks the registry value instead. */
+/** Whether Armada reports this Vehicle in its desired fleet. */
 export function isServiceInstalled(spec: ServiceSpec, deps: ServiceInstallDeps): boolean {
-	const platform = deps.platform ?? process.platform;
-	if (platform === "win32") {
-		const result = deps.runCommand("reg.exe", ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", spec.name]);
-		return result.ok;
+	const result = deps.runCommand(process.execPath, [deps.armadaCliPath, "status", "--json"]);
+	if (!result.ok) return false;
+	try {
+		const status = JSON.parse(result.output) as { vehicles?: Array<{ name?: string }> };
+		return status.vehicles?.some((vehicle) => vehicle.name === spec.name) ?? false;
+	} catch {
+		return false;
 	}
-	return deps.fileExists(spec.descriptorPath);
 }
 
-/** Real ServiceInstallDeps against the actual filesystem/shell -- every consumer's own cli.ts needs the exact same glue, so it lives here once instead of five hand-rolled copies. */
+/** Real Armada CLI dependencies against the actual shell. */
 export function createNodeServiceInstallDeps(): ServiceInstallDeps {
 	return {
-		writeFile: (path, content) => writeFileSync(path, content),
-		readFile: (path) => {
+		armadaCliPath: createRequire(import.meta.url).resolve("@danypops/armada/cli"),
+		runCommand: (command, args, input): RunResult => {
 			try {
-				return readFileSync(path, "utf8");
-			} catch {
-				return null;
-			}
-		},
-		removeFile: (path) => {
-			try {
-				unlinkSync(path);
-			} catch {
-				// already absent -- removal is idempotent.
-			}
-		},
-		fileExists: (path) => existsSync(path),
-		mkdirp: (path) => mkdirSync(path, { recursive: true }),
-		runCommand: (command, args): RunResult => {
-			try {
-				const output = execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+				const output = execFileSync(command, args, {
+					encoding: "utf8",
+					input,
+					stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+				});
 				return { ok: true, output };
 			} catch (error) {
 				const execError = error as { stdout?: string; stderr?: string; message: string };
 				return { ok: false, output: (execError.stdout ?? "") + (execError.stderr ?? execError.message) };
 			}
 		},
-		which: (binary) => {
-			try {
-				execFileSync(process.platform === "win32" ? "where" : "which", [binary], { stdio: "ignore" });
-				return true;
-			} catch {
-				return false;
-			}
-		},
-		uid: process.getuid?.(),
 	};
-}
-
-function dirnameOf(path: string): string {
-	const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
-	const index = path.lastIndexOf(separator);
-	return index === -1 ? "." : path.slice(0, index);
-}
-
-function basenameOf(path: string): string {
-	const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
-	const index = path.lastIndexOf(separator);
-	return index === -1 ? path : path.slice(index + 1);
 }

@@ -76,6 +76,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@danypops/armada": "workspace:*",
 		"@danypops/vehicle-core": "workspace:*",
 		"pino": "^10.3.1"
 	},
