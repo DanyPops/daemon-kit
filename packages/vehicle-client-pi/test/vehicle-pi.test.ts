@@ -421,6 +421,28 @@ describe("registerVehicleTools", () => {
 			expect(client.calls).toHaveLength(1);
 		});
 
+		it("the follow-up receives the tool call's own signal and onUpdate, for its own abortable/progress-reporting round trip", async () => {
+			const client = new FakeClient(manifest([operation("discuss.open")]));
+			client.result = { discussion: { id: "d-1" } };
+			const { pi, tools } = fakePi();
+			const controller = new AbortController();
+			const updates: unknown[] = [];
+			let seenSignal: AbortSignal | undefined;
+			await registerVehicleTools(pi, client, {
+				interactiveFollowUps: () => async (request) => {
+					seenSignal = request.signal;
+					request.onUpdate?.({ content: [{ type: "text", text: "waiting" }], details: { vehicle: { name: "t", version: "1", operation: "discuss.open", operationVersion: 1, toolCallId: "pi-call-1" } } });
+					return { content: [{ type: "text", text: "done" }] };
+				},
+			});
+			await execute(tools[0]!, { value: "go" }, controller.signal, (update) => updates.push(update));
+			expect(seenSignal).toBe(controller.signal);
+			// FakeClient's own invoke() also reports one progress update of its own (the primary
+			// call's usual onProgress plumbing, unrelated to the follow-up) -- the follow-up's own
+			// update is the last one, not necessarily the only one.
+			expect((updates.at(-1) as { content: unknown }).content).toEqual([{ type: "text", text: "waiting" }]);
+		});
+
 		it("the follow-up receives the real VehicleClient, usable to make its own additional invoke() calls", async () => {
 			const client = new FakeClient(manifest([operation("discuss.open")]));
 			client.result = { discussion: { id: "d-1" } };

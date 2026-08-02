@@ -10,7 +10,7 @@ import type {
 	VehiclePrincipal,
 } from "@danypops/vehicle-core";
 import { extractVehicleContent, VehicleError } from "@danypops/vehicle-core";
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { publishVehicleActivity } from "./activity-broker.js";
 import { guardExtensionRuntimeInitialized, syncManagedActiveTools } from "./pi-tool-availability.js";
@@ -39,6 +39,10 @@ export interface PiVehicleInvocationRequest {
 	readonly toolCallId: string;
 	readonly input: unknown;
 	readonly context: ExtensionContext;
+	/** The tool call's own cancellation signal -- present on every request; here for interactiveFollowUps (or any future consumer) to make its own extra round trip abortable too. */
+	readonly signal?: AbortSignal;
+	/** The tool call's own progress-update callback -- lets an interactiveFollowUp report an in-progress status (e.g. "waiting for a human answer") the same way the primary invoke()'s own onProgress does. */
+	readonly onUpdate?: AgentToolUpdateCallback<PiVehicleToolDetails>;
 }
 
 export type PiVehicleInvocationResolver = (
@@ -492,7 +496,7 @@ function createTool(
 			}
 			const followUp = options.interactiveFollowUps?.(descriptor);
 			if (followUp) {
-				const request: PiVehicleInvocationRequest = { descriptor, manifest, toolName, toolCallId, input, context };
+				const request: PiVehicleInvocationRequest = { descriptor, manifest, toolName, toolCallId, input, context, signal, onUpdate };
 				const result = await followUp(request, output, client);
 				if (result) return { content: [...result.content], details: { vehicle: identity, output: result.output ?? output } };
 			}
