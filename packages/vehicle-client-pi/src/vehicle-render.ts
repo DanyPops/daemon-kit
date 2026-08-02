@@ -9,6 +9,7 @@ import {
 	firstDistinctStyle,
 	ProgressBar,
 	renderBoundedTable,
+	renderTruncatedList,
 	Text,
 	type TextMeasure,
 } from "malevich-tui-components";
@@ -131,6 +132,21 @@ export function renderVehicleResult(
 			headerStyle: (s) => theme.fg("muted", theme.bold(s)),
 			measure,
 		});
+	}
+	// deriveTableColumns only handles arrays of objects, returning undefined
+	// for an array of plain strings (e.g. discuss.list's formatted summary
+	// lines) -- without this, that shape fell through to a raw JSON.stringify
+	// dump (quotes, brackets, commas, no color). Reuses the same bounded-list
+	// primitive and "... N more" wording the table path already uses.
+	if (Array.isArray(output) && output.every((item): item is string => typeof item === "string")) {
+		const lines = renderTruncatedList({
+			items: output,
+			expanded: options.expanded,
+			visibleCount: DEFAULT_VISIBLE_ROWS,
+			formatItem: (item) => theme.fg("text", item),
+			moreLine: (hiddenCount) => moreRowsLine(theme, hiddenCount),
+		});
+		return new Text({ text: lines.join("\n"), measure });
 	}
 
 	const text = JSON.stringify(output, null, 2) ?? "null";

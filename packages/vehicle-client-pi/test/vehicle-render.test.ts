@@ -161,6 +161,50 @@ describe("renderVehicleResult", () => {
 		expect(text).not.toContain("more");
 	});
 
+	it("renders a bounded bullet list for an array-of-plain-strings output, not a raw JSON dump", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: ["[done] First discussion", "[in-progress] Second discussion"] } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).toContain("[done] First discussion");
+		expect(text).toContain("[in-progress] Second discussion");
+		expect(text).not.toContain('"');
+		expect(text).not.toContain("[\n");
+	});
+
+	it("bounds a large plain-string array to the default visible count and reports how many more remain", () => {
+		const rows = Array.from({ length: 30 }, (_, i) => `row-${i}`);
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: rows } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).toContain("row-0");
+		expect(text).not.toContain("row-29");
+		expect(text).toContain("more");
+	});
+
+	it("shows every plain-string row with no truncation note when expanded is true", () => {
+		const rows = Array.from({ length: 30 }, (_, i) => `row-${i}`);
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: rows } },
+			{ isPartial: false, expanded: true },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).toContain("row-29");
+		expect(text).not.toContain("more");
+	});
+
 	it("falls back to collapsible JSON for a non-tabular output", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),
