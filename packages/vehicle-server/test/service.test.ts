@@ -104,15 +104,15 @@ describe("Armada service ownership", () => {
 
 	it("removes only through Armada", () => {
 		const deps = fakeDeps();
-		expect(uninstallUserService(SPEC, deps)).toEqual({ installed: true });
+		expect(uninstallUserService(SPEC.name, deps)).toEqual({ installed: true });
 		expect(deps.commands).toEqual([{ command: process.execPath, args: ["/armada/cli.js", "remove", "acme", "--json"] }]);
 	});
 
 	it("reads installation state from Armada status", () => {
 		const present = fakeDeps({ runCommand: () => ({ ok: true, output: JSON.stringify({ vehicles: [{ name: "acme" }] }) }) });
-		expect(isServiceInstalled(SPEC, present)).toBe(true);
+		expect(isServiceInstalled(SPEC.name, present)).toBe(true);
 		const absent = fakeDeps({ runCommand: () => ({ ok: true, output: JSON.stringify({ vehicles: [] }) }) });
-		expect(isServiceInstalled(SPEC, absent)).toBe(false);
+		expect(isServiceInstalled(SPEC.name, absent)).toBe(false);
 	});
 });
 

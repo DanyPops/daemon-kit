@@ -198,19 +198,19 @@ export function installUserService(spec: ServiceSpec, deps: ServiceInstallDeps):
 	return { installed: true };
 }
 
-export function uninstallUserService(spec: ServiceSpec, deps: ServiceInstallDeps): ServiceInstallResult {
-	const result = deps.runCommand(process.execPath, [deps.armadaCliPath, "remove", spec.name, "--json"]);
+export function uninstallUserService(name: string, deps: ServiceInstallDeps): ServiceInstallResult {
+	const result = deps.runCommand(process.execPath, [deps.armadaCliPath, "remove", name, "--json"]);
 	if (!result.ok) return { installed: false, reason: `armada remove failed: ${result.output}` };
 	return { installed: true };
 }
 
 /** Whether Armada reports this Vehicle in its desired fleet. */
-export function isServiceInstalled(spec: ServiceSpec, deps: ServiceInstallDeps): boolean {
+export function isServiceInstalled(name: string, deps: ServiceInstallDeps): boolean {
 	const result = deps.runCommand(process.execPath, [deps.armadaCliPath, "status", "--json"]);
 	if (!result.ok) return false;
 	try {
 		const status = JSON.parse(result.output) as { vehicles?: Array<{ name?: string }> };
-		return status.vehicles?.some((vehicle) => vehicle.name === spec.name) ?? false;
+		return status.vehicles?.some((vehicle) => vehicle.name === name) ?? false;
 	} catch {
 		return false;
 	}
