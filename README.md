@@ -7,6 +7,23 @@ serve AI agents tools -- so the daemon substrate (process lifecycle, storage,
 auth, logging) lives directly inside `@danypops/vehicle-server` and
 `@danypops/vehicle-client`, not as a separate dependency they each pull in.
 
+## Getting started
+
+The fastest path to a working Vehicle-backed Pi extension is copying one of
+three ready-made starter templates in [`templates/`](./templates) and
+renaming it -- not reading this whole README and wiring `vehicle-core`/
+`vehicle-server`/`vehicle-client-pi` together from scratch:
+
+```bash
+cp -r templates/job-orchestration ~/my-extension   # or templates/memory, or templates/chat-bridge
+cd ~/my-extension && bun install && bun test
+```
+
+Pick by shape: **job-orchestration** and **memory** are Monolith Mode (no
+daemon); **chat-bridge** is the daemon-backed Split shape. See
+[`templates/README.md`](./templates/README.md) for the full comparison, and
+"Split vs Monolith" below for the deployment-shape tradeoff itself.
+
 ## Why this exists
 
 Four independent daemons (`web-spider-daemon`, `jittor`, `papyrus`,
