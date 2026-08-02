@@ -105,6 +105,22 @@ const ConformanceNever = defineVehicleOperation({
 	limits: LIMITS,
 });
 
+/** Genuinely slow (unlike ConformanceProgress, which resolves near-instantly) -- the streaming-progress-required check needs real elapsed time to exceed its threshold before the "did it report progress" assertion means anything. */
+const SLOW_PROGRESS_DELAY_MS = 60;
+const ConformanceSlowProgress = defineVehicleOperation({
+	name: "conformance.slow-progress",
+	version: 1,
+	description:
+		"Reports one progress event partway through a real delay, then resolves -- streaming: true declares it must never silently block.",
+	input: passthroughSchema,
+	output: outputSchema,
+	permissions: [],
+	effect: "read",
+	idempotency: { mode: "safe" },
+	streaming: true,
+	limits: LIMITS,
+});
+
 /** Registers the fixed conformance operation set onto `registry`. Every fixture must call this before handing back its client. */
 export function registerConformanceOperations(registry: VehicleRegistry): void {
 	registry.register(
@@ -137,7 +153,18 @@ export function registerConformanceOperations(registry: VehicleRegistry): void {
 			});
 		}),
 	);
+	registry.register(
+		"conformance",
+		bindVehicleOperation(ConformanceSlowProgress, () => async (context) => {
+			context.reportProgress({ step: 1 });
+			await new Promise((resolve) => setTimeout(resolve, SLOW_PROGRESS_DELAY_MS));
+			return { echoed: context.input.value };
+		}),
+	);
 }
+
+/** Every operation this suite declares with streaming: true -- the streaming-progress-required check generates one named it() per entry, per this project's own "per-check test isolation" requirement. */
+const STREAMING_OPERATIONS = [{ descriptor: ConformanceSlowProgress.descriptor, thresholdMs: SLOW_PROGRESS_DELAY_MS / 2 }] as const;
 
 export interface VehicleConformanceFixture {
 	/** Used in describe() block titles, e.g. "LocalVehicleClient" or "RemoteVehicleClient (HTTP)". */
@@ -159,6 +186,7 @@ export function runVehicleClientConformance(fixture: VehicleConformanceFixture):
 					"conformance.keyed@1",
 					"conformance.never@1",
 					"conformance.progress@1",
+					"conformance.slow-progress@1",
 				]);
 				const echo = manifest.operations.find((op) => op.name === "conformance.echo");
 				expect(echo?.permissions).toEqual(["conformance:echo"]);
@@ -316,6 +344,76 @@ export function runVehicleClientConformance(fixture: VehicleConformanceFixture):
 				await expect(client.manifest()).rejects.toBeTruthy();
 			} finally {
 				await cleanup();
+			}
+		});
+
+		// Schema-rejection timing: an invalid-input invocation must resolve (with a
+		// validation error) within a small bound, never falling through to a general
+		// timeout -- catches a handler whose validation path accidentally does real
+		// I/O before checking input shape. Ported from Alef's own adapter-contract.ts
+		// runSchemaContract (200ms bound), a separate named check from the existing
+		// "rejects invalid input" test above per this suite's own per-check isolation.
+		it("invoke() rejects invalid input within a bounded time, never falling through to a general timeout", async () => {
+			const { client, cleanup } = await fixture.create();
+			try {
+				const start = Date.now();
+				await expect(client.invoke("conformance.echo", 1, { value: 123 }, { permissions: ["conformance:echo"] })).rejects.toMatchObject({
+					code: "invalid-input",
+				});
+				const elapsed = Date.now() - start;
+				expect(elapsed, `schema rejection took ${elapsed}ms -- should be immediate (<200ms)`).toBeLessThan(200);
+			} finally {
+				await cleanup();
+			}
+		});
+
+		// Human-readable error messages: a validation failure's own .message must
+		// never leak an internal validation-library-specific type name or a bare
+		// stringified object -- a real bug class this ports from Alef's own
+		// adapter-contract.ts (a live zod "[InputValidation]" prefix leak there).
+		it("invoke() rejects invalid input with a human-readable message, never a raw validation-library leak", async () => {
+			const { client, cleanup } = await fixture.create();
+			try {
+				const error = await client.invoke("conformance.echo", 1, { value: 123 }, { permissions: ["conformance:echo"] }).catch((e) => e);
+				const message = (error as { message?: unknown }).message;
+				expect(typeof message).toBe("string");
+				expect(message).not.toBe("[object Object]");
+				expect(message as string).not.toMatch(/ValueError|TypeBoxError|\[InputValidation\]|ZodError/);
+				// Genuinely readable: names which operation failed, not just "invalid".
+				expect(message as string).toContain("conformance.echo");
+			} finally {
+				await cleanup();
+			}
+		});
+
+		// Streaming-progress-required: any operation declared streaming: true must
+		// emit at least one progress event before resolving, once its real
+		// execution exceeds a threshold duration -- catches a handler that
+		// silently blocks the caller instead of reporting progress despite
+		// declaring progress support. One named it() per discovered
+		// streaming-capable operation (this suite currently declares exactly one),
+		// per this project's own per-check test isolation.
+		describe("streaming-progress-required (operations declared streaming: true)", () => {
+			for (const { descriptor, thresholdMs } of STREAMING_OPERATIONS) {
+				it(`${descriptor.name}@${descriptor.version} emits progress before resolving, once it runs past ${thresholdMs}ms`, async () => {
+					const { client, cleanup } = await fixture.create();
+					try {
+						const progress: unknown[] = [];
+						const start = Date.now();
+						await client.invoke(descriptor.name, descriptor.version, { value: "hi" }, { onProgress: (p) => progress.push(p) });
+						const elapsed = Date.now() - start;
+						expect(
+							elapsed,
+							`test fixture ran in ${elapsed}ms, below its own ${thresholdMs}ms threshold -- this check can't prove anything`,
+						).toBeGreaterThan(thresholdMs);
+						expect(
+							progress.length,
+							`${descriptor.name} ran for ${elapsed}ms but emitted zero progress events -- a streaming: true operation must never silently block`,
+						).toBeGreaterThan(0);
+					} finally {
+						await cleanup();
+					}
+				});
 			}
 		});
 	});

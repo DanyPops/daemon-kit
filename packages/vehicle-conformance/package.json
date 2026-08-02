@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/vehicle-conformance",
-	"version": "0.1.1",
+	"version": "0.2.0",
 	"description": "Host-neutral conformance suite for any VehicleClient implementation: one shared bun:test assertion set that LocalVehicleClient, RemoteVehicleClient, and any future transport must satisfy identically. A Bun-only devDependency for testing, not a runtime library -- ships raw TypeScript, never precompiled.",
 	"license": "MIT",
 	"type": "module",
