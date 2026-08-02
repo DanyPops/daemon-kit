@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -27,19 +27,21 @@ describe("native controller", () => {
 	it("writes, reloads, starts, stops, and inspects systemd user units", async () => {
 		const root = await mkdtemp(join(tmpdir(), "armada-systemd-"));
 		const empty = { ok: true as const, stdout: "", stderr: "" };
-		const fake = runner([empty, empty, empty, { ok: true, stdout: "LoadState=loaded\nActiveState=active\nMainPID=42\n", stderr: "" }]);
+		const fake = runner([empty, empty, empty, empty, { ok: true, stdout: "LoadState=loaded\nActiveState=active\nMainPID=42\n", stderr: "" }]);
 		const controller = createNativeController({ kind: "systemd", descriptorRoot: root, commandRunner: fake.commandRunner });
 		const generated = systemdStrategy.generateDescriptor(vehicle());
 		expect(generated.ok).toBe(true);
 		if (!generated.ok) return;
 		expect((await controller.replaceDescriptorAtomically(generated.descriptor)).ok).toBe(true);
+		expect(await readFile(join(root, "armada.target"), "utf8")).toContain("WantedBy=default.target");
 		expect((await controller.start(generated.descriptor.identity)).ok).toBe(true);
 		expect((await controller.stop(generated.descriptor.identity)).ok).toBe(true);
 		const inspected = await controller.inspect([vehicle()]);
 		expect(inspected).toMatchObject({ ok: true, services: [{ status: "running", pid: 42, specHash: generated.descriptor.specHash }] });
 		expect(fake.calls).toEqual([
 			["systemctl", "--user", "daemon-reload"],
-			["systemctl", "--user", "start", "armada-papyrus.service"],
+			["systemctl", "--user", "enable", "armada.target"],
+			["systemctl", "--user", "enable", "--now", "armada-papyrus.service"],
 			["systemctl", "--user", "stop", "armada-papyrus.service"],
 			["systemctl", "--user", "show", "armada-papyrus.service", "--property=LoadState", "--property=ActiveState", "--property=MainPID", "--no-pager"],
 		]);

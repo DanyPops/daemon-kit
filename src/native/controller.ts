@@ -122,7 +122,7 @@ function executable(kind: NativeManagerKind): string {
 }
 
 function lifecycleArguments(kind: NativeManagerKind, operation: "start" | "stop", identity: string, path: string, userId: number): readonly string[] {
-	if (kind === "systemd") return ["--user", operation, identity];
+	if (kind === "systemd") return operation === "start" ? ["--user", "enable", "--now", identity] : ["--user", "stop", identity];
 	if (kind === "launchd") return operation === "start" ? ["bootstrap", `gui/${userId}`, path] : ["bootout", `gui/${userId}/${identity}`];
 	return operation === "start" ? ["/Run", "/TN", identity] : ["/End", "/TN", identity];
 }
@@ -176,8 +176,18 @@ export function createNativeController(options: NativeControllerOptions): Native
 			if (!written.ok) return written;
 			if (options.kind === "launchd") return written;
 			const command = executable(options.kind);
-			const arguments_ = options.kind === "systemd" ? ["--user", "daemon-reload"] : ["/Create", "/TN", descriptor.identity, "/XML", path, "/F"];
-			const result = await runner.run(command, arguments_);
+			if (options.kind === "systemd") {
+				const target = await replaceFileAtomically(
+					join(options.descriptorRoot, "armada.target"),
+					"[Unit]\nDescription=Armada Vehicle fleet\n\n[Install]\nWantedBy=default.target\n",
+				);
+				if (!target.ok) return target;
+				const reload = await runner.run(command, ["--user", "daemon-reload"]);
+				if (!reload.ok) return commandFailure(command, reload);
+				const enabled = await runner.run(command, ["--user", "enable", "armada.target"]);
+				return enabled.ok ? written : commandFailure(command, enabled);
+			}
+			const result = await runner.run(command, ["/Create", "/TN", descriptor.identity, "/XML", path, "/F"]);
 			return result.ok ? written : commandFailure(command, result);
 		},
 		async start(identity: NativeServiceIdentity) {
