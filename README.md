@@ -315,6 +315,25 @@ resumes its normal cadence from now rather than firing once per missed
 tick. Bounded per owner the same way `WatchRegistry` bounds watches per
 scope -- `VehicleScheduleLimitExceeded` once an owner's cap is hit.
 
+### Activity Broker
+
+A cross-extension, best-effort side channel for structured telemetry -- ported from vstack's (github.com/vanillagreencom/vstack) `pi-background-tasks` activity broker. Completely decoupled from the chat transcript: a Vehicle-projected Pi tool and a dashboard/logger extension never import each other, they just agree on one `globalThis` symbol and an event shape.
+
+`registerVehicleTools()` publishes `vehicle.operation.started`/`completed`/`failed` events for every invocation automatically -- opt-in by construction, not by an option flag: publishing is a true no-op until some other extension actually registers a broker.
+
+```ts
+import { registerActivityBroker } from "@danypops/vehicle-client-pi/activity-broker";
+
+// In a dashboard/logger extension, once per process:
+registerActivityBroker({
+  publish(event) {
+    if (event.severity === "error") logger.warn(event.summary, event.details);
+  },
+});
+```
+
+A broker's own `publish()` throwing, or no broker being registered at all, never affects the Vehicle tool call it's reporting on -- the same "activity publication is best-effort" contract vstack's original ships.
+
 ## One operation per real action, never an action-dispatch tool
 
 A recurring anti-pattern in agent tool design -- documented independently as

@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/vehicle-client-pi",
-	"version": "0.7.0",
+	"version": "0.8.0",
 	"description": "Projects any VehicleClient's manifest into native Pi tools, plus the rest of this house's Pi-extension-facing surface: jiti-load-safety verification and the shared /secrets command (backend port, env/local implementations, cross-extension registry, TUI). Preserves operation versions, schemas, cancellation, Pi call/session identity, permissions, keyed idempotency, progress, and structured failures; curates tool visibility by live operation availability.",
 	"license": "MIT",
 	"type": "module",
@@ -10,6 +10,10 @@
 		".": {
 			"types": "./dist/vehicle-pi.d.ts",
 			"default": "./dist/vehicle-pi.js"
+		},
+		"./activity-broker": {
+			"types": "./dist/activity-broker.d.ts",
+			"default": "./dist/activity-broker.js"
 		},
 		"./pi-load-harness": "./src/pi-load-harness.ts",
 		"./pi-status-refresh": "./src/pi-status-refresh.ts",

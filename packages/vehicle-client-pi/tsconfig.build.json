@@ -11,5 +11,5 @@
 		"outDir": "dist",
 		"rootDir": "src"
 	},
-	"include": ["src/vehicle-pi.ts", "src/pi-tool-availability.ts"]
+	"include": ["src/vehicle-pi.ts", "src/pi-tool-availability.ts", "src/activity-broker.ts"]
 }

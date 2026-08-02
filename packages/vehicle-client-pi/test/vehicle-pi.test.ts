@@ -1,8 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import type { VehicleClient, VehicleInvocationOptions, VehicleManifest, VehicleManifestOperation } from "@danypops/vehicle-core";
 import { VehicleError } from "@danypops/vehicle-core";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Check } from "typebox/value";
+import { registerActivityBroker, unregisterActivityBroker, type VehicleActivityEvent } from "../src/activity-broker.ts";
 import {
 	PiVehicleInvocationError,
 	type PiVehicleToolDetails,
@@ -342,6 +343,51 @@ describe("registerVehicleTools", () => {
 		});
 		await expect(execute(tools[0]!, { value: "go" })).rejects.toThrow();
 		expect(called).toBe(false);
+	});
+
+	describe("activity broker wiring", () => {
+		afterEach(() => {
+			unregisterActivityBroker();
+		});
+
+		it("publishes started then completed on a successful invoke, with no option needed to opt in", async () => {
+			const received: VehicleActivityEvent[] = [];
+			registerActivityBroker({ publish: (evt) => received.push(evt) });
+			const client = new FakeClient(manifest([operation("issues.sync")]));
+			const { pi, tools } = fakePi();
+			await registerVehicleTools(pi, client);
+
+			await execute(tools[0]!, { value: "go" });
+
+			expect(received.map((evt) => evt.type)).toEqual(["vehicle.operation.started", "vehicle.operation.completed"]);
+			expect(received[0]?.refs?.operation).toBe("issues.sync");
+			expect(received[1]?.severity).toBe("success");
+		});
+
+		it("publishes started then failed when invoke() rejects", async () => {
+			const received: VehicleActivityEvent[] = [];
+			registerActivityBroker({ publish: (evt) => received.push(evt) });
+			const client = new FakeClient(manifest([operation("issues.sync")]));
+			client.error = new VehicleError("upstream-busy", "Provider is busy", { category: "unavailable", retryable: true });
+			const { pi, tools } = fakePi();
+			await registerVehicleTools(pi, client);
+
+			await expect(execute(tools[0]!, { value: "go" })).rejects.toThrow();
+
+			expect(received.map((evt) => evt.type)).toEqual(["vehicle.operation.started", "vehicle.operation.failed"]);
+			expect(received[1]?.severity).toBe("error");
+			expect(received[1]?.details).toMatchObject({ code: "upstream-busy" });
+		});
+
+		it("is a true no-op when no broker is registered -- invoke() behavior is unaffected", async () => {
+			const client = new FakeClient(manifest([operation("issues.sync")]));
+			client.result = { ok: true };
+			const { pi, tools } = fakePi();
+			await registerVehicleTools(pi, client);
+
+			const result = await execute(tools[0]!, { value: "go" });
+			expect(result.content[0]).toMatchObject({ text: expect.stringContaining("true") });
+		});
 	});
 
 	it("sanitizes Vehicle failures and optionally closes an owned client on session shutdown", async () => {

@@ -10,6 +10,7 @@ import type {
 import { extractVehicleContent, VehicleError } from "@danypops/vehicle-core";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
+import { publishVehicleActivity } from "./activity-broker.js";
 import { guardExtensionRuntimeInitialized, syncManagedActiveTools } from "./pi-tool-availability.js";
 import { renderVehicleCall, renderVehicleResult } from "./vehicle-render.js";
 
@@ -141,6 +142,37 @@ function vehicleIdentity(manifest: VehicleManifest, descriptor: VehicleOperation
 	};
 }
 
+/**
+ * Side-channel telemetry only -- a true no-op unless some other extension has
+ * called registerActivityBroker() (see activity-broker.ts). Never gated
+ * behind a RegisterVehicleToolsOptions flag: the broker's own absence is
+ * already the opt-in mechanism, matching vstack's own unconditional-call
+ * convention this primitive is ported from.
+ */
+function publishOperationActivity(
+	kind: "started" | "completed" | "failed",
+	identity: PiVehicleIdentity,
+	descriptor: VehicleOperationDescriptor,
+	details?: Record<string, unknown>,
+): void {
+	publishVehicleActivity({
+		type: `vehicle.operation.${kind}`,
+		source: "vehicle",
+		severity: kind === "failed" ? "error" : kind === "completed" ? "success" : "info",
+		importance:
+			kind === "started" ? "noisy" : descriptor.effect === "destructive" || descriptor.effect === "open-world" ? "important" : "normal",
+		summary: `${operationKey(descriptor)} ${kind}`,
+		refs: {
+			vehicleName: identity.name,
+			operation: identity.operation,
+			operationVersion: identity.operationVersion,
+			toolCallId: identity.toolCallId,
+		},
+		details: { effect: descriptor.effect, ...details },
+		ts: new Date().toISOString(),
+	});
+}
+
 function sanitizedFailure(error: unknown): VehicleFailure {
 	if (error instanceof VehicleError) return error.toFailure();
 	if (error instanceof PiVehicleInvocationError) return error.failure;
@@ -268,6 +300,7 @@ function createTool(
 				...(descriptor.idempotency.mode === "keyed" && !resolved?.idempotencyKey ? { idempotencyKey: toolCallId } : {}),
 			};
 
+			publishOperationActivity("started", identity, descriptor);
 			let output: unknown;
 			try {
 				output = await client.invoke(descriptor.name, descriptor.version, input, baseInvocation);
@@ -277,12 +310,18 @@ function createTool(
 				// durable approval.requested event before ever failing this way -- a
 				// caller always has a path forward via vehicle.approval.resolve, this
 				// is just the optional local fast path attempting it automatically.
-				if (failure.code !== "approval-required") throw new PiVehicleInvocationError(failure);
+				if (failure.code !== "approval-required") {
+					publishOperationActivity("failed", identity, descriptor, { code: failure.code });
+					throw new PiVehicleInvocationError(failure);
+				}
 				const requestId = approvalRequestId(failure);
 				// No requestId to act on, or no UI capable of asking -- the request
 				// stays durably pending (an async/remote approver can still resolve it
 				// later) rather than this call eagerly denying it on the caller's behalf.
-				if (!requestId || !context.hasUI) throw new PiVehicleInvocationError(failure);
+				if (!requestId || !context.hasUI) {
+					publishOperationActivity("failed", identity, descriptor, { code: failure.code });
+					throw new PiVehicleInvocationError(failure);
+				}
 
 				const approved = await requestLocalApproval(context, descriptor, input, signal);
 				let capability: string | undefined;
@@ -299,13 +338,19 @@ function createTool(
 					// request) -- fall through to the original approval-required failure,
 					// never mint or assume a capability that was never actually granted.
 				}
-				if (!capability) throw new PiVehicleInvocationError(failure);
+				if (!capability) {
+					publishOperationActivity("failed", identity, descriptor, { code: failure.code });
+					throw new PiVehicleInvocationError(failure);
+				}
 				try {
 					output = await client.invoke(descriptor.name, descriptor.version, input, { ...baseInvocation, approvalCapability: capability });
 				} catch (retryError) {
-					throw new PiVehicleInvocationError(sanitizedFailure(retryError));
+					const retryFailure = sanitizedFailure(retryError);
+					publishOperationActivity("failed", identity, descriptor, { code: retryFailure.code });
+					throw new PiVehicleInvocationError(retryFailure);
 				}
 			}
+			publishOperationActivity("completed", identity, descriptor);
 			if (options.onInvoked) {
 				try {
 					await options.onInvoked({ descriptor, manifest, toolName, toolCallId, input, context }, output);
