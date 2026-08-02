@@ -1,6 +1,7 @@
 export type VehicleName = string & { readonly __brand: "VehicleName" };
 export type ManifestHash = string & { readonly __brand: "ManifestHash" };
 export type PlanHash = string & { readonly __brand: "PlanHash" };
+export type NativeServiceIdentity = string & { readonly __brand: "NativeServiceIdentity" };
 
 export type IdentityOutcome<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly reason: string };
 
@@ -20,4 +21,11 @@ export function createManifestHash(value: string): IdentityOutcome<ManifestHash>
 export function createPlanHash(value: string): IdentityOutcome<PlanHash> {
 	if (!SHA256.test(value)) return { ok: false, reason: "must be a lowercase SHA-256 digest" };
 	return { ok: true, value: value as PlanHash };
+}
+
+export function createNativeServiceIdentity(value: string): IdentityOutcome<NativeServiceIdentity> {
+	if (value.length === 0 || value.length > 256 || /[\0\r\n]/.test(value)) {
+		return { ok: false, reason: "must be 1-256 characters without NUL or line breaks" };
+	}
+	return { ok: true, value: value as NativeServiceIdentity };
 }

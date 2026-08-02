@@ -14,7 +14,15 @@ function output(): { io: CliIo; stdout: string[]; stderr: string[] } {
 
 const manager: NativeServiceManager = {
 	kind: "systemd",
-	capabilities: { maximumMemoryBytes: true, maximumCpuPercent: true, maximumTasks: true },
+	capabilities: {
+		maximumMemoryBytes: true,
+		maximumCpuPercent: true,
+		maximumTasks: true,
+		restartAlways: true,
+		restartOnFailure: true,
+		restartAttemptLimit: true,
+		restartAttemptWindow: true,
+	},
 	inspect: () => Promise.resolve({ ok: true, services: [], diagnostics: [] }),
 };
 

@@ -129,7 +129,15 @@ function managerKind(platform: NodeJS.Platform): NativeManagerKind {
 function unavailableManager(platform: NodeJS.Platform): NativeServiceManager {
 	return {
 		kind: managerKind(platform),
-		capabilities: { maximumMemoryBytes: false, maximumCpuPercent: false, maximumTasks: false },
+		capabilities: {
+			maximumMemoryBytes: false,
+			maximumCpuPercent: false,
+			maximumTasks: false,
+			restartAlways: false,
+			restartOnFailure: false,
+			restartAttemptLimit: false,
+			restartAttemptWindow: false,
+		},
 		inspect: () =>
 			Promise.resolve({
 				ok: false,
