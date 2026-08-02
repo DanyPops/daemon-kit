@@ -8,7 +8,7 @@
  * than folded into a shared barrel.
  */
 
-import type { VehicleClient, VehicleInvocationOptions, VehicleManifest } from "@danypops/vehicle-core";
+import type { VehicleClient, VehicleEventHandler, VehicleInvocationOptions, VehicleManifest, VehicleSubscription } from "@danypops/vehicle-core";
 import { VehicleError } from "@danypops/vehicle-core";
 import type { VehicleRegistry } from "@danypops/vehicle-server";
 
@@ -32,6 +32,13 @@ export class LocalVehicleClient implements VehicleClient {
 	async invoke<Output = unknown>(name: string, version: number, input: unknown, options?: VehicleInvocationOptions): Promise<Output> {
 		this.ensureOpen();
 		return (await this.registry.invoke(name, version, input, options)) as Output;
+	}
+
+	/** In-process subscription -- zero network, built directly on the registry's own subscribeLocal(). */
+	subscribe<Payload = unknown>(name: string, version: number, handler: VehicleEventHandler<Payload>): VehicleSubscription {
+		this.ensureOpen();
+		const unsubscribe = this.registry.subscribeLocal(name, version, handler as (payload: unknown) => void);
+		return { close: unsubscribe };
 	}
 
 	close(): Promise<void> {

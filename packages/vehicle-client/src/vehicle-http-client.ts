@@ -21,12 +21,15 @@ import { randomUUID } from "node:crypto";
 import type {
 	JsonValue,
 	VehicleClient,
+	VehicleEventHandler,
 	VehicleFailureCategory,
 	VehicleInvocationOptions,
 	VehicleManifest,
 	VehicleRecovery,
+	VehicleSubscription,
 } from "@danypops/vehicle-core";
-import { VehicleError } from "@danypops/vehicle-core";
+import { VehicleError, vehicleEventTopic } from "@danypops/vehicle-core";
+import { connectPushChannel } from "./daemon-client.js";
 
 const KNOWN_FAILURE_CATEGORIES: readonly VehicleFailureCategory[] = [
 	"validation",
@@ -52,6 +55,21 @@ export interface RemoteVehicleClientOptions {
 	token: string;
 	/** Defaults to the global fetch. Injectable for tests. */
 	fetch?: typeof globalThis.fetch;
+	/**
+	 * WebSocket URL for the push-invalidation channel this Vehicle's events
+	 * are bridged onto (see push-channel.ts / bridgeVehicleEventsToPushChannel
+	 * in vehicle-server). Only resolved the first time subscribe() is
+	 * actually called -- a client that never subscribes pays zero cost.
+	 * Defaults to baseUrl with http(s) swapped for ws(s) and "/push"
+	 * appended, matching startDaemon()'s own default pushPath.
+	 */
+	pushUrl?: string;
+	/** Defaults to the global WebSocket. Injectable for tests, passed straight through to connectPushChannel(). */
+	WebSocketImpl?: typeof WebSocket;
+}
+
+function defaultPushUrl(baseUrl: string): string {
+	return `${baseUrl.replace(/^http/, "ws")}/push`;
 }
 
 interface FailurePayload {
@@ -106,6 +124,28 @@ export class RemoteVehicleClient implements VehicleClient {
 		} finally {
 			if (onAbort) options.signal!.removeEventListener("abort", onAbort);
 		}
+	}
+
+	/**
+	 * Subscribes to one declared Vehicle event over the daemon's push channel,
+	 * with the same reconnect/backoff/jitter/heartbeat resilience every other
+	 * connectPushChannel() consumer gets -- not a new hand-rolled WebSocket.
+	 * Each call opens its own connection (one per subscription, not shared/
+	 * pooled) so close() on the returned VehicleSubscription is unambiguous.
+	 */
+	subscribe<Payload = unknown>(name: string, version: number, handler: VehicleEventHandler<Payload>): VehicleSubscription {
+		this.ensureOpen();
+		const topic = vehicleEventTopic(name, version);
+		const client = connectPushChannel({
+			url: this.options.pushUrl ?? defaultPushUrl(this.options.baseUrl),
+			token: this.options.token,
+			topics: [topic],
+			onMessage: (receivedTopic, payload) => {
+				if (receivedTopic === topic) handler(payload as Payload);
+			},
+			WebSocketImpl: this.options.WebSocketImpl,
+		});
+		return { close: () => client.close() };
 	}
 
 	/** Best-effort: notifies the provider to abort a still-in-flight operation. The local fetch's own AbortSignal already stops this client's wait regardless of whether this succeeds. */

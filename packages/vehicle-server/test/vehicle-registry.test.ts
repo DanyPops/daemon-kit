@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { bindVehicleOperation, defineVehicleOperation, defineVehicleSchema, type JsonValue, VehicleError } from "@danypops/vehicle-core";
-import { type VehicleExecutionPolicy, VehicleRegistry } from "../src/vehicle-registry.ts";
+import { bindVehicleOperation, defineVehicleEvent, defineVehicleOperation, defineVehicleSchema, type JsonValue, VehicleError } from "@danypops/vehicle-core";
+import { bridgeVehicleEventsToPushChannel, type VehicleExecutionPolicy, VehicleRegistry } from "../src/vehicle-registry.ts";
 
 const objectSchema = <T extends Record<string, unknown>>(properties: Record<string, JsonValue>, parse: (value: unknown) => T | undefined) =>
 	defineVehicleSchema<T>({
@@ -319,5 +319,59 @@ describe("VehicleRegistry", () => {
 		expect(await first.invoke("test.echo", 1, { value: "x" }, { permissions: ["test:echo"] })).toEqual({ echoed: "1" });
 		expect(await first.invoke("test.echo", 1, { value: "x" }, { permissions: ["test:echo"] })).toEqual({ echoed: "2" });
 		expect(await second.invoke("test.echo", 1, { value: "x" }, { permissions: ["test:echo"] })).toEqual({ echoed: "1" });
+	});
+});
+
+const Announced = defineVehicleEvent({
+	name: "test.announced",
+	version: 1,
+	description: "A test event.",
+	payload: outputSchema,
+	maxPayloadBytes: 1_024,
+});
+
+describe("VehicleRegistry events", () => {
+	it("registerEvent() rejects a second owner for the same name@version", () => {
+		const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
+		registry.registerEvent("first-owner", Announced);
+		expect(() => registry.registerEvent("second-owner", Announced)).toThrow(/already owned by first-owner/);
+	});
+
+	it("subscribeLocal() throws not-found for an event nobody declared", () => {
+		const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
+		expect(() => registry.subscribeLocal("nope", 1, () => {})).toThrow(/No Vehicle event is registered/);
+	});
+
+	it("subscribeLocal() enforces a bounded listener count per event", () => {
+		const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
+		registry.registerEvent("owner", Announced);
+		const unsubscribes: (() => void)[] = [];
+		for (let i = 0; i < 64; i++) unsubscribes.push(registry.subscribeLocal("test.announced", 1, () => {}));
+		expect(() => registry.subscribeLocal("test.announced", 1, () => {})).toThrow(/maximum of 64 local listeners/);
+		unsubscribes[0]!();
+		expect(() => registry.subscribeLocal("test.announced", 1, () => {})).not.toThrow();
+	});
+
+	it("subscribeAll() observes every declared event's emit(), regardless of name", () => {
+		const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
+		registry.registerEvent("owner", Announced);
+		const seen: { name: string; version: number; payload: unknown }[] = [];
+		registry.subscribeAll((name, version, payload) => seen.push({ name, version, payload }));
+		registry.emit("test.announced", 1, { echoed: "hi" });
+		expect(seen).toEqual([{ name: "test.announced", version: 1, payload: { echoed: "hi" } }]);
+	});
+
+	it("bridgeVehicleEventsToPushChannel() forwards emit() onto publish() under the shared topic convention", () => {
+		const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
+		registry.registerEvent("owner", Announced);
+		const published: { topic: string; payload: unknown }[] = [];
+		const unsubscribe = bridgeVehicleEventsToPushChannel(registry, {
+			publish: (topic, payload) => published.push({ topic, payload }),
+		});
+		registry.emit("test.announced", 1, { echoed: "hi" });
+		expect(published).toEqual([{ topic: "vehicle-event:test.announced@1", payload: { echoed: "hi" } }]);
+		unsubscribe();
+		registry.emit("test.announced", 1, { echoed: "after unsubscribe" });
+		expect(published).toHaveLength(1);
 	});
 });

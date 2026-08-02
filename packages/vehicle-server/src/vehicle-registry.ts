@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type {
 	VehicleBackgroundCapability,
+	VehicleEvent,
+	VehicleEventDescriptor,
 	VehicleInvocationOptions,
 	VehicleManifest,
 	VehicleManifestIdentity,
@@ -11,7 +13,7 @@ import type {
 	VehicleSchemaCodec,
 	VehicleSchemaResult,
 } from "@danypops/vehicle-core";
-import { boundedValidationDetails, VehicleError } from "@danypops/vehicle-core";
+import { boundedValidationDetails, vehicleEventTopic, VehicleError } from "@danypops/vehicle-core";
 
 export interface VehicleExecutionRequest {
 	readonly operation: VehicleOperationDescriptor;
@@ -52,9 +54,28 @@ interface Registration {
 	invoke(input: unknown, context: InvocationContext): Promise<unknown>;
 }
 
+interface EventRegistration {
+	readonly owner: string;
+	readonly descriptor: VehicleEventDescriptor;
+	parsePayload(value: unknown, eventId: string): unknown;
+	readonly listeners: Set<(payload: unknown) => void>;
+}
+
+/** A publish(topic, payload) sink -- PushChannel satisfies this structurally with zero import needed; see bridgeVehicleEventsToPushChannel below. */
+export interface VehicleEventPublisher {
+	publish(topic: string, payload: unknown): void;
+}
+
 function operationKey(name: string, version: number): string {
 	return `${name}@${version}`;
 }
+
+function eventKey(name: string, version: number): string {
+	return `${name}@${version}`;
+}
+
+/** Bounds a single event's local listener set the same way PushChannel bounds its own connections/topics -- defense in depth against an unbounded subscribe() loop, not a limit any real single-bridge-plus-a-few-widgets usage should ever approach. */
+const MAX_LISTENERS_PER_EVENT = 64;
 
 function parseWithSchema<T>(
 	schema: VehicleSchemaCodec<T>,
@@ -81,6 +102,28 @@ function parseWithSchema<T>(
 		throw new VehicleError(`invalid-${kind}`, `${operationKey(descriptor.name, descriptor.version)} received invalid ${kind}`, {
 			category: kind === "input" ? "validation" : "internal",
 			operationId,
+			details: boundedValidationDetails(result.issues),
+		});
+	}
+	return result.value;
+}
+
+function parseEventPayload<T>(schema: VehicleSchemaCodec<T>, value: unknown, descriptor: VehicleEventDescriptor, eventId: string): T {
+	let result: VehicleSchemaResult<T>;
+	const key = eventKey(descriptor.name, descriptor.version);
+	try {
+		result = schema.safeParse(value);
+	} catch (error) {
+		throw new VehicleError("invalid-payload", `${key} received an invalid event payload`, {
+			category: "validation",
+			operationId: eventId,
+			cause: error,
+		});
+	}
+	if (!result.success) {
+		throw new VehicleError("invalid-payload", `${key} received an invalid event payload`, {
+			category: "validation",
+			operationId: eventId,
 			details: boundedValidationDetails(result.issues),
 		});
 	}
@@ -175,6 +218,8 @@ export class VehicleRegistry {
 	private readonly registrations = new Map<string, Registration>();
 	private readonly availability = new Map<string, AvailabilityState>();
 	private readonly identity: VehicleManifestIdentity;
+	private readonly events = new Map<string, EventRegistration>();
+	private readonly wildcardListeners = new Set<(name: string, version: number, payload: unknown) => void>();
 
 	constructor(
 		identity: VehicleManifestIdentity,
@@ -223,6 +268,82 @@ export class VehicleRegistry {
 		return this.registrations.get(operationKey(name, version))?.owner;
 	}
 
+	/** Declares a named, schema'd event type a handler can later emit() -- the typed replacement for a raw PushChannel.publish() call with a hand-invented topic string. */
+	registerEvent<Payload>(owner: string, event: VehicleEvent<Payload>): void {
+		if (!owner.trim()) throw new Error("Vehicle event owner must not be empty");
+		const { descriptor } = event;
+		const key = eventKey(descriptor.name, descriptor.version);
+		const existing = this.events.get(key);
+		if (existing) {
+			throw new VehicleError("duplicate-owner", `${key} is already owned by ${existing.owner}; ${owner} cannot also register it`, {
+				category: "conflict",
+			});
+		}
+		this.events.set(key, {
+			owner,
+			descriptor,
+			parsePayload: (value, eventId) => parseEventPayload(event.payload, value, descriptor, eventId),
+			listeners: new Set(),
+		});
+	}
+
+	/**
+	 * Validates payload against the declared event's own schema and byte-size
+	 * limit (same bounded-resource discipline invoke() applies to a
+	 * request/response), then notifies every current local listener --
+	 * both a direct subscribeLocal() caller (LocalVehicleClient) and any
+	 * wildcard bridge (subscribeAll(), e.g. bridgeVehicleEventsToPushChannel
+	 * for remote delivery). A throwing listener is swallowed so one bad
+	 * subscriber can never break emit() for every other subscriber or the
+	 * handler that's emitting.
+	 */
+	emit(name: string, version: number, payload: unknown): void {
+		const key = eventKey(name, version);
+		const registration = this.events.get(key);
+		if (!registration) {
+			throw new VehicleError("not-found", `No Vehicle event is registered for ${key}`, { category: "not_found" });
+		}
+		const eventId = randomUUID();
+		const parsed = registration.parsePayload(payload, eventId);
+		enforcePayloadSize(parsed, registration.descriptor.maxPayloadBytes, "response", key, eventId);
+		for (const listener of registration.listeners) {
+			try {
+				listener(parsed);
+			} catch {
+				// Best-effort fan-out -- see the doc comment above.
+			}
+		}
+		for (const listener of this.wildcardListeners) {
+			try {
+				listener(name, version, parsed);
+			} catch {
+				// Best-effort fan-out -- see the doc comment above.
+			}
+		}
+	}
+
+	/** In-process subscription to one declared event, scoped to a caller that already knows its exact name/version -- what LocalVehicleClient.subscribe() is built on. Throws not-found the same way invoke() does for an unregistered operation, rather than silently listening for something that can never fire. */
+	subscribeLocal(name: string, version: number, listener: (payload: unknown) => void): () => void {
+		const key = eventKey(name, version);
+		const registration = this.events.get(key);
+		if (!registration) {
+			throw new VehicleError("not-found", `No Vehicle event is registered for ${key}`, { category: "not_found" });
+		}
+		if (registration.listeners.size >= MAX_LISTENERS_PER_EVENT) {
+			throw new VehicleError("capacity-exceeded", `${key} already has the maximum of ${MAX_LISTENERS_PER_EVENT} local listeners`, {
+				category: "capacity",
+			});
+		}
+		registration.listeners.add(listener);
+		return () => registration.listeners.delete(listener);
+	}
+
+	/** Every current and future emit(), regardless of event name -- the seam bridgeVehicleEventsToPushChannel uses so a bridge set up once forwards every event a provider declares, including ones registered after the bridge itself. */
+	subscribeAll(listener: (name: string, version: number, payload: unknown) => void): () => void {
+		this.wildcardListeners.add(listener);
+		return () => this.wildcardListeners.delete(listener);
+	}
+
 	/**
 	 * Marks a registered operation available or unavailable on this running
 	 * instance -- e.g. a provider whose credential just got configured or
@@ -251,6 +372,7 @@ export class VehicleRegistry {
 					...(state?.reason ? { unavailableReason: state.reason } : {}),
 				};
 			}),
+			events: [...this.events.values()].map((registration) => registration.descriptor),
 		};
 	}
 
@@ -427,4 +549,26 @@ export class VehicleRegistry {
 			},
 		});
 	}
+}
+
+/**
+ * Forwards every event a registry emits onto a PushChannel-shaped publish
+ * sink, under the shared vehicleEventTopic() naming convention
+ * RemoteVehicleClient.subscribe() expects -- the remote-delivery half of
+ * Vehicle Events. Call once at composition-root time, after the registry's
+ * providers have registered (or before -- subscribeAll() catches every
+ * future emit() too, regardless of registration order). Returns a teardown
+ * matching subscribeAll()'s own unsubscribe shape.
+ *
+ * Takes a structural VehicleEventPublisher, not a concrete PushChannel
+ * import -- PushChannel already satisfies this with its own publish()
+ * method, so a daemon wires this as
+ * `bridgeVehicleEventsToPushChannel(registry, pushChannel)` with zero
+ * extra glue, while this file itself stays free of a cross-build-config
+ * dependency on push-channel.ts (a separate tsconfig entry point).
+ */
+export function bridgeVehicleEventsToPushChannel(registry: VehicleRegistry, publisher: VehicleEventPublisher): () => void {
+	return registry.subscribeAll((name, version, payload) => {
+		publisher.publish(vehicleEventTopic(name, version), payload);
+	});
 }
