@@ -218,6 +218,52 @@ On the provider side, mark an operation unavailable (or available again) on
 `VehicleRegistry` directly -- `registry.setAvailability("jira.search", 1, false, "no Jira credential configured")`
 -- and the next `refreshVehicleToolAvailability()` call picks it up.
 
+### Split vs Monolith: two equally first-class deployment shapes
+
+Everything above assumes the **Split** shape: `VehicleRegistry` runs in a
+separate daemon process, a Pi extension talks to it over HTTP via
+`RemoteVehicleClient`. That's the right choice whenever a Vehicle's state
+must survive a Pi session ending, or several sessions/processes need to share
+one provider. It is not the only choice, and Vehicle should never force it on
+a consumer that doesn't need it -- Vehicle is boilerplate, not a framework.
+
+**Monolith** is the other first-class shape: no daemon, no HTTP, no port, no
+systemd unit. The provider and its one consumer share a process --
+`createMonolithVehicle` (`@danypops/vehicle-client-pi/monolith`) bundles a
+fresh `VehicleRegistry`, a `LocalVehicleClient` wrapping it directly (zero
+network), and `registerVehicleTools()` projecting its operations onto real Pi
+tools, into one call:
+
+```ts
+import { createMonolithVehicle } from "@danypops/vehicle-client-pi/monolith";
+import { defineVehicleOperation, bindVehicleOperation, defineVehicleSchema } from "@danypops/vehicle-core";
+
+pi.on("session_start", async () => {
+  await createMonolithVehicle(pi, { name: "echo-vehicle", version: "1.0.0", description: "..." }, (registry) => {
+    const echo = defineVehicleOperation({ name: "echo.say", version: 1, /* ...same shape as any daemon-backed operation... */ });
+    registry.register("echo", bindVehicleOperation(echo, () => async (context) => ({ text: context.input.text })));
+  });
+});
+```
+
+A Monolith provider's own operations are defined exactly the same way a
+daemon-backed one's are (`defineVehicleOperation`/`bindVehicleOperation`
+against the same `registry.register()`) -- upgrading to a real daemon later
+means moving that same `register` callback into a service process and
+swapping `LocalVehicleClient` for `RemoteVehicleClient`, not rewriting any
+operation. See `packages/vehicle-client-pi/examples/monolith-echo-extension.ts`
+for a complete, runnable extension (`pi --extension ./monolith-echo-extension.ts --print "..."`
+works with nothing else running).
+
+**When to pick which:**
+
+| | Split (daemon + HTTP) | Monolith (in-process) |
+|---|---|---|
+| State must outlive the Pi session | Yes -- this is the whole point | No -- gone when the session ends |
+| Multiple sessions/processes share one provider | Yes | No -- one process, one consumer |
+| Setup | A daemon, a port, a systemd unit (or manual start) | Nothing -- just the extension |
+| Upgrade path | N/A -- already the durable shape | Move `register()` into a daemon, swap the client |
+
 ### Surviving a daemon restart
 
 `registerVehicleTools()` captures whatever `VehicleClient` you pass it forever,

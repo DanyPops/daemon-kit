@@ -11,6 +11,6 @@
 		"allowImportingTsExtensions": true,
 		"noEmit": true
 	},
-	"include": ["src", "test"],
+	"include": ["src", "test", "examples"],
 	"exclude": ["test/fixtures/broken-module.ts"]
 }
