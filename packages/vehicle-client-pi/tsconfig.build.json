@@ -17,6 +17,7 @@
 		"src/activity-broker.ts",
 		"src/vehicle-safety.ts",
 		"src/vehicle-safety-registry.ts",
-		"src/vehicle-monolith.ts"
+		"src/vehicle-monolith.ts",
+		"src/vehicle-widget-state.ts"
 	]
 }

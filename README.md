@@ -495,6 +495,48 @@ await registerVehicleTools(pi, client, {
 });
 ```
 
+### Reload-safe widget state
+
+A Vehicle-projected Pi widget's own local rendering state (which row is
+selected, which panel is expanded, ...) must not be lost when the user
+reloads or the conversation compacts -- a distinct concern from Vehicle
+Jobs' own state (a background operation surviving a *daemon* restart) or
+Vehicle Watchers (reacting to a remote resource's changes). This is
+specifically the widget's own local UI state, in this process.
+
+`createReloadSafeWidgetState` (`@danypops/vehicle-client-pi/widget-state`)
+combines two independently-proven strategies behind one API instead of
+making a widget author choose and hand-roll either: a durable sidecar file
+(the shared atomic-JSON writer, unbounded -- the canonical source), plus a
+bounded, fingerprint-deduped copy appended to the session's own branch via
+`pi.appendEntry()` (a fallback replay path via `ctx.sessionManager.getBranch()`
+for when the sidecar is missing or corrupt -- a fresh checkout, a sidecar
+deleted out-of-band):
+
+```ts
+import { createReloadSafeWidgetState } from "@danypops/vehicle-client-pi/widget-state";
+import { createNodeAtomicJsonFsAdapter } from "@danypops/vehicle-server/atomic-json";
+
+const taskOverlayState = createReloadSafeWidgetState<{ selectedId: string; expanded: boolean }>({
+  key: "papyrus.task-overlay",
+  filePath: "/path/to/task-overlay-state.json",
+  fs: createNodeAtomicJsonFsAdapter(),
+});
+
+// Whenever the widget's own state changes:
+await taskOverlayState.save(pi, { selectedId: "task-42", expanded: true });
+
+// On session_start (or whenever the widget first mounts):
+const restored = await taskOverlayState.load(ctx.sessionManager);
+```
+
+The sidecar carries the real state in full, with no size bound of its own;
+only the session-branch copy is bounded (`maxEntryBytes`, default 64KB) --
+past that it degrades to a small pointer (`{truncated: true, sizeBytes}`)
+rather than ever risking a `/resume` crash from an oversized session entry.
+Replaying from a truncated pointer recovers only that pointer, not the real
+state -- the sidecar is what a widget author should treat as authoritative.
+
 ## One operation per real action, never an action-dispatch tool
 
 A recurring anti-pattern in agent tool design -- documented independently as
