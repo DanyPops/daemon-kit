@@ -38,7 +38,13 @@ function generateDescriptor(vehicle: VehicleSpec): DescriptorOutcome {
 	if (vehicle.restart.policy !== "never") {
 		unit.push(`StartLimitIntervalSec=${seconds(vehicle.restart.windowMs)}`, `StartLimitBurst=${vehicle.restart.maxAttempts + 1}`);
 	}
-	unit.push("", "[Service]", "Type=simple", `ExecStart=${[vehicle.executable, ...vehicle.arguments].map(quote).join(" ")}`);
+	unit.push(
+		"",
+		"[Service]",
+		"Type=simple",
+		'Environment="DAEMON_KIT_LAUNCH_PROVENANCE=service"',
+		`ExecStart=${[vehicle.executable, ...vehicle.arguments].map(quote).join(" ")}`,
+	);
 	if (vehicle.workingDirectory !== undefined) unit.push(`WorkingDirectory=${quote(vehicle.workingDirectory)}`);
 	if (vehicle.restart.policy === "never") unit.push("Restart=no");
 	else unit.push(`Restart=${vehicle.restart.policy}`, `RestartSec=${seconds(vehicle.restart.delayMs)}`);

@@ -35,6 +35,10 @@ function generateDescriptor(vehicle: VehicleSpec): DescriptorOutcome {
 		"  </array>",
 		"  <key>RunAtLoad</key>",
 		"  <true/>",
+		"  <key>EnvironmentVariables</key>",
+		"  <dict>",
+		...keyValue("DAEMON_KIT_LAUNCH_PROVENANCE", "service").map((line) => `  ${line.trimStart()}`),
+		"  </dict>",
 	];
 	if (vehicle.workingDirectory !== undefined) lines.push(...keyValue("WorkingDirectory", vehicle.workingDirectory));
 	lines.push("</dict>", "</plist>", "");

@@ -49,7 +49,8 @@ function generateDescriptor(vehicle: VehicleSpec): DescriptorOutcome {
 	if (hasError(diagnostics)) return { ok: false, diagnostics };
 	const specHash = manifestHash(vehicle);
 	const identity = `\\Armada\\${vehicle.name}`;
-	const argumentsText = vehicle.arguments.map(quoteArgument).join(" ");
+	const commandText = [vehicle.executable, ...vehicle.arguments].map(quoteArgument).join(" ");
+	const argumentsText = `/d /s /c "set DAEMON_KIT_LAUNCH_PROVENANCE=service&& ${commandText}"`;
 	const lines = [
 		'<?xml version="1.0" encoding="UTF-8"?>',
 		'<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
@@ -73,8 +74,8 @@ function generateDescriptor(vehicle: VehicleSpec): DescriptorOutcome {
 		"  </Settings>",
 		"  <Actions Context=\"Author\">",
 		"    <Exec>",
-		`      <Command>${xmlEscape(vehicle.executable)}</Command>`,
-		...(argumentsText.length === 0 ? [] : [`      <Arguments>${xmlEscape(argumentsText)}</Arguments>`]),
+		"      <Command>cmd.exe</Command>",
+		`      <Arguments>${xmlEscape(argumentsText)}</Arguments>`,
 		...(vehicle.workingDirectory === undefined ? [] : [`      <WorkingDirectory>${xmlEscape(vehicle.workingDirectory)}</WorkingDirectory>`]),
 		"    </Exec>",
 		"  </Actions>",
