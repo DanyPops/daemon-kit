@@ -6,7 +6,10 @@ import { pathToFileURL } from "node:url";
 import { diagnostic, type Diagnostic } from "./fleet/diagnostic.js";
 import { decodeArmadaManifest, MAX_MANIFEST_BYTES, type ManifestDecodeOutcome } from "./fleet/manifest.js";
 import { planFleet } from "./fleet/planner.js";
-import type { NativeManagerKind, NativeServiceManager } from "./native/service-manager.js";
+import { createHandleReadinessProbe } from "./fleet/readiness.js";
+import { reconcileFleet } from "./fleet/reconciler.js";
+import { createNativeController, defaultDescriptorRoot, strategyForNativeManager } from "./native/controller.js";
+import type { NativeManagerKind, NativeServiceController, NativeServiceManager, ReadinessProbe } from "./native/service-manager.js";
 
 export interface CliIo {
 	stdout(text: string): void;
@@ -15,6 +18,8 @@ export interface CliIo {
 
 export interface CliDependencies {
 	readonly manager: NativeServiceManager;
+	readonly controller?: NativeServiceController;
+	readonly readiness?: ReadinessProbe;
 	readonly io: CliIo;
 	readonly platform?: NodeJS.Platform;
 	readonly env?: NodeJS.ProcessEnv;
@@ -87,8 +92,12 @@ function writeDiagnostics(diagnostics: readonly Diagnostic[], json: boolean, io:
 
 export async function runCli(args: readonly string[], dependencies: CliDependencies): Promise<number> {
 	const [command, ...rest] = args;
-	if (command !== "plan") {
-		writeDiagnostics([diagnostic("CLI_COMMAND_UNKNOWN", "error", command ?? "", "usage: armada plan [--manifest <path>] [--json]")], false, dependencies.io);
+	if (command !== "plan" && command !== "reconcile") {
+		writeDiagnostics(
+			[diagnostic("CLI_COMMAND_UNKNOWN", "error", command ?? "", "usage: armada <plan|reconcile> [--manifest <path>] [--json]")],
+			false,
+			dependencies.io,
+		);
 		return 2;
 	}
 	const parsed = parsePlanArguments(rest, dependencies);
@@ -111,12 +120,39 @@ export async function runCli(args: readonly string[], dependencies: CliDependenc
 		writeDiagnostics(planned.diagnostics, parsed.arguments.json, dependencies.io);
 		return 1;
 	}
-	if (parsed.arguments.json) {
-		dependencies.io.stdout(`${JSON.stringify({ ok: true, manager: dependencies.manager.kind, ...planned.plan })}\n`);
+	if (command === "plan") {
+		if (parsed.arguments.json) {
+			dependencies.io.stdout(`${JSON.stringify({ ok: true, manager: dependencies.manager.kind, ...planned.plan })}\n`);
+			return 0;
+		}
+		dependencies.io.stdout(`plan: ${planned.plan.operations.length} operation(s) via ${dependencies.manager.kind}\n`);
+		for (const operation of planned.plan.operations) dependencies.io.stdout(`  ${operation.kind} ${operation.name}\n`);
 		return 0;
 	}
-	dependencies.io.stdout(`plan: ${planned.plan.operations.length} operation(s) via ${dependencies.manager.kind}\n`);
-	for (const operation of planned.plan.operations) dependencies.io.stdout(`  ${operation.kind} ${operation.name}\n`);
+	if (!dependencies.controller) {
+		writeDiagnostics([diagnostic("NATIVE_CONTROLLER_REQUIRED", "error", "/", "reconcile requires a native controller")], parsed.arguments.json, dependencies.io);
+		return 1;
+	}
+	const reconciled = await reconcileFleet({
+		manifest: decoded.manifest,
+		plan: planned.plan,
+		strategy: strategyForNativeManager(dependencies.controller.kind),
+		controller: dependencies.controller,
+		readCurrentManifestHash: async () => {
+			const current = await readManifest(parsed.arguments.manifestPath);
+			return current.ok ? { ok: true, hash: current.manifest.contentHash } : current;
+		},
+		readiness: dependencies.readiness ?? createHandleReadinessProbe(),
+	});
+	if (!reconciled.ok) {
+		writeDiagnostics(reconciled.diagnostics, parsed.arguments.json, dependencies.io);
+		return 1;
+	}
+	if (parsed.arguments.json) {
+		dependencies.io.stdout(`${JSON.stringify({ ok: true, manager: dependencies.controller.kind, applied: reconciled.applied, diagnostics: reconciled.diagnostics })}\n`);
+		return 0;
+	}
+	dependencies.io.stdout(`reconciled: ${reconciled.applied.length} operation(s) via ${dependencies.controller.kind}\n`);
 	return 0;
 }
 
@@ -126,30 +162,13 @@ function managerKind(platform: NodeJS.Platform): NativeManagerKind {
 	return "systemd";
 }
 
-function unavailableManager(platform: NodeJS.Platform): NativeServiceManager {
-	return {
-		kind: managerKind(platform),
-		capabilities: {
-			maximumMemoryBytes: false,
-			maximumCpuPercent: false,
-			maximumTasks: false,
-			restartAlways: false,
-			restartOnFailure: false,
-			restartAttemptLimit: false,
-			restartAttemptWindow: false,
-		},
-		inspect: () =>
-			Promise.resolve({
-				ok: false,
-				diagnostics: [diagnostic("NATIVE_MANAGER_NOT_IMPLEMENTED", "error", "/", "native strategy is not implemented in this walking-skeleton release")],
-			}),
-	};
-}
-
 const isEntrypoint = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isEntrypoint) {
+	const kind = managerKind(process.platform);
+	const controller = createNativeController({ kind, descriptorRoot: defaultDescriptorRoot(kind) });
 	process.exitCode = await runCli(process.argv.slice(2), {
-		manager: unavailableManager(process.platform),
+		manager: controller,
+		controller,
 		io: {
 			stdout: (text) => process.stdout.write(text),
 			stderr: (text) => process.stderr.write(text),

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runCli, type CliIo } from "../src/cli.js";
-import type { NativeServiceManager } from "../src/index.js";
+import { systemdStrategy, type NativeServiceController, type NativeServiceManager } from "../src/index.js";
 import { manifestJson } from "./fixtures.js";
 
 function output(): { io: CliIo; stdout: string[]; stderr: string[] } {
@@ -40,6 +40,36 @@ describe("armada plan", () => {
 			operations: [{ kind: "install", name: "papyrus" }],
 		});
 		expect(captured.stderr).toEqual([]);
+	});
+
+	it("reconciles through the injected native controller", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
+		const path = join(directory, "armada.json");
+		await writeFile(path, manifestJson());
+		const events: string[] = [];
+		const controller: NativeServiceController = {
+			...manager,
+			capabilities: systemdStrategy.capabilities,
+			replaceDescriptorAtomically: (descriptor) => {
+				events.push(`replace:${descriptor.identity}`);
+				return Promise.resolve({ ok: true, diagnostics: [] });
+			},
+			start: (identity) => {
+				events.push(`start:${identity}`);
+				return Promise.resolve({ ok: true, diagnostics: [] });
+			},
+			stop: () => Promise.resolve({ ok: true, diagnostics: [] }),
+		};
+		const captured = output();
+		const code = await runCli(["reconcile", "--manifest", path, "--json"], {
+			manager: controller,
+			controller,
+			readiness: { waitUntilReady: () => Promise.resolve({ ok: true, diagnostics: [] }) },
+			io: captured.io,
+		});
+		expect(code).toBe(0);
+		expect(JSON.parse(captured.stdout.join(""))).toMatchObject({ ok: true, applied: [{ kind: "install", name: "papyrus" }] });
+		expect(events).toEqual(["replace:armada-papyrus.service", "start:armada-papyrus.service"]);
 	});
 
 	it("returns stable machine-readable diagnostics for invalid input", async () => {

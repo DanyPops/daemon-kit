@@ -6,6 +6,7 @@ export * from "./fleet/planner.js";
 export * from "./fleet/reconciler.js";
 export * from "./fleet/readiness.js";
 export * from "./native/atomic-file.js";
+export * from "./native/controller.js";
 export * from "./native/launchd.js";
 export * from "./native/service-manager.js";
 export * from "./native/systemd.js";
