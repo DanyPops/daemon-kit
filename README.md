@@ -351,6 +351,47 @@ registerActivityBroker({
 
 A broker's own `publish()` throwing, or no broker being registered at all, never affects the Vehicle tool call it's reporting on -- the same "activity publication is best-effort" contract vstack's original ships.
 
+### `/safety` command
+
+One place to see and control every registered Vehicle's projected-tool
+policy (`allow`/`ask`/`blocked`), instead of it being scattered across each
+Vehicle's own registration-time options. `registerVehicleTools()` and
+`refreshVehicleToolAvailability()` contribute to a shared, process-wide
+registry unconditionally -- the same "opt-in by construction" convention the
+Activity Broker uses -- so `/safety` sees every Vehicle a session has
+registered with zero extra wiring.
+
+```ts
+import { registerVehicleSafetyCommand } from "@danypops/vehicle-client-pi/safety-command";
+import { VehicleSafetyPolicyStore, createFileVehicleSafetyPersistence } from "@danypops/vehicle-client-pi/vehicle-safety";
+
+const policyStore = await VehicleSafetyPolicyStore.restore(
+  createFileVehicleSafetyPersistence({ filePath: "safety.json", fs: createNodeAtomicJsonFsAdapter() }),
+);
+registerVehicleSafetyCommand(pi, policyStore);
+
+// Pass the same store into every Vehicle's own registration so overrides
+// actually take effect:
+await registerVehicleTools(pi, client, { safetyPolicyStore: policyStore });
+```
+
+Each operation's state resolves by precedence: an explicit per-operation
+override (a human's own `/safety` decision) always wins, then the
+effect-level default (`requireApprovalForEffects`, mirroring the Approval
+Gate's own set), then a missing permission blocks. An override winning over
+a permission-based block only changes local visibility/gating -- it never
+bypasses what the server actually authorizes; invoking a permission-blocked
+operation a human overrode to `allow` still fails server-side with
+`permission-denied`. An override of `ask` also gates `execute()` itself with
+a local `ctx.ui.confirm()` before ever calling `invoke()`, for an effect the
+effect-level default wouldn't otherwise catch.
+
+`/safety` Tab-cycles three views (All, Allowed, By effect) over every known
+operation, built on Malevich's `TabbedContainer`/`Table`; editing closes the
+panel and runs two short picks (which operation, then which new state) that
+write through to the policy store -- effective the moment the affected
+Vehicle's own next `refreshVehicleToolAvailability()` call re-reads it.
+
 ## One operation per real action, never an action-dispatch tool
 
 A recurring anti-pattern in agent tool design -- documented independently as

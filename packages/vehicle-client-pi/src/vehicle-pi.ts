@@ -1,5 +1,6 @@
 import type {
 	VehicleClient,
+	VehicleEffect,
 	VehicleFailure,
 	VehicleInvocationOptions,
 	VehicleManifest,
@@ -13,6 +14,8 @@ import type { TSchema } from "typebox";
 import { publishVehicleActivity } from "./activity-broker.js";
 import { guardExtensionRuntimeInitialized, syncManagedActiveTools } from "./pi-tool-availability.js";
 import { renderVehicleCall, renderVehicleResult } from "./vehicle-render.js";
+import { classifyVehicleOperationSafety, type VehicleSafetyPolicyStore, type VehicleSafetyState } from "./vehicle-safety.js";
+import { registerVehicleSafetyContributor } from "./vehicle-safety-registry.js";
 
 export interface PiVehicleIdentity {
 	readonly name: string;
@@ -79,6 +82,23 @@ export interface RegisterVehicleToolsOptions {
 	 * to narrate what it computed.
 	 */
 	readonly renderers?: (descriptor: VehicleOperationDescriptor) => VehicleToolRenderers | undefined;
+	/**
+	 * Mirrors the server's own VehicleRegistry.configureApprovals()
+	 * requireApprovalForEffects set (see vehicle-server) so /safety's "ask"
+	 * classification matches reality -- purely advisory here: the server
+	 * enforces its own copy regardless of what this option says. Defaults to
+	 * DEFAULT_APPROVAL_EFFECTS, the same default the server itself uses.
+	 */
+	readonly requireApprovalForEffects?: readonly VehicleEffect[];
+	/**
+	 * A human's own /safety overrides, consulted ahead of the effect-level
+	 * default and the permission-based check for both tool visibility (see
+	 * syncManagedActiveTools below) and the local pre-invoke approval gate
+	 * (see createTool's execute()). Omitted means no overrides exist --
+	 * classification falls back to permissions+effect exactly as before this
+	 * option existed, a zero-behavior-change default.
+	 */
+	readonly safetyPolicyStore?: VehicleSafetyPolicyStore;
 }
 
 export interface RegisteredPiVehicleTool {
@@ -89,6 +109,9 @@ export interface RegisteredPiVehicleTool {
 	readonly available: boolean;
 	/** Whether options.permissions, as of this registration/refresh, actually covers descriptor.permissions -- see permissionsSatisfied(). A tool is only ever active when both this and `available` are true. */
 	readonly permissionsSatisfied: boolean;
+	readonly effect: VehicleEffect;
+	/** Resolved allow/ask/blocked -- see classifyVehicleOperationSafety(). A tool is only ever active when `available` is true and this isn't "blocked". */
+	readonly safetyState: VehicleSafetyState;
 }
 
 export interface RegisteredPiVehicle {
@@ -131,6 +154,40 @@ function permissionsSatisfied(required: readonly string[], granted: readonly str
 	if (required.length === 0) return true;
 	const grantedSet = new Set(granted ?? []);
 	return required.every((permission) => grantedSet.has(permission));
+}
+
+function resolveSafetyState(
+	manifestName: string,
+	descriptor: VehicleOperationDescriptor,
+	options: RegisterVehicleToolsOptions,
+): VehicleSafetyState {
+	return classifyVehicleOperationSafety({
+		permissionsSatisfied: permissionsSatisfied(descriptor.permissions, options.permissions),
+		effect: descriptor.effect,
+		requireApprovalForEffects: options.requireApprovalForEffects ? new Set(options.requireApprovalForEffects) : undefined,
+		override: options.safetyPolicyStore?.get(manifestName, descriptor.name),
+	});
+}
+
+/**
+ * Unconditional, matching the Activity Broker's own convention -- /safety
+ * sees every Vehicle a session has registered without any extension needing
+ * to wire itself in separately. Re-registering under the same manifest name
+ * (a refresh) simply replaces the prior contributor's resolve() closure.
+ */
+function contributeToSafetyRegistry(manifest: VehicleManifest, tools: readonly RegisteredPiVehicleTool[]): void {
+	registerVehicleSafetyContributor({
+		source: manifest.name,
+		resolve: () => ({
+			vehicleName: manifest.name,
+			tools: tools.map((tool) => ({
+				toolName: tool.toolName,
+				operationName: tool.operationName,
+				effect: tool.effect,
+				state: tool.safetyState,
+			})),
+		}),
+	});
 }
 
 function displayLabel(descriptor: VehicleOperationDescriptor): string {
@@ -316,6 +373,26 @@ function createTool(
 			};
 
 			publishOperationActivity("started", identity, descriptor);
+
+			// A human's own /safety override, not the effect-level default (that
+			// case is already covered by the approval-required round trip below) --
+			// a client-only gate, never touches invoke() at all on denial, so no
+			// server capability is needed for an effect the server itself never
+			// gates.
+			if (options.safetyPolicyStore?.get(manifest.name, descriptor.name) === "ask") {
+				const approved = await requestLocalApproval(context, descriptor, input, signal);
+				if (!approved) {
+					const failure: VehicleFailure = {
+						code: "vehicle-safety-denied",
+						category: "authorization",
+						message: `${operationKey(descriptor)} was denied by the local /safety policy`,
+						retryable: true,
+					};
+					publishOperationActivity("failed", identity, descriptor, { code: failure.code });
+					throw new PiVehicleInvocationError(failure);
+				}
+			}
+
 			let output: unknown;
 			try {
 				output = await client.invoke(descriptor.name, descriptor.version, input, baseInvocation);
@@ -407,18 +484,22 @@ export async function registerVehicleTools(
 		operationVersion: descriptor.version,
 		available: descriptor.available,
 		permissionsSatisfied: permissionsSatisfied(descriptor.permissions, options.permissions),
+		effect: descriptor.effect,
+		safetyState: resolveSafetyState(manifest.name, descriptor, options),
 	}));
 	// Registered tools whose operation is currently unavailable (e.g. a
-	// missing credential) or whose permissions this caller doesn't have are
-	// hidden from the LLM from the very first registration -- registering
-	// them at all (rather than skipping) keeps them ready to flip active
-	// later via refreshVehicleToolAvailability, since Pi has no
-	// unregisterTool() to add them back with afterward.
+	// missing credential) or currently resolved to "blocked" (missing
+	// permissions, or an explicit /safety override) are hidden from the LLM
+	// from the very first registration -- registering them at all (rather
+	// than skipping) keeps them ready to flip active later via
+	// refreshVehicleToolAvailability, since Pi has no unregisterTool() to add
+	// them back with afterward.
 	syncManagedActiveTools(
 		pi,
 		tools.map((tool) => tool.toolName),
-		tools.filter((tool) => tool.available && tool.permissionsSatisfied).map((tool) => tool.toolName),
+		tools.filter((tool) => tool.available && tool.safetyState !== "blocked").map((tool) => tool.toolName),
 	);
+	contributeToSafetyRegistry(manifest, tools);
 
 	return { manifest, tools };
 }
@@ -461,14 +542,17 @@ export async function refreshVehicleToolAvailability(
 			operationVersion: descriptor.version,
 			available: descriptor.available,
 			permissionsSatisfied: permissionsSatisfied(descriptor.permissions, options.permissions),
+			effect: descriptor.effect,
+			safetyState: resolveSafetyState(manifest.name, descriptor, options),
 		});
 	}
 
 	syncManagedActiveTools(
 		pi,
 		tools.map((tool) => tool.toolName),
-		tools.filter((tool) => tool.available && tool.permissionsSatisfied).map((tool) => tool.toolName),
+		tools.filter((tool) => tool.available && tool.safetyState !== "blocked").map((tool) => tool.toolName),
 	);
+	contributeToSafetyRegistry(manifest, tools);
 
 	return { manifest, tools };
 }

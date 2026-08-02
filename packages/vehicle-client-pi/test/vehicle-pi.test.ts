@@ -10,6 +10,8 @@ import {
 	refreshVehicleToolAvailability,
 	registerVehicleTools,
 } from "../src/vehicle-pi.ts";
+import { VehicleSafetyPolicyStore } from "../src/vehicle-safety.ts";
+import { __resetVehicleSafetyRegistryForTests, listVehicleSafetyContributors } from "../src/vehicle-safety-registry.ts";
 
 const limits = {
 	defaultTimeoutMs: 1_000,
@@ -167,7 +169,15 @@ describe("registerVehicleTools", () => {
 		const registered = await registerVehicleTools(pi, client);
 
 		expect(registered.tools).toEqual([
-			{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1, available: true, permissionsSatisfied: true },
+			{
+				toolName: "issues_search",
+				operationName: "issues.search",
+				operationVersion: 1,
+				available: true,
+				permissionsSatisfied: true,
+				effect: "read",
+				safetyState: "allow",
+			},
 		]);
 		expect(tools).toHaveLength(1);
 		expect(tools[0]?.description).toBe(descriptor.description);
@@ -434,8 +444,24 @@ describe("registerVehicleTools", () => {
 		expect(tools.map((tool) => tool.name).sort()).toEqual(["issues_search", "jira_search"]);
 		expect(activeTools().sort()).toEqual(["issues_search"]);
 		expect(registered.tools).toEqual([
-			{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1, available: true, permissionsSatisfied: true },
-			{ toolName: "jira_search", operationName: "jira.search", operationVersion: 1, available: false, permissionsSatisfied: true },
+			{
+				toolName: "issues_search",
+				operationName: "issues.search",
+				operationVersion: 1,
+				available: true,
+				permissionsSatisfied: true,
+				effect: "read",
+				safetyState: "allow",
+			},
+			{
+				toolName: "jira_search",
+				operationName: "jira.search",
+				operationVersion: 1,
+				available: false,
+				permissionsSatisfied: true,
+				effect: "read",
+				safetyState: "allow",
+			},
 		]);
 	});
 
@@ -462,8 +488,24 @@ describe("registerVehicleTools", () => {
 		expect(tools.map((tool) => tool.name).sort()).toEqual(["issues_search", "issues_write"]);
 		expect(activeTools().sort()).toEqual(["issues_search"]);
 		expect(registered.tools).toEqual([
-			{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1, available: true, permissionsSatisfied: true },
-			{ toolName: "issues_write", operationName: "issues.write", operationVersion: 1, available: true, permissionsSatisfied: false },
+			{
+				toolName: "issues_search",
+				operationName: "issues.search",
+				operationVersion: 1,
+				available: true,
+				permissionsSatisfied: true,
+				effect: "read",
+				safetyState: "allow",
+			},
+			{
+				toolName: "issues_write",
+				operationName: "issues.write",
+				operationVersion: 1,
+				available: true,
+				permissionsSatisfied: false,
+				effect: "read",
+				safetyState: "blocked",
+			},
 		]);
 	});
 
@@ -613,7 +655,15 @@ describe("refreshVehicleToolAvailability", () => {
 		expect(tools).toHaveLength(1); // still exactly one registerTool call ever
 		expect(activeTools()).toEqual(["jira_search"]);
 		expect(refreshed.tools).toEqual([
-			{ toolName: "jira_search", operationName: "jira.search", operationVersion: 1, available: true, permissionsSatisfied: true },
+			{
+				toolName: "jira_search",
+				operationName: "jira.search",
+				operationVersion: 1,
+				available: true,
+				permissionsSatisfied: true,
+				effect: "read",
+				safetyState: "allow",
+			},
 		]);
 	});
 
@@ -676,5 +726,104 @@ describe("refreshVehicleToolAvailability", () => {
 
 		expect(activeTools()).toEqual([]);
 		expect(refreshed.tools[0]?.permissionsSatisfied).toBe(false);
+	});
+});
+
+describe("safety policy (VehicleSafetyPolicyStore + classification)", () => {
+	afterEach(() => {
+		__resetVehicleSafetyRegistryForTests();
+	});
+
+	it("a blocked override hides an otherwise-permitted tool", async () => {
+		const client = new FakeClient(manifest([operation("issues.write")]));
+		const { pi, activeTools } = fakePi();
+		const safetyPolicyStore = await VehicleSafetyPolicyStore.restore();
+		await safetyPolicyStore.set("test-vehicle", "issues.write", "blocked");
+
+		const registered = await registerVehicleTools(pi, client, { safetyPolicyStore });
+
+		expect(activeTools()).toEqual([]);
+		expect(registered.tools[0]?.safetyState).toBe("blocked");
+	});
+
+	it("an allow override reveals a tool the effect-level default would otherwise gate", async () => {
+		const client = new FakeClient(manifest([operation("risk.destructive", 1, { effect: "destructive" })]));
+		const { pi, activeTools } = fakePi();
+		const safetyPolicyStore = await VehicleSafetyPolicyStore.restore();
+		await safetyPolicyStore.set("test-vehicle", "risk.destructive", "allow");
+
+		const registered = await registerVehicleTools(pi, client, { safetyPolicyStore });
+
+		expect(activeTools()).toEqual(["risk_destructive"]);
+		expect(registered.tools[0]?.safetyState).toBe("allow");
+	});
+
+	it("refreshVehicleToolAvailability re-evaluates the safety policy store, not just permissions/availability", async () => {
+		const client = new FakeClient(manifest([operation("issues.write")]));
+		const { pi, activeTools } = fakePi();
+		const safetyPolicyStore = await VehicleSafetyPolicyStore.restore();
+		const registered = await registerVehicleTools(pi, client, { safetyPolicyStore });
+		expect(activeTools()).toEqual(["issues_write"]);
+
+		await safetyPolicyStore.set("test-vehicle", "issues.write", "blocked");
+		const refreshed = await refreshVehicleToolAvailability(pi, client, registered, { safetyPolicyStore });
+
+		expect(activeTools()).toEqual([]);
+		expect(refreshed.tools[0]?.safetyState).toBe("blocked");
+	});
+
+	it("an override of 'ask' gates execute() with a local confirm before ever calling invoke() -- denial never touches the client at all", async () => {
+		const client = new FakeClient(manifest([operation("issues.write")]));
+		const { pi, tools } = fakePi();
+		const safetyPolicyStore = await VehicleSafetyPolicyStore.restore();
+		await safetyPolicyStore.set("test-vehicle", "issues.write", "ask");
+		await registerVehicleTools(pi, client, { safetyPolicyStore });
+
+		await expect(
+			execute(tools[0]!, { value: "go" }, undefined, undefined, { hasUI: true, ui: { confirm: async () => false } }),
+		).rejects.toThrow(PiVehicleInvocationError);
+		expect(client.calls).toHaveLength(0);
+	});
+
+	it("an override of 'ask', once approved locally, proceeds to invoke() normally", async () => {
+		const client = new FakeClient(manifest([operation("issues.write")]));
+		const { pi, tools } = fakePi();
+		const safetyPolicyStore = await VehicleSafetyPolicyStore.restore();
+		await safetyPolicyStore.set("test-vehicle", "issues.write", "ask");
+		await registerVehicleTools(pi, client, { safetyPolicyStore });
+
+		const result = await execute(tools[0]!, { value: "go" }, undefined, undefined, { hasUI: true, ui: { confirm: async () => true } });
+
+		expect(client.calls.map((call) => call.name)).toEqual(["issues.write"]);
+		expect(result.content).toBeTruthy();
+	});
+
+	it("registerVehicleTools contributes to the shared safety registry unconditionally -- no option needed to opt in", async () => {
+		const client = new FakeClient(manifest([operation("issues.search"), operation("risk.destructive", 1, { effect: "destructive" })]));
+		const { pi } = fakePi();
+
+		await registerVehicleTools(pi, client);
+
+		const contributors = listVehicleSafetyContributors();
+		expect(contributors.map((c) => c.source)).toEqual(["test-vehicle"]);
+		const contribution = await contributors[0]!.resolve();
+		expect(contribution.vehicleName).toBe("test-vehicle");
+		expect(contribution.tools).toEqual([
+			{ toolName: "issues_search", operationName: "issues.search", effect: "read", state: "allow" },
+			{ toolName: "risk_destructive", operationName: "risk.destructive", effect: "destructive", state: "ask" },
+		]);
+	});
+
+	it("a refresh replaces the prior contribution instead of duplicating it", async () => {
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		const { pi } = fakePi();
+		const registered = await registerVehicleTools(pi, client);
+
+		client.value = manifest([operation("issues.search"), operation("issues.create")]);
+		await refreshVehicleToolAvailability(pi, client, registered);
+
+		expect(listVehicleSafetyContributors()).toHaveLength(1);
+		const contribution = await listVehicleSafetyContributors()[0]!.resolve();
+		expect(contribution.tools.map((t) => t.operationName).sort()).toEqual(["issues.create", "issues.search"]);
 	});
 });
