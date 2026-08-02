@@ -56,6 +56,16 @@ export interface RemoteVehicleClientOptions {
 	/** Defaults to the global fetch. Injectable for tests. */
 	fetch?: typeof globalThis.fetch;
 	/**
+	 * Caches manifest() for this many milliseconds instead of hitting
+	 * /vehicle/manifest on every call. Default (undefined) is today's exact
+	 * behavior -- always fetch fresh, zero caching. The cache is a single
+	 * slot (one manifest per client, not keyed) and is invalidated
+	 * automatically the moment any non-"read"-effect invoke() through this
+	 * same client succeeds, since that's the only way this client's own
+	 * actions could have changed what the daemon now reports as available.
+	 */
+	manifestCacheTtlMs?: number;
+	/**
 	 * WebSocket URL for the push-invalidation channel this Vehicle's events
 	 * are bridged onto (see push-channel.ts / bridgeVehicleEventsToPushChannel
 	 * in vehicle-server). Only resolved the first time subscribe() is
@@ -86,6 +96,7 @@ interface FailurePayload {
 export class RemoteVehicleClient implements VehicleClient {
 	private readonly fetchImpl: typeof globalThis.fetch;
 	private closed = false;
+	private cachedManifest: { manifest: VehicleManifest; expiresAt: number } | undefined;
 
 	constructor(private readonly options: RemoteVehicleClientOptions) {
 		this.fetchImpl = options.fetch ?? globalThis.fetch;
@@ -93,11 +104,18 @@ export class RemoteVehicleClient implements VehicleClient {
 
 	async manifest(): Promise<VehicleManifest> {
 		this.ensureOpen();
+		if (this.cachedManifest && Date.now() < this.cachedManifest.expiresAt) return this.cachedManifest.manifest;
+
 		const response = await this.fetchImpl(`${this.options.baseUrl}/vehicle/manifest`, {
 			headers: { authorization: `Bearer ${this.options.token}` },
 		});
 		if (!response.ok) throw await this.errorFromResponse(response);
-		return (await response.json()) as VehicleManifest;
+		const manifest = (await response.json()) as VehicleManifest;
+
+		if (this.options.manifestCacheTtlMs !== undefined) {
+			this.cachedManifest = { manifest, expiresAt: Date.now() + this.options.manifestCacheTtlMs };
+		}
+		return manifest;
 	}
 
 	async invoke<Output = unknown>(name: string, version: number, input: unknown, options: VehicleInvocationOptions = {}): Promise<Output> {
@@ -120,10 +138,28 @@ export class RemoteVehicleClient implements VehicleClient {
 		const onAbort = options.signal ? (): void => void this.cancel(operationId) : undefined;
 		if (onAbort) options.signal!.addEventListener("abort", onAbort, { once: true });
 		try {
-			return options.onProgress ? await this.invokeStreaming<Output>(body, options) : await this.invokePlain<Output>(body, options.signal);
+			const output = options.onProgress
+				? await this.invokeStreaming<Output>(body, options)
+				: await this.invokePlain<Output>(body, options.signal);
+			this.invalidateManifestCacheIfWrite(name, version);
+			return output;
 		} finally {
 			if (onAbort) options.signal!.removeEventListener("abort", onAbort);
 		}
+	}
+
+	/**
+	 * A cached manifest only ever reflects what /vehicle/manifest reported at
+	 * fetch time; a successful non-"read" invoke() through this same client
+	 * is the one signal this client has that availability might now differ.
+	 * Looked up against the cached manifest itself (never a fresh fetch) --
+	 * an operation this client has never seen via manifest() can't be judged
+	 * write-or-not, so it's left alone rather than guessed at.
+	 */
+	private invalidateManifestCacheIfWrite(name: string, version: number): void {
+		if (!this.cachedManifest) return;
+		const descriptor = this.cachedManifest.manifest.operations.find((op) => op.name === name && op.version === version);
+		if (descriptor && descriptor.effect !== "read") this.cachedManifest = undefined;
 	}
 
 	/**

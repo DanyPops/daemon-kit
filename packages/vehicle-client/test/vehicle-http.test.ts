@@ -90,12 +90,36 @@ const Never = defineVehicleOperation({
 	limits: LIMITS,
 });
 
+const Write = defineVehicleOperation({
+	name: "test.write",
+	version: 1,
+	description: "A non-read-effect operation, for manifest-cache-invalidation tests.",
+	input: inputSchema,
+	output: outputSchema,
+	permissions: [],
+	effect: "local-write",
+	idempotency: { mode: "safe" },
+	limits: LIMITS,
+});
+
 let server: ReturnType<typeof Bun.serve> | undefined;
 
 afterEach(() => {
 	server?.stop(true);
 	server = undefined;
 });
+
+/** Wraps the global fetch, counting requests whose URL contains `pathSubstring` -- used to prove a cache hit skips the real HTTP call, not just to assert on the returned value. */
+function countingFetch(pathSubstring: string): { fetchImpl: typeof globalThis.fetch; count: () => number } {
+	let count = 0;
+	const fetchImpl = (async (...args: Parameters<typeof globalThis.fetch>) => {
+		const [input] = args;
+		const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+		if (url.includes(pathSubstring)) count++;
+		return globalThis.fetch(...args);
+	}) as typeof globalThis.fetch;
+	return { fetchImpl, count: () => count };
+}
 
 function startTestServer(options: { logger?: Logger } = {}): { baseUrl: string; token: string; registry: VehicleRegistry } {
 	const token = "test-token";
@@ -126,6 +150,10 @@ function startTestServer(options: { logger?: Logger } = {}): { baseUrl: string; 
 				context.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
 			});
 		}),
+	);
+	registry.register(
+		"test-owner",
+		bindVehicleOperation(Write, () => async (context) => ({ echoed: context.input.value })),
 	);
 	const app = createVehicleHttpApp({ registry, token, logger: options.logger });
 	server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: app.fetch });
@@ -218,6 +246,81 @@ describe("Vehicle HTTP provider + RemoteVehicleClient: local/HTTP parity", () =>
 		const client = new RemoteVehicleClient({ baseUrl, token });
 		await client.close();
 		await expect(client.manifest()).rejects.toThrow("closed");
+	});
+});
+
+describe("RemoteVehicleClient: manifest() TTL caching", () => {
+	it("is off by default -- every call hits the server fresh, zero behavior change for existing callers", async () => {
+		const { baseUrl, token } = startTestServer();
+		const { fetchImpl, count } = countingFetch("/vehicle/manifest");
+		const client = new RemoteVehicleClient({ baseUrl, token, fetch: fetchImpl });
+
+		await client.manifest();
+		await client.manifest();
+
+		expect(count()).toBe(2);
+	});
+
+	it("a second call within the TTL is served from cache -- exactly one real request", async () => {
+		const { baseUrl, token } = startTestServer();
+		const { fetchImpl, count } = countingFetch("/vehicle/manifest");
+		const client = new RemoteVehicleClient({ baseUrl, token, fetch: fetchImpl, manifestCacheTtlMs: 60_000 });
+
+		const first = await client.manifest();
+		const second = await client.manifest();
+
+		expect(count()).toBe(1);
+		expect(second).toEqual(first);
+	});
+
+	it("a call after the TTL elapses re-fetches", async () => {
+		const { baseUrl, token } = startTestServer();
+		const { fetchImpl, count } = countingFetch("/vehicle/manifest");
+		const client = new RemoteVehicleClient({ baseUrl, token, fetch: fetchImpl, manifestCacheTtlMs: 5 });
+
+		await client.manifest();
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		await client.manifest();
+
+		expect(count()).toBe(2);
+	});
+
+	it("invalidates the cache after a successful non-read-effect invoke() through the same client", async () => {
+		const { baseUrl, token } = startTestServer();
+		const { fetchImpl, count } = countingFetch("/vehicle/manifest");
+		const client = new RemoteVehicleClient({ baseUrl, token, fetch: fetchImpl, manifestCacheTtlMs: 60_000 });
+
+		await client.manifest();
+		expect(count()).toBe(1);
+
+		await client.invoke("test.write", 1, { value: "x" }, {});
+		await client.manifest();
+
+		expect(count()).toBe(2);
+	});
+
+	it("never invalidates the cache for a successful read-effect invoke()", async () => {
+		const { baseUrl, token } = startTestServer();
+		const { fetchImpl, count } = countingFetch("/vehicle/manifest");
+		const client = new RemoteVehicleClient({ baseUrl, token, fetch: fetchImpl, manifestCacheTtlMs: 60_000 });
+
+		await client.manifest();
+		await client.invoke("test.echo", 1, { value: "x" }, { permissions: ["test:echo"] });
+		await client.manifest();
+
+		expect(count()).toBe(1);
+	});
+
+	it("never invalidates the cache when the invoked operation fails", async () => {
+		const { baseUrl, token } = startTestServer();
+		const { fetchImpl, count } = countingFetch("/vehicle/manifest");
+		const client = new RemoteVehicleClient({ baseUrl, token, fetch: fetchImpl, manifestCacheTtlMs: 60_000 });
+
+		await client.manifest();
+		await expect(client.invoke("test.boom", 1, { value: "x" }, {})).rejects.toThrow();
+		await client.manifest();
+
+		expect(count()).toBe(1);
 	});
 });
 

@@ -93,7 +93,14 @@ plumbing.
 a same-process client wrapping a `VehicleRegistry` directly) and `./http`
 (`RemoteVehicleClient`, authenticated HTTP with the same semantics as local)
 are each a real, independent way to reach a `VehicleClient`; importing one must
-never pull the other in.
+never pull the other in. `RemoteVehicleClient` accepts an opt-in
+`manifestCacheTtlMs` (default off -- every `manifest()` call hits
+`/vehicle/manifest` fresh, today's exact behavior): when set, a call within
+the TTL is served from a single cached slot instead of a new HTTP round trip,
+and the cache is invalidated automatically the moment a non-`"read"`-effect
+`invoke()` through that same client succeeds -- looked up against the cached
+manifest itself, never a fresh fetch, so an operation this client has never
+seen via `manifest()` is left alone rather than guessed at.
 
 `@danypops/vehicle-client-pi` projects a `VehicleClient` manifest into native
 Pi tools. It preserves exact operation versions, schemas, cancellation, Pi
