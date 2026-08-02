@@ -285,6 +285,36 @@ returns. No UI, or no requestId in the failure -- the request stays durably
 pending for an async/remote resolution instead of this call eagerly denying
 it on the caller's behalf.
 
+### Scheduler
+
+`VehicleScheduler` (`@danypops/vehicle-server/scheduler`) is a distinct primitive from Vehicle Jobs: a Job tracks a unit of work already running; a Scheduler triggers something at a future time or on a recurring interval, independent of any job's own lifecycle.
+
+```ts
+import { VehicleScheduler } from "@danypops/vehicle-server/scheduler";
+import { createFileVehicleSchedulePersistence } from "@danypops/vehicle-server/schedule-persistence";
+
+const scheduler = new VehicleScheduler(registry, {
+  persistence: createFileVehicleSchedulePersistence({ filePath: "schedules.json", fs }),
+});
+await scheduler.restore(); // call once at daemon startup, before serving any request
+
+const handle = scheduler.schedule(
+  "my-provider",
+  { kind: "every", intervalMs: 60_000 }, // or { kind: "at", at: someEpochMs } for a one-shot
+  { kind: "operation", name: "issues.sync", version: 1, input: {}, permissions: ["issues:write"] },
+);
+handle.cancel();
+```
+
+A fired action is always declarative -- invoke a named Vehicle operation or
+emit a named Vehicle Event -- never a bespoke callback closure, so it
+survives a restart. `restore()` re-arms every persisted entry: a one-shot
+that fell overdue while the daemon was down fires as soon as possible (the
+one thing it was supposed to do is never silently lost); a recurring entry
+resumes its normal cadence from now rather than firing once per missed
+tick. Bounded per owner the same way `WatchRegistry` bounds watches per
+scope -- `VehicleScheduleLimitExceeded` once an owner's cap is hit.
+
 ## One operation per real action, never an action-dispatch tool
 
 A recurring anti-pattern in agent tool design -- documented independently as

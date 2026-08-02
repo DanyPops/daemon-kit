@@ -17,6 +17,8 @@
 		"src/vehicle-job-store.ts",
 		"src/vehicle-job-persistence.ts",
 		"src/vehicle-watchers.ts",
-		"src/vehicle-approval-authority.ts"
+		"src/vehicle-approval-authority.ts",
+		"src/vehicle-scheduler.ts",
+		"src/vehicle-schedule-persistence.ts"
 	]
 }
