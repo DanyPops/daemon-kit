@@ -12,7 +12,9 @@ import {
 	runDaemonProcess,
 	startDaemon,
 } from "../src/daemon.ts";
+import { createLogger } from "../src/logging.ts";
 import { readDaemonHandle } from "../src/paths.ts";
+import { getCurrentRpcCallId } from "../src/rpc-correlation.ts";
 
 let daemon: RunningDaemon | undefined;
 let dir: string | undefined;
@@ -355,5 +357,57 @@ describe("runDaemonProcess idle-shutdown", () => {
 		} finally {
 			process.exit = originalExit;
 		}
+	});
+});
+
+describe("startDaemon: per-request rpcCallId correlation (Bun listener)", () => {
+	it("each inbound HTTP request runs with a real, non-empty rpcCallId bound for its own fetch() call", async () => {
+		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
+		const handlePath = join(dir, "handle.json");
+		daemon = await startDaemon({
+			daemonLabel: "Acme",
+			handlePath,
+			buildApp: () => ({ fetch: async () => Response.json({ rpcCallId: getCurrentRpcCallId() }) }),
+		});
+		const response = await fetch(`http://127.0.0.1:${daemon.port}/`);
+		const body = (await response.json()) as { rpcCallId: string | undefined };
+		expect(typeof body.rpcCallId).toBe("string");
+		expect(body.rpcCallId!.length).toBeGreaterThan(0);
+	});
+
+	it("two concurrent HTTP requests each carry a different rpcCallId in their own log lines, never a sibling's", async () => {
+		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
+		const handlePath = join(dir, "handle.json");
+		const lines: string[] = [];
+		const destination = {
+			write: (chunk: string) => {
+				lines.push(chunk);
+				return true;
+			},
+		};
+		const logger = createLogger("test-handler", { level: "debug", destination });
+
+		daemon = await startDaemon({
+			daemonLabel: "Acme",
+			handlePath,
+			buildApp: () => ({
+				fetch: async (request: Request) => {
+					const pathname = new URL(request.url).pathname;
+					await new Promise((resolve) => setTimeout(resolve, pathname === "/slow" ? 20 : 0));
+					logger.info("handled", { path: pathname });
+					return new Response(null, { status: 204 });
+				},
+			}),
+		});
+
+		await Promise.all([fetch(`http://127.0.0.1:${daemon.port}/slow`), fetch(`http://127.0.0.1:${daemon.port}/fast`)]);
+
+		expect(lines).toHaveLength(2);
+		const parsed = lines.map((line) => JSON.parse(line));
+		const slow = parsed.find((entry) => entry.path === "/slow");
+		const fast = parsed.find((entry) => entry.path === "/fast");
+		expect(typeof slow.rpcCallId).toBe("string");
+		expect(typeof fast.rpcCallId).toBe("string");
+		expect(slow.rpcCallId).not.toBe(fast.rpcCallId);
 	});
 });

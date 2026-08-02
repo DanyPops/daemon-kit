@@ -25,6 +25,7 @@
  * caller -- confirmed directly, not assumed, before making the signature
  * change.
  */
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { dirname, join } from "node:path";
@@ -32,6 +33,7 @@ import { Readable } from "node:stream";
 import type { Logger } from "./logging.ts";
 import { acquireDaemonLock, LOOPBACK_HOST, releaseDaemonLock, removeDaemonHandle, writeDaemonHandle } from "./paths.ts";
 import type { PushChannel } from "./push-channel.ts";
+import { runWithRpcCallId } from "./rpc-correlation.ts";
 
 const isBun = typeof Bun !== "undefined";
 
@@ -157,7 +159,7 @@ function startBunListener(options: StartDaemonOptions, app: DaemonApp, pushPath:
 			if (options.pushChannel && new URL(request.url).pathname === pushPath) {
 				return options.pushChannel.upgrade(request, bunServer) ?? undefined;
 			}
-			return app.fetch(request);
+			return runWithRpcCallId(randomUUID(), () => app.fetch(request));
 		},
 		// Bun's own types require `websocket` whenever `fetch`'s server parameter
 		// carries per-connection data (SubscriberData here) -- a no-op fallback
@@ -212,7 +214,7 @@ function startNodeListener(app: DaemonApp, onRequest: () => void): Promise<Liste
 	return new Promise((resolve, reject) => {
 		const server = createServer((request, res) => {
 			onRequest();
-			void (async () => {
+			void runWithRpcCallId(randomUUID(), async () => {
 				try {
 					const response = await app.fetch(nodeRequestToWebRequest(request));
 					await writeWebResponseToNode(response, res);
@@ -220,7 +222,7 @@ function startNodeListener(app: DaemonApp, onRequest: () => void): Promise<Liste
 					res.statusCode = 500;
 					res.end(error instanceof Error ? error.message : String(error));
 				}
-			})();
+			});
 		});
 		// Tracked so stop() can force-close lingering keep-alive connections --
 		// server.close() alone only stops accepting new ones and waits

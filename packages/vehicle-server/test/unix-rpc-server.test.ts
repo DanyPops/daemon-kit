@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createLogger } from "../src/logging.ts";
+import { getCurrentRpcCallId } from "../src/rpc-correlation.ts";
 import { serveUnixRpc } from "../src/unix-rpc-server.ts";
 
 function socketPath(): string {
@@ -237,6 +239,109 @@ describe("serveUnixRpc", () => {
 				const response = (await sendRequest(path, { method: "GET", path: p })) as { body: string };
 				expect(JSON.parse(response.body)).toEqual({ path: p });
 			}
+		} finally {
+			server.stop();
+			try {
+				unlinkSync(path);
+			} catch {}
+		}
+	});
+});
+
+describe("serveUnixRpc: per-call rpcCallId correlation", () => {
+	it("the handler runs with a real, non-empty rpcCallId bound for the duration of its own call", async () => {
+		const path = socketPath();
+		const server = serveUnixRpc({
+			path,
+			handler: async () => new Response(JSON.stringify({ rpcCallId: getCurrentRpcCallId() }), { status: 200 }),
+		});
+		try {
+			const response = (await sendRequest(path, { method: "GET", path: "/x" })) as { body: string };
+			const { rpcCallId } = JSON.parse(response.body) as { rpcCallId: string | undefined };
+			expect(typeof rpcCallId).toBe("string");
+			expect(rpcCallId!.length).toBeGreaterThan(0);
+		} finally {
+			server.stop();
+			try {
+				unlinkSync(path);
+			} catch {}
+		}
+	});
+
+	it("two concurrent calls each carry a different, stable-within-a-call rpcCallId, never leaking into a sibling call's log lines", async () => {
+		const path = socketPath();
+		const lines: string[] = [];
+		const destination = {
+			write: (chunk: string) => {
+				lines.push(chunk);
+				return true;
+			},
+		};
+		const logger = createLogger("test-handler", { level: "debug", destination });
+
+		const server = serveUnixRpc({
+			path,
+			handler: async (request) => {
+				const delayMs = new URL(request.url).pathname === "/slow" ? 20 : 0;
+				await new Promise((resolve) => setTimeout(resolve, delayMs));
+				logger.info("handled", { path: new URL(request.url).pathname });
+				return new Response(null, { status: 204 });
+			},
+		});
+		try {
+			await Promise.all([sendRequest(path, { method: "GET", path: "/slow" }), sendRequest(path, { method: "GET", path: "/fast" })]);
+
+			expect(lines).toHaveLength(2);
+			const parsed = lines.map((line) => JSON.parse(line));
+			const slow = parsed.find((entry) => entry.path === "/slow");
+			const fast = parsed.find((entry) => entry.path === "/fast");
+			expect(typeof slow.rpcCallId).toBe("string");
+			expect(typeof fast.rpcCallId).toBe("string");
+			expect(slow.rpcCallId).not.toBe(fast.rpcCallId);
+		} finally {
+			server.stop();
+			try {
+				unlinkSync(path);
+			} catch {}
+		}
+	});
+
+	it("a log call several awaits deep inside the handler still carries its own call's rpcCallId, not a sibling's", async () => {
+		const path = socketPath();
+		const lines: string[] = [];
+		const destination = {
+			write: (chunk: string) => {
+				lines.push(chunk);
+				return true;
+			},
+		};
+		const logger = createLogger("test-handler", { level: "debug", destination });
+
+		async function deepHandlerChain(pathname: string): Promise<void> {
+			await new Promise((resolve) => setTimeout(resolve, pathname === "/slow" ? 15 : 0));
+			async function innerStep(): Promise<void> {
+				await new Promise((resolve) => setTimeout(resolve, 1));
+				logger.info("deep", { path: pathname });
+			}
+			await innerStep();
+		}
+
+		const server = serveUnixRpc({
+			path,
+			handler: async (request) => {
+				await deepHandlerChain(new URL(request.url).pathname);
+				return new Response(null, { status: 204 });
+			},
+		});
+		try {
+			await Promise.all([sendRequest(path, { method: "GET", path: "/slow" }), sendRequest(path, { method: "GET", path: "/fast" })]);
+
+			const parsed = lines.map((line) => JSON.parse(line));
+			const slow = parsed.find((entry) => entry.path === "/slow");
+			const fast = parsed.find((entry) => entry.path === "/fast");
+			expect(slow.rpcCallId).toBeTruthy();
+			expect(fast.rpcCallId).toBeTruthy();
+			expect(slow.rpcCallId).not.toBe(fast.rpcCallId);
 		} finally {
 			server.stop();
 			try {

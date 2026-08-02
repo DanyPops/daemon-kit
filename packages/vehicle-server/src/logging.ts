@@ -12,6 +12,7 @@
  * unchanged.
  */
 import pino from "pino";
+import { getCurrentRpcCallId } from "./rpc-correlation.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export interface LogFields {
@@ -87,6 +88,14 @@ export function createLogger(component: string, options: CreateLoggerOptions = {
 			formatters: { level: (label) => ({ level: label }) },
 			timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
 			redact: { paths: [...DEFAULT_REDACT_PATHS, ...(options.additionalRedactPaths ?? [])], censor: "[REDACTED]" },
+			// Attaches the current inbound RPC call's id (see rpc-correlation.ts) to
+			// every log line emitted during that call, with zero change needed at
+			// any call site -- absent entirely outside a bound call (a maintenance
+			// timer, startup logging), not an empty/null placeholder field.
+			mixin: () => {
+				const rpcCallId = getCurrentRpcCallId();
+				return rpcCallId ? { rpcCallId } : {};
+			},
 		},
 		destination,
 	).child({ component });

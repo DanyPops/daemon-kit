@@ -98,4 +98,45 @@ describe("daemon.ts under a real Node process (not Bun)", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it("binds a real rpcCallId for each inbound request under the Node listener too, not just Bun's", () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-node-e2e-"));
+		const handlePath = join(dir, "handle.json");
+		const scriptPath = join(dir, "check.mjs");
+		writeFileSync(
+			scriptPath,
+			`
+			import { startDaemon } from ${JSON.stringify(DAEMON_TS)};
+			import { getCurrentRpcCallId } from ${JSON.stringify(resolve(import.meta.dir, "..", "src", "rpc-correlation.ts"))};
+
+			const daemon = await startDaemon({
+				daemonLabel: "NodeE2E",
+				handlePath: ${JSON.stringify(handlePath)},
+				buildApp: () => ({
+					async fetch() {
+						return Response.json({ rpcCallId: getCurrentRpcCallId() });
+					},
+				}),
+			});
+
+			const response = await fetch("http://127.0.0.1:" + daemon.port + "/");
+			const body = await response.json();
+			if (typeof body.rpcCallId !== "string" || body.rpcCallId.length === 0) {
+				throw new Error("expected a real rpcCallId, got: " + JSON.stringify(body));
+			}
+
+			await daemon.stop();
+			console.log("NODE_E2E_OK");
+			`,
+		);
+
+		try {
+			const result = spawnSync("node", [scriptPath], { encoding: "utf8", timeout: 15_000 });
+			expect(result.stderr).toBe("");
+			expect(result.stdout.trim().endsWith("NODE_E2E_OK")).toBe(true);
+			expect(result.status).toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

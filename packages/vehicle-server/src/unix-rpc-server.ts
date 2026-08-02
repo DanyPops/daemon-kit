@@ -12,8 +12,10 @@
  * newline-delimited JSON request per connection, one newline-delimited JSON
  * response, then close.
  */
+import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
+import { runWithRpcCallId } from "./rpc-correlation.ts";
 import { getPeerCredential, type PeerCredential, rawSocketFd } from "./unix-peer-cred.ts";
 
 interface WireRequest {
@@ -114,7 +116,7 @@ export function serveUnixRpc(options: UnixRpcServerOptions): UnixRpcServer {
 
 				try {
 					const request = await buildRequest(wireRequest);
-					const response = await options.handler(request, state.peer);
+					const response = await runWithRpcCallId(randomUUID(), () => options.handler(request, state.peer));
 					writeFrame(socket, await frameResponse(response));
 				} catch (err) {
 					options.onError?.(err);
