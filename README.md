@@ -108,14 +108,24 @@ call/session identity, explicit permissions and principals, keyed idempotency,
 progress, and structured failures. A gated-effect operation (see "Approval
 Gate" below) requires a real, verified approval capability -- opt-in per
 deployment, never forced on a Vehicle that never configures it. A currently-unavailable operation (per the
-manifest's `available` flag) is still registered as a Pi tool -- Pi has no
-`unregisterTool()` -- but curated out of the LLM's active/callable set from the
-very first `registerVehicleTools()` call via its own `syncManagedActiveTools`
-primitive (Vehicle-agnostic, exported separately for any Pi extension
-curating its own tool visibility, not just this one).
+manifest's `available` flag) -- or one whose declared `permissions` aren't
+fully covered by this registration's own `options.permissions`, the exact
+superset check `VehicleRegistry.invoke()` already enforces at call time,
+applied here to visibility instead -- is still registered as a Pi tool -- Pi
+has no `unregisterTool()` -- but curated out of the LLM's active/callable set
+from the very first `registerVehicleTools()` call via its own
+`syncManagedActiveTools` primitive (Vehicle-agnostic, exported separately for
+any Pi extension curating its own tool visibility, not just this one). A
+caller never sees a tool it has no permissions to call in the first place --
+a wasted turn is the mild failure mode a pure invoke-time check leaves open;
+the tool's mere presence in the system prompt, leaking the existence of a
+capability the caller was never meant to know about, is the one this closes.
 `refreshVehicleToolAvailability()` re-fetches the manifest on whatever
 cadence the caller chooses (a maintenance-task interval, a push notification,
-a session_start recheck) and re-syncs active/inactive state for known tools,
+a session_start recheck) and re-syncs active/inactive state for known tools --
+including permission eligibility, so a caller whose granted permissions
+change mid-session (a token upgrade, a delegated-scope change) gets tools
+revealed/hidden correctly without a full extension reload --
 registering any genuinely new operation for the first time.
 
 The same package also carries the shared `/secrets` Pi command

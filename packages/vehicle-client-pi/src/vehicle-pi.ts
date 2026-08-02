@@ -87,6 +87,8 @@ export interface RegisteredPiVehicleTool {
 	readonly operationVersion: number;
 	/** This operation's availability as of the manifest fetch that produced this entry -- see refreshVehicleToolAvailability for keeping it current. */
 	readonly available: boolean;
+	/** Whether options.permissions, as of this registration/refresh, actually covers descriptor.permissions -- see permissionsSatisfied(). A tool is only ever active when both this and `available` are true. */
+	readonly permissionsSatisfied: boolean;
 }
 
 export interface RegisteredPiVehicle {
@@ -116,6 +118,19 @@ function defaultToolName(descriptor: VehicleOperationDescriptor, versioned: bool
 
 function operationKey(descriptor: Pick<VehicleOperationDescriptor, "name" | "version">): string {
 	return `${descriptor.name}@${descriptor.version}`;
+}
+
+/**
+ * Same superset check VehicleRegistry.invoke() already enforces at
+ * invoke-time -- this is that same rule applied one step earlier, to tool
+ * *visibility*, so a caller never sees a tool it has no permissions to call
+ * in the first place. An operation with no declared permissions is always
+ * satisfied, matching the registry's own "missing.length === 0" logic.
+ */
+function permissionsSatisfied(required: readonly string[], granted: readonly string[] | undefined): boolean {
+	if (required.length === 0) return true;
+	const grantedSet = new Set(granted ?? []);
+	return required.every((permission) => grantedSet.has(permission));
 }
 
 function displayLabel(descriptor: VehicleOperationDescriptor): string {
@@ -391,16 +406,18 @@ export async function registerVehicleTools(
 		operationName: descriptor.name,
 		operationVersion: descriptor.version,
 		available: descriptor.available,
+		permissionsSatisfied: permissionsSatisfied(descriptor.permissions, options.permissions),
 	}));
 	// Registered tools whose operation is currently unavailable (e.g. a
-	// missing credential) are hidden from the LLM from the very first
-	// registration -- registering them at all (rather than skipping) keeps
-	// them ready to flip active later via refreshVehicleToolAvailability,
-	// since Pi has no unregisterTool() to add them back with afterward.
+	// missing credential) or whose permissions this caller doesn't have are
+	// hidden from the LLM from the very first registration -- registering
+	// them at all (rather than skipping) keeps them ready to flip active
+	// later via refreshVehicleToolAvailability, since Pi has no
+	// unregisterTool() to add them back with afterward.
 	syncManagedActiveTools(
 		pi,
 		tools.map((tool) => tool.toolName),
-		tools.filter((tool) => tool.available).map((tool) => tool.toolName),
+		tools.filter((tool) => tool.available && tool.permissionsSatisfied).map((tool) => tool.toolName),
 	);
 
 	return { manifest, tools };
@@ -443,13 +460,14 @@ export async function refreshVehicleToolAvailability(
 			operationName: descriptor.name,
 			operationVersion: descriptor.version,
 			available: descriptor.available,
+			permissionsSatisfied: permissionsSatisfied(descriptor.permissions, options.permissions),
 		});
 	}
 
 	syncManagedActiveTools(
 		pi,
 		tools.map((tool) => tool.toolName),
-		tools.filter((tool) => tool.available).map((tool) => tool.toolName),
+		tools.filter((tool) => tool.available && tool.permissionsSatisfied).map((tool) => tool.toolName),
 	);
 
 	return { manifest, tools };

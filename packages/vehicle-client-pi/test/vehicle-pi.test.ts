@@ -166,7 +166,9 @@ describe("registerVehicleTools", () => {
 
 		const registered = await registerVehicleTools(pi, client);
 
-		expect(registered.tools).toEqual([{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1, available: true }]);
+		expect(registered.tools).toEqual([
+			{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1, available: true, permissionsSatisfied: true },
+		]);
 		expect(tools).toHaveLength(1);
 		expect(tools[0]?.description).toBe(descriptor.description);
 		expect(JSON.parse(JSON.stringify(tools[0]?.parameters))).toEqual(descriptor.inputSchema);
@@ -432,8 +434,8 @@ describe("registerVehicleTools", () => {
 		expect(tools.map((tool) => tool.name).sort()).toEqual(["issues_search", "jira_search"]);
 		expect(activeTools().sort()).toEqual(["issues_search"]);
 		expect(registered.tools).toEqual([
-			{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1, available: true },
-			{ toolName: "jira_search", operationName: "jira.search", operationVersion: 1, available: false },
+			{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1, available: true, permissionsSatisfied: true },
+			{ toolName: "jira_search", operationName: "jira.search", operationVersion: 1, available: false, permissionsSatisfied: true },
 		]);
 	});
 
@@ -444,6 +446,43 @@ describe("registerVehicleTools", () => {
 		await registerVehicleTools(pi, client);
 
 		expect(activeTools().sort()).toEqual(["edit", "read"]);
+	});
+
+	it("registers a permission-ineligible operation's tool but never activates it -- registered in getAllTools(), absent from getActiveTools()", async () => {
+		const client = new FakeClient(
+			manifest([
+				operation("issues.search", 1, { permissions: ["issues:read"] }),
+				operation("issues.write", 1, { permissions: ["issues:write"] }),
+			]),
+		);
+		const { pi, tools, activeTools } = fakePi();
+
+		const registered = await registerVehicleTools(pi, client, { permissions: ["issues:read"] });
+
+		expect(tools.map((tool) => tool.name).sort()).toEqual(["issues_search", "issues_write"]);
+		expect(activeTools().sort()).toEqual(["issues_search"]);
+		expect(registered.tools).toEqual([
+			{ toolName: "issues_search", operationName: "issues.search", operationVersion: 1, available: true, permissionsSatisfied: true },
+			{ toolName: "issues_write", operationName: "issues.write", operationVersion: 1, available: true, permissionsSatisfied: false },
+		]);
+	});
+
+	it("requires every declared permission, not just one of several", async () => {
+		const client = new FakeClient(manifest([operation("issues.write", 1, { permissions: ["issues:read", "issues:write"] })]));
+		const { pi, activeTools } = fakePi();
+
+		await registerVehicleTools(pi, client, { permissions: ["issues:read"] });
+
+		expect(activeTools()).toEqual([]);
+	});
+
+	it("never hides a tool over an operation with no declared permissions, matching the registry's own missing.length === 0 rule", async () => {
+		const client = new FakeClient(manifest([operation("issues.search", 1, { permissions: [] })]));
+		const { pi, activeTools } = fakePi();
+
+		await registerVehicleTools(pi, client, { permissions: [] });
+
+		expect(activeTools()).toEqual(["issues_search"]);
 	});
 
 	it('turns Pi\'s cryptic "Extension runtime not initialized" error (calling registerVehicleTools from the top-level factory body) into a clear, actionable one', async () => {
@@ -573,7 +612,9 @@ describe("refreshVehicleToolAvailability", () => {
 
 		expect(tools).toHaveLength(1); // still exactly one registerTool call ever
 		expect(activeTools()).toEqual(["jira_search"]);
-		expect(refreshed.tools).toEqual([{ toolName: "jira_search", operationName: "jira.search", operationVersion: 1, available: true }]);
+		expect(refreshed.tools).toEqual([
+			{ toolName: "jira_search", operationName: "jira.search", operationVersion: 1, available: true, permissionsSatisfied: true },
+		]);
 	});
 
 	it("deactivates a tool whose operation just became unavailable", async () => {
@@ -610,5 +651,30 @@ describe("refreshVehicleToolAvailability", () => {
 		const before = setCallCount();
 		await refreshVehicleToolAvailability(pi, client, registered);
 		expect(setCallCount()).toBe(before);
+	});
+
+	it("reveals a tool once options.permissions gains the coverage it was missing, without re-registering it", async () => {
+		const client = new FakeClient(manifest([operation("issues.write", 1, { permissions: ["issues:write"] })]));
+		const { pi, tools, activeTools } = fakePi();
+		const registered = await registerVehicleTools(pi, client, { permissions: [] });
+		expect(activeTools()).toEqual([]);
+
+		const refreshed = await refreshVehicleToolAvailability(pi, client, registered, { permissions: ["issues:write"] });
+
+		expect(tools).toHaveLength(1); // still exactly one registerTool call ever
+		expect(activeTools()).toEqual(["issues_write"]);
+		expect(refreshed.tools[0]?.permissionsSatisfied).toBe(true);
+	});
+
+	it("hides a tool once options.permissions loses coverage it previously had, e.g. a delegated-scope downgrade", async () => {
+		const client = new FakeClient(manifest([operation("issues.write", 1, { permissions: ["issues:write"] })]));
+		const { pi, activeTools } = fakePi();
+		const registered = await registerVehicleTools(pi, client, { permissions: ["issues:write"] });
+		expect(activeTools()).toEqual(["issues_write"]);
+
+		const refreshed = await refreshVehicleToolAvailability(pi, client, registered, { permissions: [] });
+
+		expect(activeTools()).toEqual([]);
+		expect(refreshed.tools[0]?.permissionsSatisfied).toBe(false);
 	});
 });
