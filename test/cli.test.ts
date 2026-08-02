@@ -91,6 +91,25 @@ describe("armada plan", () => {
 		});
 	});
 
+	it("plans duplicate cleanup without signaling before explicit approval", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
+		const path = join(directory, "armada.json");
+		await writeFile(path, manifestJson());
+		const captured = output();
+		const code = await runCli(["cleanup", "papyrus", "--manifest", path, "--json"], {
+			manager,
+			inspectProcesses: () =>
+				Promise.resolve([
+					{ pid: 42, executable: "/opt/papyrus/cli.js", command: "/opt/papyrus/cli.js serve" },
+					{ pid: 43, executable: "/opt/papyrus/cli.js", command: "/opt/papyrus/cli.js serve" },
+				]),
+			readHandle: () => Promise.resolve(undefined),
+			io: captured.io,
+		});
+		expect(code).toBe(0);
+		expect(JSON.parse(captured.stdout.join(""))).toMatchObject({ ok: true, plan: { vehicle: "papyrus", consequences: [{ pid: 42 }, { pid: 43 }] } });
+	});
+
 	it("returns stable machine-readable diagnostics for invalid input", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
 		const path = join(directory, "armada.json");

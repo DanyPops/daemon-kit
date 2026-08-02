@@ -4,6 +4,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
+import { executeCleanup, planDuplicateCleanup } from "./fleet/cleanup.js";
 import { diagnostic, type Diagnostic } from "./fleet/diagnostic.js";
 import { inspectHostProcesses, readVehicleHandles } from "./fleet/host-inspection.js";
 import { decodeArmadaManifest, MAX_MANIFEST_BYTES, type ManifestDecodeOutcome } from "./fleet/manifest.js";
@@ -35,6 +36,8 @@ export interface CliDependencies {
 interface PlanArguments {
 	readonly manifestPath: string;
 	readonly json: boolean;
+	readonly vehicle?: string;
+	readonly approval?: string;
 }
 
 type ArgumentOutcome = { readonly ok: true; readonly arguments: PlanArguments } | { readonly ok: false; readonly diagnostic: Diagnostic };
@@ -49,13 +52,22 @@ export function defaultManifestPath(
 	return join(env["XDG_CONFIG_HOME"] ?? join(home, ".config"), "armada", "armada.json");
 }
 
-function parsePlanArguments(args: readonly string[], dependencies: CliDependencies): ArgumentOutcome {
+function parsePlanArguments(args: readonly string[], dependencies: CliDependencies, command: string): ArgumentOutcome {
 	let manifestPath = defaultManifestPath(dependencies.platform, dependencies.env, dependencies.home);
 	let json = false;
+	let vehicle: string | undefined;
+	let approval: string | undefined;
 	for (let index = 0; index < args.length; index++) {
 		const argument = args[index];
 		if (argument === "--json") {
 			json = true;
+			continue;
+		}
+		if (argument === "--approve") {
+			const value = args[index + 1];
+			if (!value) return { ok: false, diagnostic: diagnostic("CLI_ARGUMENT_MISSING", "error", "--approve", "plan hash is required") };
+			approval = value;
+			index++;
 			continue;
 		}
 		if (argument === "--manifest") {
@@ -65,9 +77,21 @@ function parsePlanArguments(args: readonly string[], dependencies: CliDependenci
 			index++;
 			continue;
 		}
+		if (command === "cleanup" && vehicle === undefined && argument !== undefined && !argument.startsWith("--")) {
+			vehicle = argument;
+			continue;
+		}
 		return { ok: false, diagnostic: diagnostic("CLI_ARGUMENT_UNKNOWN", "error", argument ?? "", "unknown argument") };
 	}
-	return { ok: true, arguments: { manifestPath, json } };
+	return {
+		ok: true,
+		arguments: {
+			manifestPath,
+			json,
+			...(vehicle === undefined ? {} : { vehicle }),
+			...(approval === undefined ? {} : { approval }),
+		},
+	};
 }
 
 async function readManifest(path: string): Promise<ManifestDecodeOutcome> {
@@ -98,15 +122,15 @@ function writeDiagnostics(diagnostics: readonly Diagnostic[], json: boolean, io:
 
 export async function runCli(args: readonly string[], dependencies: CliDependencies): Promise<number> {
 	const [command, ...rest] = args;
-	if (command !== "plan" && command !== "reconcile" && command !== "status" && command !== "doctor") {
+	if (command !== "plan" && command !== "reconcile" && command !== "status" && command !== "doctor" && command !== "cleanup") {
 		writeDiagnostics(
-			[diagnostic("CLI_COMMAND_UNKNOWN", "error", command ?? "", "usage: armada <plan|reconcile|status|doctor> [--manifest <path>] [--json]")],
+			[diagnostic("CLI_COMMAND_UNKNOWN", "error", command ?? "", "usage: armada <plan|reconcile|status|doctor|cleanup> [--manifest <path>] [--json]")],
 			false,
 			dependencies.io,
 		);
 		return 2;
 	}
-	const parsed = parsePlanArguments(rest, dependencies);
+	const parsed = parsePlanArguments(rest, dependencies, command);
 	if (!parsed.ok) {
 		writeDiagnostics([parsed.diagnostic], false, dependencies.io);
 		return 2;
@@ -125,6 +149,51 @@ export async function runCli(args: readonly string[], dependencies: CliDependenc
 	if (!planned.ok) {
 		writeDiagnostics(planned.diagnostics, parsed.arguments.json, dependencies.io);
 		return 1;
+	}
+	if (command === "cleanup") {
+		const vehicle = decoded.manifest.vehicles.find((item) => item.name === parsed.arguments.vehicle);
+		if (!vehicle) {
+			writeDiagnostics([diagnostic("CLEANUP_VEHICLE_UNKNOWN", "error", "/vehicle", "cleanup requires a declared Vehicle name")], parsed.arguments.json, dependencies.io);
+			return 2;
+		}
+		const inspectProcesses = dependencies.inspectProcesses ?? (() => inspectHostProcesses(dependencies.platform ?? process.platform, processCommandRunner));
+		const processes = await inspectProcesses();
+		const handles = await readVehicleHandles(decoded.manifest.vehicles, dependencies.readHandle ?? readVehicleHandleFile);
+		const native = inspected.services.find((service) => service.name === vehicle.name);
+		const cleanup = planDuplicateCleanup(vehicle, native?.pid, handles.get(vehicle.name), processes);
+		if (!cleanup.ok) {
+			writeDiagnostics(cleanup.diagnostics, parsed.arguments.json, dependencies.io);
+			return 1;
+		}
+		if (parsed.arguments.approval === undefined) {
+			dependencies.io.stdout(`${JSON.stringify({ ok: true, plan: cleanup.plan })}\n`);
+			return 0;
+		}
+		const executed = await executeCleanup({
+			plan: cleanup.plan,
+			approval: parsed.arguments.approval,
+			vehicle,
+			managedPid: native?.pid,
+			handle: handles.get(vehicle.name),
+			currentProcesses: inspectProcesses,
+			terminate: (pid) => {
+				try {
+					process.kill(pid, "SIGTERM");
+					return Promise.resolve({ ok: true, diagnostics: [] });
+				} catch (error) {
+					return Promise.resolve({
+						ok: false,
+						diagnostics: [diagnostic("CLEANUP_SIGNAL_FAILED", "error", `/processes/${pid}`, error instanceof Error ? error.message : String(error))],
+					});
+				}
+			},
+		});
+		if (!executed.ok) {
+			writeDiagnostics(executed.diagnostics, parsed.arguments.json, dependencies.io);
+			return 1;
+		}
+		dependencies.io.stdout(`${JSON.stringify({ ok: true, terminatedPids: executed.terminatedPids })}\n`);
+		return 0;
 	}
 	if (command === "status" || command === "doctor") {
 		const processes = await (dependencies.inspectProcesses ?? (() => inspectHostProcesses(dependencies.platform ?? process.platform, processCommandRunner)))();

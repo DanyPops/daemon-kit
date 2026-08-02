@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
-import { createManifestHash, createPlanHash, type ManifestHash, type PlanHash } from "./identity.js";
+import {
+	createCleanupPlanHash,
+	createManifestHash,
+	createPlanHash,
+	type CleanupPlanHash,
+	type ManifestHash,
+	type PlanHash,
+} from "./identity.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -27,6 +34,12 @@ export function manifestHash(value: unknown): ManifestHash {
 
 export function planHash(value: unknown): PlanHash {
 	const outcome = createPlanHash(sha256(value));
+	if (!outcome.ok) throw new Error(outcome.reason);
+	return outcome.value;
+}
+
+export function cleanupPlanHash(value: unknown): CleanupPlanHash {
+	const outcome = createCleanupPlanHash(sha256(value));
 	if (!outcome.ok) throw new Error(outcome.reason);
 	return outcome.value;
 }

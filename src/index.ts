@@ -1,3 +1,4 @@
+export * from "./fleet/cleanup.js";
 export * from "./fleet/diagnostic.js";
 export * from "./fleet/hash.js";
 export * from "./fleet/host-inspection.js";

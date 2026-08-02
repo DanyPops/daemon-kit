@@ -44,11 +44,19 @@ export interface FleetStatusInput {
 	readonly executableExists: (path: string) => boolean;
 }
 
-function matchingProcesses(executable: string, arguments_: readonly string[], processes: readonly ObservedProcess[]): readonly ObservedProcess[] {
-	const argumentSignature = arguments_.join(" ");
-	return processes.filter(
-		(process) => process.executable === executable && (argumentSignature.length === 0 || process.command.includes(argumentSignature)),
-	);
+export function matchesVehicleProcess(
+	vehicle: { readonly executable: string; readonly arguments: readonly string[] },
+	process: ObservedProcess,
+): boolean {
+	const argumentSignature = vehicle.arguments.join(" ");
+	return process.executable === vehicle.executable && (argumentSignature.length === 0 || process.command.includes(argumentSignature));
+}
+
+function matchingProcesses(
+	vehicle: { readonly executable: string; readonly arguments: readonly string[] },
+	processes: readonly ObservedProcess[],
+): readonly ObservedProcess[] {
+	return processes.filter((process) => matchesVehicleProcess(vehicle, process));
 }
 
 export function buildFleetStatus(input: FleetStatusInput): FleetStatusReport {
@@ -64,7 +72,7 @@ export function buildFleetStatus(input: FleetStatusInput): FleetStatusReport {
 	for (const vehicle of input.manifest.vehicles) {
 		const native = nativeByName.get(vehicle.name) ?? { name: vehicle.name, status: "absent" as const };
 		const handle = input.handles.get(vehicle.name);
-		const matches = matchingProcesses(vehicle.executable, vehicle.arguments, input.processes);
+		const matches = matchingProcesses(vehicle, input.processes);
 		const descriptorDrift = native.specHash !== undefined && native.specHash !== manifestHash(vehicle);
 		if (!input.executableExists(vehicle.executable)) {
 			diagnostics.push(diagnostic("VEHICLE_EXECUTABLE_MISSING", "error", `/vehicles/${vehicle.name}/executable`, vehicle.executable));
