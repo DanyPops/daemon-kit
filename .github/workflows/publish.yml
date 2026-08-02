@@ -10,6 +10,7 @@ name: Publish Package
 on:
   push:
     tags:
+      - "armada-v*"
       - "vehicle-server-v*"
       - "vehicle-client-pi-v*"
       - "vehicle-client-v*"
@@ -37,6 +38,7 @@ jobs:
       - id: package
         run: |
           case "${GITHUB_REF_NAME}" in
+            armada-v*) echo "dir=packages/armada" >> "$GITHUB_OUTPUT" ;;
             vehicle-server-v*) echo "dir=packages/vehicle-server" >> "$GITHUB_OUTPUT" ;;
             vehicle-client-pi-v*) echo "dir=packages/vehicle-client-pi" >> "$GITHUB_OUTPUT" ;;
             vehicle-client-v*) echo "dir=packages/vehicle-client" >> "$GITHUB_OUTPUT" ;;
