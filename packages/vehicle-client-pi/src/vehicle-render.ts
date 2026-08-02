@@ -96,6 +96,78 @@ function progressBarFor(progress: unknown, theme: Theme): Component {
 	return new Text({ text: theme.fg("dim", text ?? ""), measure });
 }
 
+type Primitive = string | number | boolean | null | undefined;
+
+function isPrimitive(value: unknown): value is Primitive {
+	return value === null || value === undefined || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+/**
+ * A common REST/RPC pagination shape: one dominant array field plus a few
+ * scalar siblings (a cursor, a count) -- e.g. {events, nextCursor}. Only
+ * fires for exactly one non-empty array field with every sibling a
+ * primitive; anything else (multiple array fields, a non-primitive
+ * sibling) is ambiguous enough to leave alone rather than guess.
+ */
+function singleArrayEnvelope(output: unknown): { items: unknown[]; siblings: [string, Primitive][] } | undefined {
+	if (typeof output !== "object" || output === null || Array.isArray(output)) return undefined;
+	const entries = Object.entries(output as Record<string, unknown>);
+	const arrayEntries = entries.filter((entry): entry is [string, unknown[]] => Array.isArray(entry[1]));
+	if (arrayEntries.length !== 1) return undefined;
+	const [arrayKey, items] = arrayEntries[0] as [string, unknown[]];
+	if (items.length === 0) return undefined;
+	const siblings = entries.filter(([key]) => key !== arrayKey);
+	if (!siblings.every((entry): entry is [string, Primitive] => isPrimitive(entry[1]))) return undefined;
+	return { items, siblings };
+}
+
+function formatSiblingLine(siblings: readonly [string, Primitive][]): string {
+	return siblings.map(([key, value]) => `${key}: ${value === null || value === undefined ? "none" : String(value)}`).join(" · ");
+}
+
+/** Appends one more (already width-safe on its own render pass) line after an inner component's own output -- used to attach an envelope's sibling-field annotation without disturbing the inner component's own rendering. */
+function withTrailingLine(inner: Component, line: string): Component {
+	return {
+		render: (width: number) => [...inner.render(width), truncateToWidth(line, width)],
+		invalidate: () => inner.invalidate(),
+	};
+}
+
+/** Renders an array the same way regardless of whether it arrived as the
+ * top-level output or was unwrapped from a single-array envelope --
+ * undefined when the array shape itself isn't one this renderer curates
+ * (e.g. an array of numbers), signaling the caller to fall back to raw JSON. */
+function renderArrayOutput(items: readonly unknown[], options: ToolRenderResultOptions, theme: Theme): Component | undefined {
+	if (items.length === 0) return new Text({ text: theme.fg("dim", "No results."), measure });
+	const table = deriveTableColumns(items);
+	if (table) {
+		return renderBoundedTable({
+			...table,
+			expanded: options.expanded,
+			visibleRowCount: DEFAULT_VISIBLE_ROWS,
+			moreLine: (hiddenCount) => moreRowsLine(theme, hiddenCount),
+			headerStyle: (s) => theme.fg("muted", theme.bold(s)),
+			measure,
+		});
+	}
+	// deriveTableColumns only handles arrays of objects, returning undefined
+	// for an array of plain strings (e.g. discuss.list's formatted summary
+	// lines) -- without this, that shape fell through to a raw JSON.stringify
+	// dump (quotes, brackets, commas, no color). Reuses the same bounded-list
+	// primitive and "... N more" wording the table path already uses.
+	if (items.every((item): item is string => typeof item === "string")) {
+		const lines = renderTruncatedList({
+			items,
+			expanded: options.expanded,
+			visibleCount: DEFAULT_VISIBLE_ROWS,
+			formatItem: (item) => theme.fg("text", item),
+			moreLine: (hiddenCount) => moreRowsLine(theme, hiddenCount),
+		});
+		return new Text({ text: lines.join("\n"), measure });
+	}
+	return undefined;
+}
+
 export function renderVehicleResult(
 	_descriptor: VehicleOperationDescriptor,
 	result: AgentToolResult<unknown>,
@@ -119,34 +191,17 @@ export function renderVehicleResult(
 	}
 
 	const output = details?.output;
-	if (Array.isArray(output) && output.length === 0) {
-		return new Text({ text: theme.fg("dim", "No results."), measure });
-	}
-	const table = Array.isArray(output) ? deriveTableColumns(output) : undefined;
-	if (table) {
-		return renderBoundedTable({
-			...table,
-			expanded: options.expanded,
-			visibleRowCount: DEFAULT_VISIBLE_ROWS,
-			moreLine: (hiddenCount) => moreRowsLine(theme, hiddenCount),
-			headerStyle: (s) => theme.fg("muted", theme.bold(s)),
-			measure,
-		});
-	}
-	// deriveTableColumns only handles arrays of objects, returning undefined
-	// for an array of plain strings (e.g. discuss.list's formatted summary
-	// lines) -- without this, that shape fell through to a raw JSON.stringify
-	// dump (quotes, brackets, commas, no color). Reuses the same bounded-list
-	// primitive and "... N more" wording the table path already uses.
-	if (Array.isArray(output) && output.every((item): item is string => typeof item === "string")) {
-		const lines = renderTruncatedList({
-			items: output,
-			expanded: options.expanded,
-			visibleCount: DEFAULT_VISIBLE_ROWS,
-			formatItem: (item) => theme.fg("text", item),
-			moreLine: (hiddenCount) => moreRowsLine(theme, hiddenCount),
-		});
-		return new Text({ text: lines.join("\n"), measure });
+	if (Array.isArray(output)) {
+		const rendered = renderArrayOutput(output, options, theme);
+		if (rendered) return rendered;
+	} else {
+		const envelope = singleArrayEnvelope(output);
+		if (envelope) {
+			const rendered = renderArrayOutput(envelope.items, options, theme);
+			if (rendered) {
+				return envelope.siblings.length > 0 ? withTrailingLine(rendered, theme.fg("dim", formatSiblingLine(envelope.siblings))) : rendered;
+			}
+		}
 	}
 
 	const text = JSON.stringify(output, null, 2) ?? "null";

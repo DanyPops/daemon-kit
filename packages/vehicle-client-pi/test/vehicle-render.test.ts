@@ -217,7 +217,12 @@ describe("renderVehicleResult", () => {
 	});
 
 	it("expands the collapsible JSON view when options.expanded is true", () => {
-		const longOutput = { lines: Array.from({ length: 20 }, (_, i) => `line-${i}`) };
+		// Two array fields deliberately -- singleArrayEnvelope only unwraps
+		// exactly one, so this genuinely stays on the raw-JSON fallback path.
+		const longOutput = {
+			lines: Array.from({ length: 20 }, (_, i) => `line-${i}`),
+			other: Array.from({ length: 5 }, (_, i) => i),
+		};
 		const collapsed = renderVehicleResult(
 			descriptor("read"),
 			{ content: [], details: { output: longOutput } },
@@ -233,6 +238,92 @@ describe("renderVehicleResult", () => {
 			resultContext(),
 		);
 		expect(expanded.render(80).length).toBeGreaterThan(collapsed.render(80).length);
+	});
+
+	it("unwraps a single-array pagination envelope ({events, nextCursor}) and renders the inner array as a table", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{
+				content: [],
+				details: {
+					output: {
+						events: [
+							{ id: "1", type: "focus_set" },
+							{ id: "2", type: "status_changed" },
+						],
+						nextCursor: 42,
+					},
+				},
+			},
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).toContain("focus_set");
+		expect(text).toContain("status_changed");
+		expect(text).toContain("nextCursor: 42");
+	});
+
+	it("unwraps a single-array envelope of plain strings too, annotating the sibling scalar", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: { items: ["first", "second"], total: 2 } } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).toContain("first");
+		expect(text).toContain("second");
+		expect(text).toContain("total: 2");
+	});
+
+	it("leaves an object with two array fields on the raw-JSON fallback -- too ambiguous to guess which array is the real payload", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: { a: ["x"], b: ["y"] } } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		expect(component.render(80).join("\n")).toContain('"a"');
+	});
+
+	it("leaves an object with a non-primitive sibling on the raw-JSON fallback", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: { events: ["x"], meta: { nested: true } } } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		expect(component.render(80).join("\n")).toContain('"meta"');
+	});
+
+	it("an envelope with an empty inner array falls through to raw JSON rather than a misleading 'No results.'", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: { events: [], nextCursor: 1 } } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		expect(component.render(80).join("\n")).toContain("events");
+	});
+
+	it("an envelope's unwrapped array still expands to show every row, with the sibling annotation preserved", () => {
+		const rows = Array.from({ length: 30 }, (_, i) => ({ id: `row-${i}` }));
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: { events: rows, nextCursor: 7 } } },
+			{ isPartial: false, expanded: true },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).toContain("row-29");
+		expect(text).toContain("nextCursor: 7");
 	});
 
 	it("renders error content plainly when the context reports an error, ignoring output shape", () => {
