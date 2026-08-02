@@ -18,7 +18,7 @@ export interface HandleReadinessDependencies {
 	readonly sleep?: (milliseconds: number) => Promise<void>;
 }
 
-async function readHandle(path: string): Promise<unknown> {
+export async function readVehicleHandleFile(path: string): Promise<unknown> {
 	try {
 		const stat = await lstat(path);
 		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_HANDLE_BYTES) return undefined;
@@ -57,7 +57,7 @@ function sleep(milliseconds: number): Promise<void> {
 }
 
 export function createHandleReadinessProbe(dependencies: HandleReadinessDependencies = {}): ReadinessProbe {
-	const load = dependencies.readHandle ?? readHandle;
+	const load = dependencies.readHandle ?? readVehicleHandleFile;
 	const alive = dependencies.isPidAlive ?? isPidAlive;
 	const clock = dependencies.now ?? Date.now;
 	const wait = dependencies.sleep ?? sleep;

@@ -1,14 +1,17 @@
 #!/usr/bin/env node
+import { existsSync } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { diagnostic, type Diagnostic } from "./fleet/diagnostic.js";
+import { inspectHostProcesses, readVehicleHandles } from "./fleet/host-inspection.js";
 import { decodeArmadaManifest, MAX_MANIFEST_BYTES, type ManifestDecodeOutcome } from "./fleet/manifest.js";
 import { planFleet } from "./fleet/planner.js";
-import { createHandleReadinessProbe } from "./fleet/readiness.js";
+import { createHandleReadinessProbe, readVehicleHandleFile } from "./fleet/readiness.js";
 import { reconcileFleet } from "./fleet/reconciler.js";
-import { createNativeController, defaultDescriptorRoot, strategyForNativeManager } from "./native/controller.js";
+import { buildFleetStatus, type ObservedProcess } from "./fleet/status.js";
+import { createNativeController, defaultDescriptorRoot, processCommandRunner, strategyForNativeManager } from "./native/controller.js";
 import type { NativeManagerKind, NativeServiceController, NativeServiceManager, ReadinessProbe } from "./native/service-manager.js";
 
 export interface CliIo {
@@ -20,6 +23,9 @@ export interface CliDependencies {
 	readonly manager: NativeServiceManager;
 	readonly controller?: NativeServiceController;
 	readonly readiness?: ReadinessProbe;
+	readonly inspectProcesses?: () => Promise<readonly ObservedProcess[]>;
+	readonly readHandle?: (path: string) => Promise<unknown>;
+	readonly executableExists?: (path: string) => boolean;
 	readonly io: CliIo;
 	readonly platform?: NodeJS.Platform;
 	readonly env?: NodeJS.ProcessEnv;
@@ -92,9 +98,9 @@ function writeDiagnostics(diagnostics: readonly Diagnostic[], json: boolean, io:
 
 export async function runCli(args: readonly string[], dependencies: CliDependencies): Promise<number> {
 	const [command, ...rest] = args;
-	if (command !== "plan" && command !== "reconcile") {
+	if (command !== "plan" && command !== "reconcile" && command !== "status" && command !== "doctor") {
 		writeDiagnostics(
-			[diagnostic("CLI_COMMAND_UNKNOWN", "error", command ?? "", "usage: armada <plan|reconcile> [--manifest <path>] [--json]")],
+			[diagnostic("CLI_COMMAND_UNKNOWN", "error", command ?? "", "usage: armada <plan|reconcile|status|doctor> [--manifest <path>] [--json]")],
 			false,
 			dependencies.io,
 		);
@@ -119,6 +125,29 @@ export async function runCli(args: readonly string[], dependencies: CliDependenc
 	if (!planned.ok) {
 		writeDiagnostics(planned.diagnostics, parsed.arguments.json, dependencies.io);
 		return 1;
+	}
+	if (command === "status" || command === "doctor") {
+		const processes = await (dependencies.inspectProcesses ?? (() => inspectHostProcesses(dependencies.platform ?? process.platform, processCommandRunner)))();
+		const handles = await readVehicleHandles(decoded.manifest.vehicles, dependencies.readHandle ?? readVehicleHandleFile);
+		const report = buildFleetStatus({
+			manifest: decoded.manifest,
+			nativeServices: inspected.services,
+			processes,
+			handles,
+			strategy: strategyForNativeManager(dependencies.manager.kind),
+			executableExists: dependencies.executableExists ?? existsSync,
+		});
+		const hasErrors = report.diagnostics.some((item) => item.severity === "error");
+		if (parsed.arguments.json) {
+			dependencies.io.stdout(`${JSON.stringify({ ok: command === "status" || !hasErrors, manager: dependencies.manager.kind, ...report })}\n`);
+		} else if (command === "status") {
+			for (const vehicle of report.vehicles) dependencies.io.stdout(`${vehicle.name}: ${vehicle.nativeStatus}${vehicle.ready ? " ready" : " not-ready"}\n`);
+			writeDiagnostics(report.diagnostics, false, dependencies.io);
+		} else {
+			writeDiagnostics(report.diagnostics, false, dependencies.io);
+			if (report.diagnostics.length === 0) dependencies.io.stdout("doctor: healthy\n");
+		}
+		return command === "doctor" && hasErrors ? 1 : 0;
 	}
 	if (command === "plan") {
 		if (parsed.arguments.json) {
