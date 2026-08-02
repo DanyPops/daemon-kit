@@ -123,6 +123,20 @@ describe("armada plan", () => {
 		expect(JSON.parse(await readFile(manifestPath, "utf8")).vehicles).toHaveLength(1);
 	});
 
+	it("upserts a Vehicle declaration from bounded stdin", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
+		const manifestPath = join(directory, "armada.json");
+		const captured = output();
+		const vehicleJson = JSON.stringify(JSON.parse(manifestJson()).vehicles[0]);
+		const code = await runCli(["upsert", "--vehicle-file", "-", "--manifest", manifestPath, "--json"], {
+			manager,
+			io: captured.io,
+			readInput: () => Promise.resolve(vehicleJson),
+		});
+		expect(code).toBe(0);
+		expect(JSON.parse(await readFile(manifestPath, "utf8")).vehicles).toHaveLength(1);
+	});
+
 	it("returns stable machine-readable diagnostics for invalid input", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
 		const path = join(directory, "armada.json");

@@ -28,6 +28,7 @@ export interface CliDependencies {
 	readonly inspectProcesses?: () => Promise<readonly ObservedProcess[]>;
 	readonly readHandle?: (path: string) => Promise<unknown>;
 	readonly executableExists?: (path: string) => boolean;
+	readonly readInput?: () => Promise<string>;
 	readonly io: CliIo;
 	readonly platform?: NodeJS.Platform;
 	readonly env?: NodeJS.ProcessEnv;
@@ -161,9 +162,15 @@ export async function runCli(args: readonly string[], dependencies: CliDependenc
 		}
 		let vehicleJson: string;
 		try {
-			const stat = await lstat(parsed.arguments.vehicleFile);
-			if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_MANIFEST_BYTES) throw new Error("Vehicle file must be a bounded regular file");
-			vehicleJson = await readFile(parsed.arguments.vehicleFile, "utf8");
+			if (parsed.arguments.vehicleFile === "-") {
+				if (!dependencies.readInput) throw new Error("standard input is unavailable");
+				vehicleJson = await dependencies.readInput();
+				if (Buffer.byteLength(vehicleJson) > MAX_MANIFEST_BYTES) throw new Error("Vehicle input exceeds 1 MiB");
+			} else {
+				const stat = await lstat(parsed.arguments.vehicleFile);
+				if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_MANIFEST_BYTES) throw new Error("Vehicle file must be a bounded regular file");
+				vehicleJson = await readFile(parsed.arguments.vehicleFile, "utf8");
+			}
 		} catch (error) {
 			writeDiagnostics([diagnostic("VEHICLE_FILE_READ_FAILED", "error", parsed.arguments.vehicleFile, error instanceof Error ? error.message : String(error))], parsed.arguments.json, dependencies.io);
 			return 1;
@@ -325,6 +332,18 @@ function managerKind(platform: NodeJS.Platform): NativeManagerKind {
 	return "systemd";
 }
 
+async function readStandardInput(): Promise<string> {
+	const chunks: Buffer[] = [];
+	let bytes = 0;
+	for await (const chunk of process.stdin) {
+		const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+		bytes += buffer.length;
+		if (bytes > MAX_MANIFEST_BYTES) throw new Error("Vehicle input exceeds 1 MiB");
+		chunks.push(buffer);
+	}
+	return Buffer.concat(chunks, bytes).toString("utf8");
+}
+
 const isEntrypoint = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isEntrypoint) {
 	const kind = managerKind(process.platform);
@@ -332,6 +351,7 @@ if (isEntrypoint) {
 	process.exitCode = await runCli(process.argv.slice(2), {
 		manager: controller,
 		controller,
+		readInput: readStandardInput,
 		io: {
 			stdout: (text) => process.stdout.write(text),
 			stderr: (text) => process.stderr.write(text),
