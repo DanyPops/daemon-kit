@@ -27,6 +27,31 @@ export interface Logger {
 
 const LEVELS: ReadonlySet<string> = new Set(["debug", "info", "warn", "error"]);
 
+/**
+ * Common credential-shaped field names, redacted regardless of what any
+ * call site logs -- pino applies this at serialization time via fast-redact,
+ * so a field slipping into a logged object (an error's own properties, a
+ * spread request body) is still caught, not just a documented convention
+ * call sites have to remember. Each name appears at the root (a field
+ * logged directly) and one level deep via a `*.` wildcard (fast-redact's
+ * wildcard matches exactly one path segment, e.g. `*.token` catches
+ * `user.token` but not `a.b.token` -- a consumer with real secrets nested
+ * deeper than one level needs its own explicit path, see
+ * `additionalRedactPaths` below).
+ */
+const DEFAULT_REDACT_FIELD_NAMES: readonly string[] = [
+	"password",
+	"token",
+	"accessToken",
+	"refreshToken",
+	"apiKey",
+	"secret",
+	"authorization",
+	"credential",
+];
+
+const DEFAULT_REDACT_PATHS: readonly string[] = DEFAULT_REDACT_FIELD_NAMES.flatMap((name) => [name, `*.${name}`]);
+
 export interface CreateLoggerOptions {
 	/** Env var read for the minimum level, e.g. "PI_PACKED_LOG_LEVEL". Defaults to "info" when unset or unrecognized. */
 	levelEnvVar?: string;
@@ -35,6 +60,13 @@ export interface CreateLoggerOptions {
 	/** Injectable sink for tests; defaults to stderr (stdout is reserved for CLI output). */
 	destination?: NodeJS.WritableStream | pino.DestinationStream;
 	env?: Record<string, string | undefined>;
+	/**
+	 * Extra pino redact paths (fast-redact syntax) appended to the shared
+	 * default list -- for a domain-specific secret-shaped field (e.g.
+	 * Lector's own credential-name-matched fields) without a consumer having
+	 * to redeclare the whole default list to add one path of its own.
+	 */
+	additionalRedactPaths?: readonly string[];
 }
 
 function resolveLevel(options: CreateLoggerOptions): LogLevel {
@@ -54,6 +86,7 @@ export function createLogger(component: string, options: CreateLoggerOptions = {
 			base: undefined, // omit pid/hostname -- daemons already log pid via the handle file
 			formatters: { level: (label) => ({ level: label }) },
 			timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
+			redact: { paths: [...DEFAULT_REDACT_PATHS, ...(options.additionalRedactPaths ?? [])], censor: "[REDACTED]" },
 		},
 		destination,
 	).child({ component });

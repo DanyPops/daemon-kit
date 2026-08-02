@@ -61,4 +61,69 @@ describe("createLogger", () => {
 		expect(() => logger.info("no fields")).not.toThrow();
 		expect(JSON.parse(lines[0]!).msg).toBe("no fields");
 	});
+
+	describe("redact", () => {
+		it("censors a credential-shaped field logged at the root, in the actual serialized output", () => {
+			const { lines, destination } = capture();
+			const logger = createLogger("m", { level: "debug", destination });
+			logger.info("login", { token: "super-secret-value", userId: 42 });
+			const parsed = JSON.parse(lines[0]!);
+			expect(parsed.token).toBe("[REDACTED]");
+			expect(parsed.userId).toBe(42);
+		});
+
+		it("censors every default credential-shaped field name, at the root", () => {
+			const { lines, destination } = capture();
+			const logger = createLogger("m", { level: "debug", destination });
+			const fields = {
+				password: "x",
+				token: "x",
+				accessToken: "x",
+				refreshToken: "x",
+				apiKey: "x",
+				secret: "x",
+				authorization: "x",
+				credential: "x",
+			};
+			logger.info("m", fields);
+			const parsed = JSON.parse(lines[0]!);
+			for (const key of Object.keys(fields)) expect(parsed[key], `${key} was not redacted`).toBe("[REDACTED]");
+		});
+
+		it("censors a credential-shaped field nested one level deep, via the default *.<field> wildcard paths", () => {
+			const { lines, destination } = capture();
+			const logger = createLogger("m", { level: "debug", destination });
+			logger.info("m", { user: { token: "super-secret-value", id: 1 } });
+			const parsed = JSON.parse(lines[0]!);
+			expect(parsed.user.token).toBe("[REDACTED]");
+			expect(parsed.user.id).toBe(1);
+		});
+
+		it("never touches a field whose name doesn't match any redact path", () => {
+			const { lines, destination } = capture();
+			const logger = createLogger("m", { level: "debug", destination });
+			logger.info("m", { username: "alice", tokenCount: 3 });
+			const parsed = JSON.parse(lines[0]!);
+			expect(parsed.username).toBe("alice");
+			expect(parsed.tokenCount).toBe(3);
+		});
+
+		it("additionalRedactPaths appends to, rather than replaces, the shared default list", () => {
+			const { lines, destination } = capture();
+			const logger = createLogger("m", { level: "debug", destination, additionalRedactPaths: ["packageCredential"] });
+			logger.info("m", { packageCredential: "x", token: "y" });
+			const parsed = JSON.parse(lines[0]!);
+			expect(parsed.packageCredential).toBe("[REDACTED]");
+			expect(parsed.token, "the default list must still apply alongside a consumer's own extra paths").toBe("[REDACTED]");
+		});
+
+		it("a consumer that passes no additionalRedactPaths sees exactly the default list's behavior -- no behavior change", () => {
+			const { lines, destination } = capture();
+			const logger = createLogger("m", { level: "debug", destination });
+			logger.info("m", { token: "x", somethingElse: "y" });
+			const parsed = JSON.parse(lines[0]!);
+			expect(parsed.token).toBe("[REDACTED]");
+			expect(parsed.somethingElse).toBe("y");
+		});
+	});
 });
