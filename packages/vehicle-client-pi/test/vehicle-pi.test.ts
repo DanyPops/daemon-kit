@@ -357,6 +357,86 @@ describe("registerVehicleTools", () => {
 		expect(called).toBe(false);
 	});
 
+	describe("interactiveFollowUps", () => {
+		it("a follow-up returning a result overrides both content and details.output", async () => {
+			const client = new FakeClient(manifest([operation("discuss.open")]));
+			client.result = { discussion: { id: "d-1" }, rounds: [{ content: "question?" }] };
+			const { pi, tools } = fakePi();
+			await registerVehicleTools(pi, client, {
+				interactiveFollowUps: (descriptor) =>
+					descriptor.name === "discuss.open"
+						? async (_request, output) => ({
+								content: [{ type: "text", text: `answered: ${(output as { rounds: { content: string }[] }).rounds[0]?.content}` }],
+								output: { answered: true },
+							})
+						: undefined,
+			});
+			const result = await execute(tools[0]!, { value: "go" });
+			expect(result.content[0]).toMatchObject({ text: "answered: question?" });
+			expect((result.details as PiVehicleToolDetails).output).toEqual({ answered: true });
+			expect((result.details as PiVehicleToolDetails).vehicle.operation).toBe("discuss.open");
+		});
+
+		it("a follow-up returning undefined falls back to the default content/details, unchanged", async () => {
+			const client = new FakeClient(manifest([operation("discuss.list")]));
+			client.result = { discussions: [] };
+			const { pi, tools } = fakePi();
+			await registerVehicleTools(pi, client, { interactiveFollowUps: () => async () => undefined });
+			const result = await execute(tools[0]!, { value: "go" });
+			expect(result.content[0]).toMatchObject({ text: expect.stringContaining("discussions") });
+			expect((result.details as PiVehicleToolDetails).output).toEqual({ discussions: [] });
+		});
+
+		it("the resolver only applies its follow-up to the operation it targets -- every other operation is unaffected", async () => {
+			const client = new FakeClient(manifest([operation("issues.search")]));
+			client.result = { hits: 3 };
+			const { pi, tools } = fakePi();
+			await registerVehicleTools(pi, client, {
+				interactiveFollowUps: (descriptor) => (descriptor.name === "discuss.open" ? async () => ({ content: [] }) : undefined),
+			});
+			const result = await execute(tools[0]!, { value: "go" });
+			expect((result.details as PiVehicleToolDetails).output).toEqual({ hits: 3 });
+		});
+
+		it("omitting interactiveFollowUps entirely behaves exactly as before this option existed", async () => {
+			const client = new FakeClient(manifest([operation("focus.test")]));
+			client.result = { taskId: "task-1" };
+			const { pi, tools } = fakePi();
+			await registerVehicleTools(pi, client, {});
+			const result = await execute(tools[0]!, { value: "go" });
+			expect(result.content[0]).toMatchObject({ text: expect.stringContaining("task-1") });
+		});
+
+		it("a follow-up's own thrown error propagates as a real tool failure, even though the primary invoke() already succeeded", async () => {
+			const client = new FakeClient(manifest([operation("discuss.open")]));
+			client.result = { discussion: { id: "d-1" } };
+			const { pi, tools } = fakePi();
+			await registerVehicleTools(pi, client, {
+				interactiveFollowUps: () => async () => {
+					throw new Error("the follow-up's own round trip failed");
+				},
+			});
+			await expect(execute(tools[0]!, { value: "go" })).rejects.toThrow("the follow-up's own round trip failed");
+			// The primary invoke() itself is not retried or rolled back -- exactly one call was made.
+			expect(client.calls).toHaveLength(1);
+		});
+
+		it("the follow-up receives the real VehicleClient, usable to make its own additional invoke() calls", async () => {
+			const client = new FakeClient(manifest([operation("discuss.open")]));
+			client.result = { discussion: { id: "d-1" } };
+			const { pi, tools } = fakePi();
+			await registerVehicleTools(pi, client, {
+				interactiveFollowUps: () => async (_request, _output, followUpClient) => {
+					const replied = await followUpClient.invoke("discuss.reply", 1, { id: "d-1", content: "answer" });
+					return { content: [{ type: "text", text: "done" }], output: replied };
+				},
+			});
+			const result = await execute(tools[0]!, { value: "go" });
+			expect(result.content[0]).toMatchObject({ text: "done" });
+			expect(client.calls.map((call) => call.name)).toEqual(["discuss.open", "discuss.reply"]);
+		});
+	});
+
 	describe("activity broker wiring", () => {
 		afterEach(() => {
 			unregisterActivityBroker();

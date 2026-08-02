@@ -392,6 +392,35 @@ panel and runs two short picks (which operation, then which new state) that
 write through to the policy store -- effective the moment the affected
 Vehicle's own next `refreshVehicleToolAvailability()` call re-reads it.
 
+### Interactive follow-ups
+
+A `registerVehicleTools()` option for the rare operation whose real UX needs
+more than "call it, show the output" -- e.g. an operation that durably
+records something and separately wants to offer a synchronous human
+round-trip when `ctx.hasUI` allows one. Distinct from the Approval Gate's own
+local-confirm fast path (baked into every gated operation identically):
+this is a per-operation, per-consumer escape hatch for a shape nothing else
+shares.
+
+```ts
+await registerVehicleTools(pi, client, {
+  interactiveFollowUps: (descriptor) =>
+    descriptor.name === "discuss.open" || descriptor.name === "discuss.reply"
+      ? async (_request, output, followUpClient) => {
+          const question = (output as { rounds: { content: string }[] }).rounds[0]?.content;
+          // ...show a local prompt, then optionally call followUpClient.invoke("discuss.reply", ...)
+          return { content: [{ type: "text", text: "..." }], output: { answered: true } };
+        }
+      : undefined,
+});
+```
+
+Returning `undefined` (the default for every operation the resolver doesn't
+name) falls back to the operation's own default content/details -- zero
+behavior change for every consumer that never sets this option. A thrown
+error propagates as a real tool failure; the primary `invoke()` already
+succeeded and is never rolled back.
+
 ## One operation per real action, never an action-dispatch tool
 
 A recurring anti-pattern in agent tool design -- documented independently as

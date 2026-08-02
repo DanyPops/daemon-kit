@@ -1,5 +1,6 @@
 import type {
 	VehicleClient,
+	VehicleContentBlock,
 	VehicleEffect,
 	VehicleFailure,
 	VehicleInvocationOptions,
@@ -49,6 +50,35 @@ export interface VehicleToolRenderers {
 	readonly renderResult?: ToolDefinition<TSchema, PiVehicleToolDetails>["renderResult"];
 }
 
+export interface PiVehicleFollowUpResult {
+	readonly content: readonly VehicleContentBlock[];
+	/** Replaces the human-facing details.output the primary invoke() would otherwise carry; details.vehicle is always the real identity regardless. */
+	readonly output?: unknown;
+}
+
+/**
+ * An optional client-local interactive step run after a successful invoke(),
+ * before the tool result is returned to the model -- for an operation whose
+ * own real UX needs more than "call it, show the output" (e.g. an operation
+ * that durably records something and separately wants to offer a synchronous
+ * human round-trip when ctx.hasUI allows one). Returning undefined falls back
+ * to the default content/details built from the primary output; a thrown
+ * error propagates as a real tool failure -- the primary invoke() already
+ * succeeded and is not rolled back, matching this same contract on any other
+ * mutating operation whose follow-up step fails.
+ *
+ * Deliberately distinct from the Approval Gate's own local-confirm fast path
+ * (baked directly into execute() itself, since every gated operation needs
+ * the identical approval-required/resolve dance): this hook is for a
+ * per-operation, per-consumer interactive shape nothing else shares, the way
+ * Papyrus's discuss.open/discuss.reply use it to offer a live human answer.
+ */
+export type PiVehicleInteractiveFollowUp = (
+	request: PiVehicleInvocationRequest,
+	output: unknown,
+	client: VehicleClient,
+) => Promise<PiVehicleFollowUpResult | undefined>;
+
 export interface RegisterVehicleToolsOptions {
 	readonly permissions?: readonly string[];
 	readonly principal?: VehiclePrincipal;
@@ -82,6 +112,15 @@ export interface RegisterVehicleToolsOptions {
 	 * to narrate what it computed.
 	 */
 	readonly renderers?: (descriptor: VehicleOperationDescriptor) => VehicleToolRenderers | undefined;
+	/**
+	 * Per-operation escape hatch for a client-local interactive step after a
+	 * successful invoke() -- see PiVehicleInteractiveFollowUp. Returning
+	 * undefined (or omitting this option, or the resolver itself returning
+	 * undefined for a given descriptor) means every operation behaves exactly
+	 * as before this option existed: default content/details from the
+	 * primary output, no extra round trip.
+	 */
+	readonly interactiveFollowUps?: (descriptor: VehicleOperationDescriptor) => PiVehicleInteractiveFollowUp | undefined;
 	/**
 	 * Mirrors the server's own VehicleRegistry.configureApprovals()
 	 * requireApprovalForEffects set (see vehicle-server) so /safety's "ask"
@@ -450,6 +489,12 @@ function createTool(
 					// Best-effort: the invoke() itself already succeeded, so a broadcast failure
 					// must never surface as a failed tool call.
 				}
+			}
+			const followUp = options.interactiveFollowUps?.(descriptor);
+			if (followUp) {
+				const request: PiVehicleInvocationRequest = { descriptor, manifest, toolName, toolCallId, input, context };
+				const result = await followUp(request, output, client);
+				if (result) return { content: [...result.content], details: { vehicle: identity, output: result.output ?? output } };
 			}
 			const content = extractVehicleContent(output) ?? [{ type: "text" as const, text: formatJson(output) }];
 			return {
