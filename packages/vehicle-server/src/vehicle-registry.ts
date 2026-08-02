@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type {
+	VehicleApprovalAuthority,
+	VehicleApprovalRequest,
 	VehicleBackgroundCapability,
+	VehicleEffect,
 	VehicleEvent,
 	VehicleEventDescriptor,
 	VehicleInvocationOptions,
@@ -13,7 +16,19 @@ import type {
 	VehicleSchemaCodec,
 	VehicleSchemaResult,
 } from "@danypops/vehicle-core";
-import { boundedValidationDetails, vehicleEventTopic, VehicleError } from "@danypops/vehicle-core";
+import {
+	bindVehicleOperation,
+	boundedValidationDetails,
+	DEFAULT_APPROVAL_EFFECTS,
+	DEFAULT_APPROVAL_TIMEOUT_MS,
+	defineVehicleOperation,
+	defineVehicleSchema,
+	VehicleError,
+	vehicleApprovalRequestedEvent,
+	vehicleApprovalResolvedEvent,
+	vehicleEventTopic,
+} from "@danypops/vehicle-core";
+import { HmacApprovalAuthority, hashApprovalInput } from "./vehicle-approval-authority.js";
 
 export interface VehicleExecutionRequest {
 	readonly operation: VehicleOperationDescriptor;
@@ -76,6 +91,9 @@ function eventKey(name: string, version: number): string {
 
 /** Bounds a single event's local listener set the same way PushChannel bounds its own connections/topics -- defense in depth against an unbounded subscribe() loop, not a limit any real single-bridge-plus-a-few-widgets usage should ever approach. */
 const MAX_LISTENERS_PER_EVENT = 64;
+
+/** Bounds how many gated invoke()s can be simultaneously awaiting a human/authority decision -- the same bounded-resource discipline as every other Vehicle capacity limit. */
+const MAX_PENDING_APPROVALS = 256;
 
 function parseWithSchema<T>(
 	schema: VehicleSchemaCodec<T>,
@@ -214,12 +232,41 @@ export interface VehicleBackgroundResolution {
 	run(context: VehicleOperationContext<unknown>): Promise<unknown>;
 }
 
+interface ApprovalPolicy {
+	readonly requireApprovalForEffects: ReadonlySet<VehicleEffect>;
+	readonly authority: VehicleApprovalAuthority;
+	readonly timeoutMs: number;
+}
+
+export interface VehicleApprovalPolicyOptions {
+	/** Defaults to DEFAULT_APPROVAL_EFFECTS ([destructive, open-world]) -- the same set vehicle-client-pi historically hardcoded client-side. */
+	readonly requireApprovalForEffects?: readonly VehicleEffect[];
+	/** Defaults to a fresh HmacApprovalAuthority with a random per-instance secret. */
+	readonly authority?: VehicleApprovalAuthority;
+	/** How long a request stays resolvable before it lapses and must be re-requested. Defaults to DEFAULT_APPROVAL_TIMEOUT_MS. */
+	readonly timeoutMs?: number;
+}
+
+interface ApprovalResolveInput {
+	readonly requestId: string;
+	readonly decision: "granted" | "denied";
+	readonly decidedBy?: string;
+}
+
+interface ApprovalResolveOutput {
+	readonly requestId: string;
+	readonly decision: "granted" | "denied";
+	readonly capability?: string;
+}
+
 export class VehicleRegistry {
 	private readonly registrations = new Map<string, Registration>();
 	private readonly availability = new Map<string, AvailabilityState>();
 	private readonly identity: VehicleManifestIdentity;
 	private readonly events = new Map<string, EventRegistration>();
 	private readonly wildcardListeners = new Set<(name: string, version: number, payload: unknown) => void>();
+	private approvalPolicy?: ApprovalPolicy;
+	private readonly pendingApprovals = new Map<string, VehicleApprovalRequest>();
 
 	constructor(
 		identity: VehicleManifestIdentity,
@@ -237,6 +284,182 @@ export class VehicleRegistry {
 	setExecutionPolicy(policy: VehicleExecutionPolicy): void {
 		if (this.executionPolicy) throw new Error("Vehicle execution policy is already configured");
 		this.executionPolicy = policy;
+	}
+
+	/**
+	 * Opt-in only -- never called automatically, so a Vehicle that never
+	 * configures approvals keeps today's exact manifest shape and invoke()
+	 * behavior (no gating at all). Registers the two built-in approval
+	 * events and the vehicle.approval.resolve operation at call time (not
+	 * construction), so they only ever appear in a manifest for a Vehicle
+	 * that actually uses them.
+	 */
+	configureApprovals(options: VehicleApprovalPolicyOptions = {}): void {
+		if (this.approvalPolicy) throw new Error("Vehicle approval policy is already configured");
+		this.approvalPolicy = {
+			requireApprovalForEffects: new Set(options.requireApprovalForEffects ?? DEFAULT_APPROVAL_EFFECTS),
+			authority: options.authority ?? new HmacApprovalAuthority(),
+			timeoutMs: options.timeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS,
+		};
+		this.registerEvent("vehicle-registry", vehicleApprovalRequestedEvent);
+		this.registerEvent("vehicle-registry", vehicleApprovalResolvedEvent);
+		this.registerApprovalResolveOperation();
+	}
+
+	private registerApprovalResolveOperation(): void {
+		const inputSchema = defineVehicleSchema<ApprovalResolveInput>({
+			jsonSchema: {
+				type: "object",
+				properties: {
+					requestId: { type: "string" },
+					decision: { type: "string", enum: ["granted", "denied"] },
+					decidedBy: { type: "string" },
+				},
+				required: ["requestId", "decision"],
+				additionalProperties: false,
+			},
+			safeParse(value) {
+				if (typeof value !== "object" || value === null) {
+					return { success: false, issues: [{ path: [], message: "input must be an object" }] };
+				}
+				const row = value as Record<string, unknown>;
+				if (typeof row.requestId !== "string" || !row.requestId.trim()) {
+					return { success: false, issues: [{ path: ["requestId"], message: "requestId must be a non-empty string" }] };
+				}
+				if (row.decision !== "granted" && row.decision !== "denied") {
+					return { success: false, issues: [{ path: ["decision"], message: "decision must be granted or denied" }] };
+				}
+				if (row.decidedBy !== undefined && typeof row.decidedBy !== "string") {
+					return { success: false, issues: [{ path: ["decidedBy"], message: "decidedBy must be a string" }] };
+				}
+				return {
+					success: true,
+					value: { requestId: row.requestId, decision: row.decision, ...(row.decidedBy !== undefined ? { decidedBy: row.decidedBy } : {}) },
+				};
+			},
+		});
+		const outputSchema = defineVehicleSchema<ApprovalResolveOutput>({
+			jsonSchema: {
+				type: "object",
+				properties: { requestId: { type: "string" }, decision: { type: "string" }, capability: { type: "string" } },
+				required: ["requestId", "decision"],
+				additionalProperties: false,
+			},
+			safeParse(value) {
+				const row = value as { requestId?: unknown; decision?: unknown; capability?: unknown };
+				if (typeof row?.requestId !== "string" || typeof row.decision !== "string") {
+					return { success: false, issues: [{ path: [], message: "invalid approval resolve output" }] };
+				}
+				return {
+					success: true,
+					value: {
+						requestId: row.requestId,
+						decision: row.decision as "granted" | "denied",
+						...(typeof row.capability === "string" ? { capability: row.capability } : {}),
+					},
+				};
+			},
+		});
+
+		const ResolveOperation = defineVehicleOperation({
+			name: "vehicle.approval.resolve",
+			version: 1,
+			description: "Grants or denies a pending Vehicle approval request, minting a real capability on grant.",
+			input: inputSchema,
+			output: outputSchema,
+			permissions: ["vehicle:approvals:resolve"],
+			effect: "local-write",
+			idempotency: { mode: "unsafe" },
+			limits: { defaultTimeoutMs: 5_000, maxTimeoutMs: 5_000, maxRequestBytes: 4_096, maxResponseBytes: 4_096 },
+		});
+
+		this.register(
+			"vehicle-registry",
+			bindVehicleOperation(ResolveOperation, () => async (context) => this.resolveApprovalRequest(context.input)),
+		);
+	}
+
+	private resolveApprovalRequest(input: ApprovalResolveInput): ApprovalResolveOutput {
+		this.prunePendingApprovals();
+		const request = this.pendingApprovals.get(input.requestId);
+		if (!request) {
+			throw new VehicleError("not-found", `No pending Vehicle approval request ${input.requestId}`, { category: "not_found" });
+		}
+		this.pendingApprovals.delete(input.requestId);
+
+		const capability = input.decision === "granted" ? this.approvalPolicy?.authority.mint(request) : undefined;
+		this.emit(vehicleApprovalResolvedEvent.descriptor.name, vehicleApprovalResolvedEvent.descriptor.version, {
+			requestId: input.requestId,
+			decision: input.decision,
+			decidedAt: Date.now(),
+			decidedBy: input.decidedBy,
+		});
+		return { requestId: input.requestId, decision: input.decision, ...(capability ? { capability } : {}) };
+	}
+
+	private prunePendingApprovals(): void {
+		const now = Date.now();
+		for (const [requestId, request] of this.pendingApprovals) {
+			if (request.expiresAt <= now) this.pendingApprovals.delete(requestId);
+		}
+	}
+
+	/**
+	 * No-op unless configureApprovals() has been called and this operation's
+	 * effect is in the gated set. A presented capability is verified for
+	 * real (operation+input+expiry+single-use) rather than merely checked
+	 * for non-emptiness; an absent one records a durable, retryable
+	 * approval.requested event before failing, so the caller always has a
+	 * path forward (see vehicle.approval.resolve) instead of a dead end.
+	 */
+	private enforceApprovalGate(
+		key: string,
+		name: string,
+		version: number,
+		effect: VehicleEffect,
+		principal: VehiclePrincipal | undefined,
+		input: unknown,
+		operationId: string,
+		presentedCapability: string | undefined,
+	): void {
+		const policy = this.approvalPolicy;
+		if (!policy?.requireApprovalForEffects.has(effect)) return;
+		const inputHash = hashApprovalInput(input);
+
+		if (presentedCapability) {
+			if (policy.authority.verify(presentedCapability, name, version, inputHash)) return;
+			throw new VehicleError("approval-capability-invalid", `${key} rejected the presented approval capability`, {
+				category: "authorization",
+				operationId,
+				retryable: false,
+			});
+		}
+
+		this.prunePendingApprovals();
+		if (this.pendingApprovals.size >= MAX_PENDING_APPROVALS) {
+			throw new VehicleError("capacity-exceeded", "Too many pending Vehicle approval requests", { category: "capacity", operationId });
+		}
+		const requestId = randomUUID();
+		const requestedAt = Date.now();
+		const expiresAt = requestedAt + policy.timeoutMs;
+		const request: VehicleApprovalRequest = {
+			requestId,
+			operationName: name,
+			operationVersion: version,
+			effect,
+			principal,
+			requestedAt,
+			expiresAt,
+			inputHash,
+		};
+		this.pendingApprovals.set(requestId, request);
+		this.emit(vehicleApprovalRequestedEvent.descriptor.name, vehicleApprovalRequestedEvent.descriptor.version, request);
+		throw new VehicleError("approval-required", `${key} requires approval before it can run`, {
+			category: "authorization",
+			operationId,
+			retryable: true,
+			details: { requestId, expiresAt },
+		});
 	}
 
 	register<Input, Output>(owner: string, binding: VehicleOperationBinding<Input, Output>): void {
@@ -406,6 +629,17 @@ export class VehicleRegistry {
 			});
 		}
 
+		this.enforceApprovalGate(
+			key,
+			name,
+			version,
+			registration.descriptor.effect,
+			options.principal,
+			input,
+			operationId,
+			options.approvalCapability,
+		);
+
 		if (registration.descriptor.idempotency.mode === "keyed" && !options.idempotencyKey?.trim()) {
 			throw new VehicleError("idempotency-key-required", `${key} requires an idempotency key`, {
 				category: "validation",
@@ -522,6 +756,16 @@ export class VehicleRegistry {
 				details: { missing },
 			});
 		}
+		this.enforceApprovalGate(
+			key,
+			name,
+			version,
+			registration.descriptor.effect,
+			options.principal,
+			input,
+			operationId,
+			options.approvalCapability,
+		);
 		if (registration.descriptor.idempotency.mode === "keyed" && !options.idempotencyKey?.trim()) {
 			throw new VehicleError("idempotency-key-required", `${key} requires an idempotency key`, {
 				category: "validation",

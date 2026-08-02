@@ -100,7 +100,8 @@ export class PiVehicleInvocationError extends Error {
 	}
 }
 
-const RISKY_EFFECTS = new Set<VehicleOperationDescriptor["effect"]>(["destructive", "open-world"]);
+/** How long a local ctx.ui.confirm() prompt stays open before auto-denying (confirm()'s own documented timeout behavior) -- deliberately shorter than the registry's own DEFAULT_APPROVAL_TIMEOUT_MS so a request never lapses server-side while still mid-prompt locally. */
+const LOCAL_APPROVAL_PROMPT_TIMEOUT_MS = 2 * 60_000;
 
 function defaultToolName(descriptor: VehicleOperationDescriptor, versioned: boolean): string {
 	const base = descriptor.name
@@ -149,6 +150,38 @@ function sanitizedFailure(error: unknown): VehicleFailure {
 		message: error instanceof Error ? error.message : "Vehicle client invocation failed",
 		retryable: false,
 	};
+}
+
+function approvalRequestId(failure: VehicleFailure): string | undefined {
+	const details = failure.details;
+	if (typeof details !== "object" || details === null || Array.isArray(details)) return undefined;
+	const requestId = (details as { requestId?: unknown }).requestId;
+	return typeof requestId === "string" ? requestId : undefined;
+}
+
+/**
+ * The local, fast-path half of the Approval Gate: VehicleRegistry always
+ * records an approval.requested event first (durable, works even with no
+ * UI at all); this is the optional synchronous prompt layered on top when
+ * ctx.hasUI says one is actually possible. Denies (never throws) on any
+ * failure -- a UI error must fail closed, not silently grant.
+ */
+async function requestLocalApproval(
+	context: ExtensionContext,
+	descriptor: VehicleOperationDescriptor,
+	input: unknown,
+	signal: AbortSignal | undefined,
+): Promise<boolean> {
+	if (!context.hasUI) return false;
+	try {
+		return await context.ui.confirm(
+			`Approve ${displayLabel(descriptor)}?`,
+			`${operationKey(descriptor)} (${descriptor.effect} effect) requests approval before it can run.\n\nInput:\n${formatJson(input)}`,
+			{ signal, timeout: LOCAL_APPROVAL_PROMPT_TIMEOUT_MS },
+		);
+	} catch {
+		return false;
+	}
 }
 
 function projectedNames(
@@ -217,14 +250,6 @@ function createTool(
 				input,
 				context,
 			});
-			if (RISKY_EFFECTS.has(descriptor.effect) && !resolved?.approvalCapability?.trim()) {
-				throw new PiVehicleInvocationError({
-					code: "approval-capability-required",
-					category: "authorization",
-					message: `${operationKey(descriptor)} requires an approval capability`,
-					retryable: false,
-				});
-			}
 
 			const reportProgress: VehicleInvocationOptions["onProgress"] = (progress) => {
 				onUpdate?.({
@@ -232,7 +257,7 @@ function createTool(
 					details: { vehicle: identity, progress },
 				});
 			};
-			const invocation: VehicleInvocationOptions = {
+			const baseInvocation: VehicleInvocationOptions = {
 				permissions: options.permissions,
 				principal: options.principal,
 				...resolved,
@@ -245,9 +270,41 @@ function createTool(
 
 			let output: unknown;
 			try {
-				output = await client.invoke(descriptor.name, descriptor.version, input, invocation);
+				output = await client.invoke(descriptor.name, descriptor.version, input, baseInvocation);
 			} catch (error) {
-				throw new PiVehicleInvocationError(sanitizedFailure(error));
+				const failure = sanitizedFailure(error);
+				// The registry (once configureApprovals() is enabled there) records a
+				// durable approval.requested event before ever failing this way -- a
+				// caller always has a path forward via vehicle.approval.resolve, this
+				// is just the optional local fast path attempting it automatically.
+				if (failure.code !== "approval-required") throw new PiVehicleInvocationError(failure);
+				const requestId = approvalRequestId(failure);
+				// No requestId to act on, or no UI capable of asking -- the request
+				// stays durably pending (an async/remote approver can still resolve it
+				// later) rather than this call eagerly denying it on the caller's behalf.
+				if (!requestId || !context.hasUI) throw new PiVehicleInvocationError(failure);
+
+				const approved = await requestLocalApproval(context, descriptor, input, signal);
+				let capability: string | undefined;
+				try {
+					const resolveOutput = (await client.invoke(
+						"vehicle.approval.resolve",
+						1,
+						{ requestId, decision: approved ? "granted" : "denied" },
+						{ permissions: options.permissions, principal: options.principal, signal },
+					)) as { capability?: string };
+					capability = resolveOutput.capability;
+				} catch {
+					// The resolve round trip itself failed (missing permission, expired
+					// request) -- fall through to the original approval-required failure,
+					// never mint or assume a capability that was never actually granted.
+				}
+				if (!capability) throw new PiVehicleInvocationError(failure);
+				try {
+					output = await client.invoke(descriptor.name, descriptor.version, input, { ...baseInvocation, approvalCapability: capability });
+				} catch (retryError) {
+					throw new PiVehicleInvocationError(sanitizedFailure(retryError));
+				}
 			}
 			if (options.onInvoked) {
 				try {

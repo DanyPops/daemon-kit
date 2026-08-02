@@ -11,5 +11,12 @@
 		"outDir": "dist",
 		"rootDir": "src"
 	},
-	"include": ["src/vehicle-registry.ts", "src/vehicle-http-provider.ts", "src/vehicle-job-store.ts", "src/vehicle-job-persistence.ts", "src/vehicle-watchers.ts"]
+	"include": [
+		"src/vehicle-registry.ts",
+		"src/vehicle-http-provider.ts",
+		"src/vehicle-job-store.ts",
+		"src/vehicle-job-persistence.ts",
+		"src/vehicle-watchers.ts",
+		"src/vehicle-approval-authority.ts"
+	]
 }

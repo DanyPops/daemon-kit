@@ -98,8 +98,9 @@ never pull the other in.
 `@danypops/vehicle-client-pi` projects a `VehicleClient` manifest into native
 Pi tools. It preserves exact operation versions, schemas, cancellation, Pi
 call/session identity, explicit permissions and principals, keyed idempotency,
-progress, and structured failures. Destructive and open-world operations
-require a real approval capability. A currently-unavailable operation (per the
+progress, and structured failures. A gated-effect operation (see "Approval
+Gate" below) requires a real, verified approval capability -- opt-in per
+deployment, never forced on a Vehicle that never configures it. A currently-unavailable operation (per the
 manifest's `available` flag) is still registered as a Pi tool -- Pi has no
 `unregisterTool()` -- but curated out of the LLM's active/callable set from the
 very first `registerVehicleTools()` call via its own `syncManagedActiveTools`
@@ -239,6 +240,50 @@ call (the model's own retry after seeing a tool error, or the next
 circuit-breaking identical to `call()`, but the operation itself is never
 retried after a failure, only the underlying connection is dropped for next
 time.
+
+### Approval Gate
+
+`VehicleRegistry.configureApprovals()` is opt-in -- a Vehicle that never calls
+it keeps today's exact `manifest()` shape and `invoke()` behavior (no gating
+at all, no `vehicle.approval.resolve` operation, no `vehicle.approval.*`
+events). Calling it turns on real, verified approval for a configurable set
+of effects:
+
+```ts
+import { HmacApprovalAuthority } from "@danypops/vehicle-server/approval-authority";
+
+registry.configureApprovals({
+  // Defaults to ["destructive", "open-world"]. A ticketing/PR-facing Vehicle
+  // can add "external-write" without forcing that requirement on every other
+  // Vehicle in the ecosystem.
+  requireApprovalForEffects: ["destructive", "open-world", "external-write"],
+  authority: new HmacApprovalAuthority(), // default if omitted
+  timeoutMs: 5 * 60_000, // default: how long a request stays resolvable
+});
+```
+
+A gated `invoke()` with no capability (or an invalid one) never just fails
+with a dead end: it durably records a `vehicle.approval.requested` Vehicle
+Event first (operation, effect, principal, a bounded expiry), *then* throws a
+retryable `approval-required` failure carrying the request's id. Any
+authority -- a human at the same Pi session, a remote approver polling the
+event stream, `@agentapprove/pi`-style phone approval -- resolves it via the
+registry's own built-in `vehicle.approval.resolve` operation (permission:
+`vehicle:approvals:resolve`), which mints a real HMAC-signed capability on
+`"granted"` and nothing on `"denied"`. That capability is scoped to the exact
+operation, version, and input it was requested for, expires with its
+request, and is single-use -- presenting an arbitrary non-empty string (or a
+capability minted for different input) is rejected outright, closing the gap
+where any truthy string used to satisfy the check.
+
+`registerVehicleTools()` wires the interactive half of this automatically:
+when a Pi tool call gets back `approval-required` and `ctx.hasUI` is true, it
+shows a `ctx.ui.confirm()` prompt (2-minute default timeout, denies on
+timeout/abort/any UI error -- fails closed, never silently grants) and
+retries the original call with whatever capability `vehicle.approval.resolve`
+returns. No UI, or no requestId in the failure -- the request stays durably
+pending for an async/remote resolution instead of this call eagerly denying
+it on the caller's behalf.
 
 ## One operation per real action, never an action-dispatch tool
 

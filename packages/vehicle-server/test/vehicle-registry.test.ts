@@ -1,6 +1,35 @@
 import { describe, expect, it } from "bun:test";
-import { bindVehicleOperation, defineVehicleEvent, defineVehicleOperation, defineVehicleSchema, type JsonValue, VehicleError } from "@danypops/vehicle-core";
+import {
+	bindVehicleOperation,
+	defineVehicleEvent,
+	defineVehicleOperation,
+	defineVehicleSchema,
+	type JsonValue,
+	VehicleError,
+} from "@danypops/vehicle-core";
 import { bridgeVehicleEventsToPushChannel, type VehicleExecutionPolicy, VehicleRegistry } from "../src/vehicle-registry.ts";
+
+function destructiveEchoRegistry(): VehicleRegistry {
+	const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
+	const operation = defineVehicleOperation({ ...ECHO_OPTIONS, name: "test.destructive-echo", effect: "destructive" });
+	registry.register(
+		"echo-provider",
+		bindVehicleOperation(operation, () => async ({ input }) => ({ echoed: input.value })),
+	);
+	return registry;
+}
+
+async function requestApprovalGate(registry: VehicleRegistry, input: { value: string } = { value: "go" }): Promise<string> {
+	const failure = await registry.invoke("test.destructive-echo", 1, input, { permissions: ["test:echo"] }).then(
+		() => {
+			throw new Error("expected the gated invoke() to reject");
+		},
+		(error) => error as { details?: { requestId?: string } },
+	);
+	const requestId = failure.details?.requestId;
+	if (!requestId) throw new Error("expected a requestId in the approval-required failure");
+	return requestId;
+}
 
 const objectSchema = <T extends Record<string, unknown>>(properties: Record<string, JsonValue>, parse: (value: unknown) => T | undefined) =>
 	defineVehicleSchema<T>({
@@ -373,5 +402,150 @@ describe("VehicleRegistry events", () => {
 		unsubscribe();
 		registry.emit("test.announced", 1, { echoed: "after unsubscribe" });
 		expect(published).toHaveLength(1);
+	});
+});
+
+describe("VehicleRegistry approval gate", () => {
+	it("never gates anything unless configureApprovals() is called -- destructive/open-world run freely by default", async () => {
+		const registry = destructiveEchoRegistry();
+		await expect(registry.invoke("test.destructive-echo", 1, { value: "go" }, { permissions: ["test:echo"] })).resolves.toEqual({
+			echoed: "go",
+		});
+		expect(registry.manifest().events).toEqual([]);
+	});
+
+	it("configureApprovals() twice throws", () => {
+		const registry = destructiveEchoRegistry();
+		registry.configureApprovals();
+		expect(() => registry.configureApprovals()).toThrow("already configured");
+	});
+
+	it("gates the default destructive/open-world effects, emits approval.requested durably, and rejects an unapproved retry", async () => {
+		const registry = destructiveEchoRegistry();
+		registry.configureApprovals();
+		const requested: unknown[] = [];
+		registry.subscribeLocal("vehicle.approval.requested", 1, (payload) => requested.push(payload));
+
+		await expect(registry.invoke("test.destructive-echo", 1, { value: "go" }, { permissions: ["test:echo"] })).rejects.toMatchObject({
+			code: "approval-required",
+			category: "authorization",
+			retryable: true,
+			details: { requestId: expect.any(String) },
+		});
+		expect(requested).toEqual([
+			expect.objectContaining({ operationName: "test.destructive-echo", operationVersion: 1, effect: "destructive" }),
+		]);
+	});
+
+	it("grants a real capability through vehicle.approval.resolve, and the retried invoke() succeeds", async () => {
+		const registry = destructiveEchoRegistry();
+		registry.configureApprovals();
+		const requestId = await requestApprovalGate(registry);
+
+		const resolved = (await registry.invoke(
+			"vehicle.approval.resolve",
+			1,
+			{ requestId, decision: "granted" },
+			{ permissions: ["vehicle:approvals:resolve"] },
+		)) as { capability?: string };
+		expect(typeof resolved.capability).toBe("string");
+
+		await expect(
+			registry.invoke("test.destructive-echo", 1, { value: "go" }, { permissions: ["test:echo"], approvalCapability: resolved.capability }),
+		).resolves.toEqual({ echoed: "go" });
+	});
+
+	it("a denied decision mints no capability, and the request cannot be resolved twice", async () => {
+		const registry = destructiveEchoRegistry();
+		registry.configureApprovals();
+		const requestId = await requestApprovalGate(registry);
+
+		const denied = (await registry.invoke(
+			"vehicle.approval.resolve",
+			1,
+			{ requestId, decision: "denied" },
+			{ permissions: ["vehicle:approvals:resolve"] },
+		)) as {
+			capability?: string;
+		};
+		expect(denied.capability).toBeUndefined();
+
+		await expect(
+			registry.invoke("vehicle.approval.resolve", 1, { requestId, decision: "granted" }, { permissions: ["vehicle:approvals:resolve"] }),
+		).rejects.toMatchObject({ code: "not-found" });
+	});
+
+	it("rejects an arbitrary non-empty string as a capability instead of rubber-stamping it", async () => {
+		const registry = destructiveEchoRegistry();
+		registry.configureApprovals();
+
+		await expect(
+			registry.invoke("test.destructive-echo", 1, { value: "go" }, { permissions: ["test:echo"], approvalCapability: "signed-capability" }),
+		).rejects.toMatchObject({ code: "approval-capability-invalid", category: "authorization", retryable: false });
+	});
+
+	it("rejects a capability minted for a different input than the one presented", async () => {
+		const registry = destructiveEchoRegistry();
+		registry.configureApprovals();
+		const requestId = await requestApprovalGate(registry, { value: "original" });
+		const { capability } = (await registry.invoke(
+			"vehicle.approval.resolve",
+			1,
+			{ requestId, decision: "granted" },
+			{ permissions: ["vehicle:approvals:resolve"] },
+		)) as { capability?: string };
+
+		await expect(
+			registry.invoke("test.destructive-echo", 1, { value: "tampered" }, { permissions: ["test:echo"], approvalCapability: capability }),
+		).rejects.toMatchObject({ code: "approval-capability-invalid" });
+	});
+
+	it("a granted capability is single-use -- a second invoke() with the same capability is rejected", async () => {
+		const registry = destructiveEchoRegistry();
+		registry.configureApprovals();
+		const requestId = await requestApprovalGate(registry);
+		const { capability } = (await registry.invoke(
+			"vehicle.approval.resolve",
+			1,
+			{ requestId, decision: "granted" },
+			{ permissions: ["vehicle:approvals:resolve"] },
+		)) as { capability?: string };
+
+		await expect(
+			registry.invoke("test.destructive-echo", 1, { value: "go" }, { permissions: ["test:echo"], approvalCapability: capability }),
+		).resolves.toEqual({ echoed: "go" });
+		await expect(
+			registry.invoke("test.destructive-echo", 1, { value: "go" }, { permissions: ["test:echo"], approvalCapability: capability }),
+		).rejects.toMatchObject({ code: "approval-capability-invalid" });
+	});
+
+	it("a request that outlives its timeout expires -- the retried invoke() gets a fresh requestId, not the stale one", async () => {
+		const registry = destructiveEchoRegistry();
+		registry.configureApprovals({ timeoutMs: 1 });
+		const requestId = await requestApprovalGate(registry);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		await expect(
+			registry.invoke("vehicle.approval.resolve", 1, { requestId, decision: "granted" }, { permissions: ["vehicle:approvals:resolve"] }),
+		).rejects.toMatchObject({ code: "not-found" });
+	});
+
+	it("requireApprovalForEffects is configurable per deployment -- can gate external-write too, and leaves read/local-write alone", async () => {
+		const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
+		const writeOp = defineVehicleOperation({ ...ECHO_OPTIONS, name: "test.write-echo", effect: "external-write" });
+		registry.register(
+			"echo-provider",
+			bindVehicleOperation(writeOp, () => async ({ input }) => ({ echoed: input.value })),
+		);
+		registry.configureApprovals({ requireApprovalForEffects: ["external-write"] });
+
+		await expect(registry.invoke("test.write-echo", 1, { value: "go" }, { permissions: ["test:echo"] })).rejects.toMatchObject({
+			code: "approval-required",
+		});
+
+		const readOnly = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
+		readOnly.register("echo-provider", echoBinding());
+		readOnly.configureApprovals({ requireApprovalForEffects: ["external-write"] });
+		await expect(readOnly.invoke("test.echo", 1, { value: "go" }, { permissions: ["test:echo"] })).resolves.toEqual({ echoed: "go" });
 	});
 });

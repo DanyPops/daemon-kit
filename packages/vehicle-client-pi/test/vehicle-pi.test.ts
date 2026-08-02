@@ -102,7 +102,13 @@ function fakePi(existingNames: string[] = []) {
 	return { pi, tools, handlers, activeTools: () => [...active], setCallCount: () => setCalls };
 }
 
-async function execute(tool: ToolDefinition, input: unknown, signal?: AbortSignal, onUpdate?: (update: unknown) => void) {
+async function execute(
+	tool: ToolDefinition,
+	input: unknown,
+	signal?: AbortSignal,
+	onUpdate?: (update: unknown) => void,
+	contextOverrides: Record<string, unknown> = {},
+) {
 	return tool.execute(
 		"pi-call-1",
 		input as never,
@@ -110,8 +116,45 @@ async function execute(tool: ToolDefinition, input: unknown, signal?: AbortSigna
 		onUpdate as never,
 		{
 			sessionManager: { getSessionId: () => "session-1" },
+			hasUI: false,
+			...contextOverrides,
 		} as never,
 	);
+}
+
+/**
+ * Simulates a VehicleRegistry with configureApprovals() enabled: the first
+ * invoke() of the gated operation always reports approval-required with a
+ * fixed requestId; vehicle.approval.resolve mints "real-capability" only on
+ * a granted decision; a retried invoke() only succeeds when that exact
+ * capability is presented.
+ */
+class ApprovalFlowClient implements VehicleClient {
+	readonly calls: Array<{ name: string; version: number; input: unknown; options: VehicleInvocationOptions | undefined }> = [];
+
+	constructor(public value: VehicleManifest) {}
+
+	manifest(): Promise<VehicleManifest> {
+		return Promise.resolve(this.value);
+	}
+
+	async invoke<Output = unknown>(name: string, version: number, input: unknown, options?: VehicleInvocationOptions): Promise<Output> {
+		this.calls.push({ name, version, input, options });
+		if (name === "vehicle.approval.resolve") {
+			const { requestId, decision } = input as { requestId: string; decision: "granted" | "denied" };
+			return { requestId, decision, ...(decision === "granted" ? { capability: "real-capability" } : {}) } as Output;
+		}
+		if (options?.approvalCapability === "real-capability") return { ok: true } as Output;
+		throw new VehicleError("approval-required", `${name}@${version} requires approval`, {
+			category: "authorization",
+			retryable: true,
+			details: { requestId: "req-1", expiresAt: Date.now() + 60_000 },
+		});
+	}
+
+	close(): Promise<void> {
+		return Promise.resolve();
+	}
 }
 
 describe("registerVehicleTools", () => {
@@ -196,21 +239,57 @@ describe("registerVehicleTools", () => {
 		]);
 	});
 
-	it("requires capability-backed approval for destructive and open-world effects", async () => {
-		for (const effect of ["destructive", "open-world"] as const) {
-			const client = new FakeClient(manifest([operation(`risk.${effect}`, 1, { effect })]));
-			const denied = fakePi();
-			await registerVehicleTools(denied.pi, client);
-			await expect(execute(denied.tools[0]!, { value: "go" })).rejects.toThrow("approval capability");
-			expect(client.calls).toHaveLength(0);
+	it("passes an explicitly resolved approvalCapability straight through without any gate of its own -- gating is the registry's job now", async () => {
+		const client = new FakeClient(manifest([operation("risk.destructive", 1, { effect: "destructive" })]));
+		const { pi, tools } = fakePi();
+		await registerVehicleTools(pi, client, { resolveInvocation: () => ({ approvalCapability: "pre-approved" }) });
+		await execute(tools[0]!, { value: "go" });
+		expect(client.calls[0]?.options?.approvalCapability).toBe("pre-approved");
+	});
 
-			const allowed = fakePi();
-			await registerVehicleTools(allowed.pi, client, {
-				resolveInvocation: () => ({ approvalCapability: "signed-capability" }),
-			});
-			await execute(allowed.tools[0]!, { value: "go" });
-			expect(client.calls[0]?.options?.approvalCapability).toBe("signed-capability");
-		}
+	it("attempts a local UI approval prompt on approval-required, and retries with the capability vehicle.approval.resolve mints", async () => {
+		const client = new ApprovalFlowClient(manifest([operation("risk.destructive", 1, { effect: "destructive" })]));
+		const { pi, tools } = fakePi();
+		await registerVehicleTools(pi, client);
+
+		const confirmCalls: Array<{ title: string; message: string }> = [];
+		const result = await execute(tools[0]!, { value: "go" }, undefined, undefined, {
+			hasUI: true,
+			ui: {
+				confirm: async (title: string, message: string) => {
+					confirmCalls.push({ title, message });
+					return true;
+				},
+			},
+		});
+
+		expect(confirmCalls).toHaveLength(1);
+		expect(confirmCalls[0]?.message).toContain("destructive");
+		expect(client.calls.map((call) => call.name)).toEqual(["risk.destructive", "vehicle.approval.resolve", "risk.destructive"]);
+		expect(client.calls[1]?.input).toMatchObject({ requestId: "req-1", decision: "granted" });
+		expect(client.calls[2]?.options?.approvalCapability).toBe("real-capability");
+		expect(result.content).toBeTruthy();
+	});
+
+	it("denies and never retries invoke() when the local prompt returns false", async () => {
+		const client = new ApprovalFlowClient(manifest([operation("risk.destructive", 1, { effect: "destructive" })]));
+		const { pi, tools } = fakePi();
+		await registerVehicleTools(pi, client);
+
+		await expect(
+			execute(tools[0]!, { value: "go" }, undefined, undefined, { hasUI: true, ui: { confirm: async () => false } }),
+		).rejects.toMatchObject({ failure: { code: "approval-required" } });
+		expect(client.calls.map((call) => call.name)).toEqual(["risk.destructive", "vehicle.approval.resolve"]);
+		expect(client.calls[1]?.input).toMatchObject({ decision: "denied" });
+	});
+
+	it("never attempts a local prompt when hasUI is false -- surfaces approval-required directly, no resolve call at all", async () => {
+		const client = new ApprovalFlowClient(manifest([operation("risk.destructive", 1, { effect: "destructive" })]));
+		const { pi, tools } = fakePi();
+		await registerVehicleTools(pi, client);
+
+		await expect(execute(tools[0]!, { value: "go" })).rejects.toMatchObject({ failure: { code: "approval-required" } });
+		expect(client.calls.map((call) => call.name)).toEqual(["risk.destructive"]);
 	});
 
 	it("passes resolved invocation metadata without allowing identity or signal replacement", async () => {
