@@ -8,6 +8,7 @@ import { executeCleanup, planDuplicateCleanup } from "./fleet/cleanup.js";
 import { diagnostic, type Diagnostic } from "./fleet/diagnostic.js";
 import { inspectHostProcesses, readVehicleHandles } from "./fleet/host-inspection.js";
 import { decodeArmadaManifest, MAX_MANIFEST_BYTES, type ManifestDecodeOutcome } from "./fleet/manifest.js";
+import { removeManifestVehicle, upsertManifestVehicle } from "./fleet/manifest-store.js";
 import { planFleet } from "./fleet/planner.js";
 import { createHandleReadinessProbe, readVehicleHandleFile } from "./fleet/readiness.js";
 import { reconcileFleet } from "./fleet/reconciler.js";
@@ -38,6 +39,7 @@ interface PlanArguments {
 	readonly json: boolean;
 	readonly vehicle?: string;
 	readonly approval?: string;
+	readonly vehicleFile?: string;
 }
 
 type ArgumentOutcome = { readonly ok: true; readonly arguments: PlanArguments } | { readonly ok: false; readonly diagnostic: Diagnostic };
@@ -57,10 +59,18 @@ function parsePlanArguments(args: readonly string[], dependencies: CliDependenci
 	let json = false;
 	let vehicle: string | undefined;
 	let approval: string | undefined;
+	let vehicleFile: string | undefined;
 	for (let index = 0; index < args.length; index++) {
 		const argument = args[index];
 		if (argument === "--json") {
 			json = true;
+			continue;
+		}
+		if (argument === "--vehicle-file") {
+			const value = args[index + 1];
+			if (!value) return { ok: false, diagnostic: diagnostic("CLI_ARGUMENT_MISSING", "error", "--vehicle-file", "path is required") };
+			vehicleFile = value;
+			index++;
 			continue;
 		}
 		if (argument === "--approve") {
@@ -77,7 +87,7 @@ function parsePlanArguments(args: readonly string[], dependencies: CliDependenci
 			index++;
 			continue;
 		}
-		if (command === "cleanup" && vehicle === undefined && argument !== undefined && !argument.startsWith("--")) {
+		if ((command === "cleanup" || command === "remove") && vehicle === undefined && argument !== undefined && !argument.startsWith("--")) {
 			vehicle = argument;
 			continue;
 		}
@@ -90,6 +100,7 @@ function parsePlanArguments(args: readonly string[], dependencies: CliDependenci
 			json,
 			...(vehicle === undefined ? {} : { vehicle }),
 			...(approval === undefined ? {} : { approval }),
+			...(vehicleFile === undefined ? {} : { vehicleFile }),
 		},
 	};
 }
@@ -122,9 +133,17 @@ function writeDiagnostics(diagnostics: readonly Diagnostic[], json: boolean, io:
 
 export async function runCli(args: readonly string[], dependencies: CliDependencies): Promise<number> {
 	const [command, ...rest] = args;
-	if (command !== "plan" && command !== "reconcile" && command !== "status" && command !== "doctor" && command !== "cleanup") {
+	if (
+		command !== "plan" &&
+		command !== "reconcile" &&
+		command !== "status" &&
+		command !== "doctor" &&
+		command !== "cleanup" &&
+		command !== "upsert" &&
+		command !== "remove"
+	) {
 		writeDiagnostics(
-			[diagnostic("CLI_COMMAND_UNKNOWN", "error", command ?? "", "usage: armada <plan|reconcile|status|doctor|cleanup> [--manifest <path>] [--json]")],
+			[diagnostic("CLI_COMMAND_UNKNOWN", "error", command ?? "", "usage: armada <plan|reconcile|status|doctor|cleanup|upsert|remove> [--manifest <path>] [--json]")],
 			false,
 			dependencies.io,
 		);
@@ -134,6 +153,28 @@ export async function runCli(args: readonly string[], dependencies: CliDependenc
 	if (!parsed.ok) {
 		writeDiagnostics([parsed.diagnostic], false, dependencies.io);
 		return 2;
+	}
+	if (command === "upsert") {
+		if (!parsed.arguments.vehicleFile) {
+			writeDiagnostics([diagnostic("CLI_ARGUMENT_MISSING", "error", "--vehicle-file", "path is required")], parsed.arguments.json, dependencies.io);
+			return 2;
+		}
+		let vehicleJson: string;
+		try {
+			const stat = await lstat(parsed.arguments.vehicleFile);
+			if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_MANIFEST_BYTES) throw new Error("Vehicle file must be a bounded regular file");
+			vehicleJson = await readFile(parsed.arguments.vehicleFile, "utf8");
+		} catch (error) {
+			writeDiagnostics([diagnostic("VEHICLE_FILE_READ_FAILED", "error", parsed.arguments.vehicleFile, error instanceof Error ? error.message : String(error))], parsed.arguments.json, dependencies.io);
+			return 1;
+		}
+		const updated = await upsertManifestVehicle(parsed.arguments.manifestPath, vehicleJson);
+		if (!updated.ok) {
+			writeDiagnostics(updated.diagnostics, parsed.arguments.json, dependencies.io);
+			return 1;
+		}
+		dependencies.io.stdout(`${JSON.stringify({ ok: true, manifestHash: updated.manifest.contentHash })}\n`);
+		return 0;
 	}
 	const decoded = await readManifest(parsed.arguments.manifestPath);
 	if (!decoded.ok) {
@@ -149,6 +190,30 @@ export async function runCli(args: readonly string[], dependencies: CliDependenc
 	if (!planned.ok) {
 		writeDiagnostics(planned.diagnostics, parsed.arguments.json, dependencies.io);
 		return 1;
+	}
+	if (command === "remove") {
+		const vehicle = decoded.manifest.vehicles.find((item) => item.name === parsed.arguments.vehicle);
+		if (!vehicle || !dependencies.controller) {
+			writeDiagnostics([diagnostic("REMOVE_VEHICLE_UNKNOWN", "error", "/vehicle", "remove requires a declared Vehicle and native controller")], parsed.arguments.json, dependencies.io);
+			return 2;
+		}
+		const generated = strategyForNativeManager(dependencies.controller.kind).generateDescriptor(vehicle);
+		if (!generated.ok) {
+			writeDiagnostics(generated.diagnostics, parsed.arguments.json, dependencies.io);
+			return 1;
+		}
+		const removedNative = await dependencies.controller.remove(generated.descriptor.identity);
+		if (!removedNative.ok) {
+			writeDiagnostics(removedNative.diagnostics, parsed.arguments.json, dependencies.io);
+			return 1;
+		}
+		const removedManifest = await removeManifestVehicle(parsed.arguments.manifestPath, vehicle.name);
+		if (!removedManifest.ok) {
+			writeDiagnostics(removedManifest.diagnostics, parsed.arguments.json, dependencies.io);
+			return 1;
+		}
+		dependencies.io.stdout(`${JSON.stringify({ ok: true, removed: vehicle.name })}\n`);
+		return 0;
 	}
 	if (command === "cleanup") {
 		const vehicle = decoded.manifest.vehicles.find((item) => item.name === parsed.arguments.vehicle);

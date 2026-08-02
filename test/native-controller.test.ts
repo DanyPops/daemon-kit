@@ -38,12 +38,15 @@ describe("native controller", () => {
 		expect((await controller.stop(generated.descriptor.identity)).ok).toBe(true);
 		const inspected = await controller.inspect([vehicle()]);
 		expect(inspected).toMatchObject({ ok: true, services: [{ status: "running", pid: 42, specHash: generated.descriptor.specHash }] });
+		expect((await controller.remove(generated.descriptor.identity)).ok).toBe(true);
 		expect(fake.calls).toEqual([
 			["systemctl", "--user", "daemon-reload"],
 			["systemctl", "--user", "enable", "armada.target"],
 			["systemctl", "--user", "enable", "--now", "armada-papyrus.service"],
 			["systemctl", "--user", "stop", "armada-papyrus.service"],
 			["systemctl", "--user", "show", "armada-papyrus.service", "--property=LoadState", "--property=ActiveState", "--property=MainPID", "--no-pager"],
+			["systemctl", "--user", "disable", "--now", "armada-papyrus.service"],
+			["systemctl", "--user", "daemon-reload"],
 		]);
 	});
 

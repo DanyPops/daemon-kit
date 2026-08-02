@@ -58,6 +58,7 @@ export interface NativeServiceController extends NativeServiceManager {
 	replaceDescriptorAtomically(descriptor: NativeServiceDescriptor): Promise<NativeOperationOutcome>;
 	start(identity: NativeServiceIdentity): Promise<NativeOperationOutcome>;
 	stop(identity: NativeServiceIdentity): Promise<NativeOperationOutcome>;
+	remove(identity: NativeServiceIdentity): Promise<NativeOperationOutcome>;
 }
 
 export interface ReadinessProbe {

@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -59,6 +59,7 @@ describe("armada plan", () => {
 				return Promise.resolve({ ok: true, diagnostics: [] });
 			},
 			stop: () => Promise.resolve({ ok: true, diagnostics: [] }),
+			remove: () => Promise.resolve({ ok: true, diagnostics: [] }),
 		};
 		const captured = output();
 		const code = await runCli(["reconcile", "--manifest", path, "--json"], {
@@ -108,6 +109,18 @@ describe("armada plan", () => {
 		});
 		expect(code).toBe(0);
 		expect(JSON.parse(captured.stdout.join(""))).toMatchObject({ ok: true, plan: { vehicle: "papyrus", consequences: [{ pid: 42 }, { pid: 43 }] } });
+	});
+
+	it("upserts integration Vehicle files into the authoritative manifest", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
+		const manifestPath = join(directory, "armada.json");
+		const vehiclePath = join(directory, "vehicle.json");
+		await writeFile(vehiclePath, JSON.stringify(JSON.parse(manifestJson()).vehicles[0]));
+		const captured = output();
+		const code = await runCli(["upsert", "--vehicle-file", vehiclePath, "--manifest", manifestPath, "--json"], { manager, io: captured.io });
+		expect(code).toBe(0);
+		expect(JSON.parse(captured.stdout.join(""))).toMatchObject({ ok: true });
+		expect(JSON.parse(await readFile(manifestPath, "utf8")).vehicles).toHaveLength(1);
 	});
 
 	it("returns stable machine-readable diagnostics for invalid input", async () => {

@@ -33,6 +33,7 @@ function harness(actual: NativeServiceState[] = []) {
 			events.push(`stop:${identity}`);
 			return Promise.resolve(success());
 		},
+		remove: () => Promise.resolve(success()),
 	};
 	const readiness: ReadinessProbe = {
 		waitUntilReady: (spec) => {

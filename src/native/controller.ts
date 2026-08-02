@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, win32 } from "node:path";
 import { diagnostic, type Diagnostic } from "../fleet/diagnostic.js";
@@ -199,6 +199,24 @@ export function createNativeController(options: NativeControllerOptions): Native
 			const command = executable(options.kind);
 			const result = await runner.run(command, lifecycleArguments(options.kind, "stop", identity, pathForIdentity(identity), userId));
 			return result.ok ? { ok: true, diagnostics: [] } : commandFailure(command, result);
+		},
+		async remove(identity: NativeServiceIdentity) {
+			const command = executable(options.kind);
+			const path = pathForIdentity(identity);
+			const arguments_ =
+				options.kind === "systemd"
+					? ["--user", "disable", "--now", identity]
+					: options.kind === "launchd"
+						? ["bootout", `gui/${userId}/${identity}`]
+						: ["/Delete", "/TN", identity, "/F"];
+			const result = await runner.run(command, arguments_);
+			if (!result.ok) return commandFailure(command, result);
+			await rm(path, { force: true });
+			if (options.kind === "systemd") {
+				const reload = await runner.run(command, ["--user", "daemon-reload"]);
+				if (!reload.ok) return commandFailure(command, reload);
+			}
+			return { ok: true, diagnostics: [] };
 		},
 	};
 }

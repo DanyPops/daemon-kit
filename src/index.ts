@@ -4,6 +4,7 @@ export * from "./fleet/hash.js";
 export * from "./fleet/host-inspection.js";
 export * from "./fleet/identity.js";
 export * from "./fleet/manifest.js";
+export * from "./fleet/manifest-store.js";
 export * from "./fleet/planner.js";
 export * from "./fleet/reconciler.js";
 export * from "./fleet/readiness.js";
