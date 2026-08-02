@@ -5,6 +5,7 @@ import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-age
 import { Check } from "typebox/value";
 import { registerActivityBroker, unregisterActivityBroker, type VehicleActivityEvent } from "../src/activity-broker.ts";
 import {
+	invokeVehicleOperation,
 	PiVehicleInvocationError,
 	type PiVehicleToolDetails,
 	refreshVehicleToolAvailability,
@@ -159,6 +160,123 @@ class ApprovalFlowClient implements VehicleClient {
 		return Promise.resolve();
 	}
 }
+
+/** Same fake ExtensionContext shape the execute() helper builds inline, for calling invokeVehicleOperation() directly without a registered Pi tool at all. */
+function fakeContext(overrides: Record<string, unknown> = {}) {
+	return {
+		sessionManager: { getSessionId: () => "session-1" },
+		hasUI: false,
+		...overrides,
+	} as never;
+}
+
+describe("invokeVehicleOperation (standalone, no Pi tool registration)", () => {
+	it("invokes the operation and returns the same content/details shape a registered tool's execute() would", async () => {
+		const descriptor = operation("category.list");
+		const client = new FakeClient(manifest([descriptor]));
+		client.result = { categories: [] };
+
+		const result = await invokeVehicleOperation({
+			client,
+			manifest: client.value,
+			descriptor,
+			toolName: "web_category",
+			toolCallId: "call-1",
+			input: { value: "x" },
+			context: fakeContext(),
+			options: {},
+		});
+
+		expect(client.calls[0]?.name).toBe("category.list");
+		expect((result.details as PiVehicleToolDetails).output).toEqual({ categories: [] });
+	});
+
+	it("publishes activity events even though no Pi tool was ever registered", async () => {
+		const events: VehicleActivityEvent[] = [];
+		registerActivityBroker({ publish: (event) => events.push(event) });
+		try {
+			const descriptor = operation("category.assign");
+			const client = new FakeClient(manifest([descriptor]));
+
+			await invokeVehicleOperation({
+				client,
+				manifest: client.value,
+				descriptor,
+				toolName: "web_category",
+				toolCallId: "call-1",
+				input: { value: "x" },
+				context: fakeContext(),
+				options: {},
+			});
+
+			expect(events.map((e) => e.type)).toEqual(["vehicle.operation.started", "vehicle.operation.completed"]);
+		} finally {
+			unregisterActivityBroker();
+		}
+	});
+
+	it("a local /safety 'ask' override denies before ever calling invoke() -- same as a registered tool", async () => {
+		const descriptor = operation("category.remove");
+		const client = new FakeClient(manifest([descriptor]));
+		const safetyPolicyStore = await VehicleSafetyPolicyStore.restore();
+		await safetyPolicyStore.set("test-vehicle", "category.remove", "ask");
+
+		await expect(
+			invokeVehicleOperation({
+				client,
+				manifest: client.value,
+				descriptor,
+				toolName: "web_category",
+				toolCallId: "call-1",
+				input: { value: "x" },
+				context: fakeContext({ hasUI: false }),
+				options: { safetyPolicyStore },
+			}),
+		).rejects.toThrow(PiVehicleInvocationError);
+		expect(client.calls).toHaveLength(0);
+	});
+
+	it("the server approval-required retry dance works identically to a registered tool's execute()", async () => {
+		const descriptor = operation("category.remove", 1, { effect: "local-write" });
+		const client = new ApprovalFlowClient(manifest([descriptor]));
+
+		const result = await invokeVehicleOperation({
+			client,
+			manifest: client.value,
+			descriptor,
+			toolName: "web_category",
+			toolCallId: "call-1",
+			input: { value: "x" },
+			context: fakeContext({
+				hasUI: true,
+				ui: { confirm: () => Promise.resolve(true) },
+			}),
+			options: {},
+		});
+
+		expect((result.details as PiVehicleToolDetails).output).toEqual({ ok: true });
+		expect(client.calls.some((call) => call.name === "vehicle.approval.resolve")).toBe(true);
+	});
+
+	it("auto-injects an idempotencyKey from toolCallId for a keyed operation, exactly like execute() does", async () => {
+		const descriptor = operation("category.assign", 1, { idempotency: { mode: "keyed", retentionMs: 60_000 } });
+		const client = new FakeClient(manifest([descriptor]));
+
+		await invokeVehicleOperation({
+			client,
+			manifest: client.value,
+			descriptor,
+			toolName: "web_category",
+			toolCallId: "call-7",
+			input: { value: "x" },
+			context: fakeContext(),
+			options: {},
+		});
+
+		expect(client.calls[0]?.options?.idempotencyKey).toBe("call-7");
+		expect(client.calls[0]?.options?.correlationId).toBe("session-1");
+	});
+});
 
 describe("registerVehicleTools", () => {
 	it("projects descriptor schemas and invokes the exact Vehicle operation", async () => {
@@ -441,7 +559,10 @@ describe("registerVehicleTools", () => {
 			await registerVehicleTools(pi, client, {
 				interactiveFollowUps: () => async (request) => {
 					seenSignal = request.signal;
-					request.onUpdate?.({ content: [{ type: "text", text: "waiting" }], details: { vehicle: { name: "t", version: "1", operation: "discuss.open", operationVersion: 1, toolCallId: "pi-call-1" } } });
+					request.onUpdate?.({
+						content: [{ type: "text", text: "waiting" }],
+						details: { vehicle: { name: "t", version: "1", operation: "discuss.open", operationVersion: 1, toolCallId: "pi-call-1" } },
+					});
 					return { content: [{ type: "text", text: "done" }] };
 				},
 			});

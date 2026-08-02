@@ -10,7 +10,13 @@ import type {
 	VehiclePrincipal,
 } from "@danypops/vehicle-core";
 import { extractVehicleContent, VehicleError } from "@danypops/vehicle-core";
-import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext, ToolDefinition, ToolExecutionMode } from "@earendil-works/pi-coding-agent";
+import type {
+	AgentToolUpdateCallback,
+	ExtensionAPI,
+	ExtensionContext,
+	ToolDefinition,
+	ToolExecutionMode,
+} from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { publishVehicleActivity } from "./activity-broker.js";
 import { guardExtensionRuntimeInitialized, syncManagedActiveTools } from "./pi-tool-availability.js";
@@ -374,6 +380,169 @@ function assertNamesAvailable(pi: ExtensionAPI, projected: readonly { descriptor
 	}
 }
 
+export interface VehicleOperationInvocationParams {
+	readonly client: VehicleClient;
+	readonly manifest: VehicleManifest;
+	readonly descriptor: VehicleOperationDescriptor;
+	/** The name a consumer's own tool call is presented under -- purely for identity/telemetry; does not have to be descriptor's own projected Pi tool name (a consolidated multi-action tool passes its own single name for every sub-action it dispatches). */
+	readonly toolName: string;
+	readonly toolCallId: string;
+	readonly input: unknown;
+	readonly context: ExtensionContext;
+	readonly signal?: AbortSignal;
+	readonly onUpdate?: AgentToolUpdateCallback<PiVehicleToolDetails>;
+	readonly options: RegisterVehicleToolsOptions;
+}
+
+export interface VehicleOperationInvocationResult {
+	readonly content: readonly VehicleContentBlock[];
+	readonly details: PiVehicleToolDetails;
+}
+
+/**
+ * The cross-cutting policy layer every registerVehicleTools()-registered tool
+ * gets for free -- activity broadcasting, the local /safety "ask" gate, the
+ * server approval-required retry dance, idempotency-key/correlationId
+ * derivation, resolveInvocation/onInvoked/interactiveFollowUps hooks -- as a
+ * standalone Decorator around a single operation call, independent of how
+ * (or whether) that call is fronted by a Pi tool at all.
+ *
+ * Exists because registerVehicleTools()'s one-operation-to-one-tool
+ * projection is a deliberate, correct default (Anthropic's own tool-design
+ * guidance: consolidate related actions behind one tool with an action
+ * parameter, rather than one tool per action) but is not the only legitimate
+ * tool shape -- a consumer whose tool already consolidates several
+ * operations behind an action/operation parameter (see e.g. web-spider's
+ * web_category) cannot use registerVehicleTools() for that tool without
+ * regressing its existing one-tool-many-actions contract into several
+ * separate tools. Before this function existed, the only escape hatch was
+ * calling client.invoke() directly, which silently forfeited every one of
+ * the above cross-cutting behaviors -- exactly the gap this closes: a
+ * consumer keeps full control of its own tool registration/schema/dispatch
+ * shape while still calling through the same policy layer
+ * registerVehicleTools() uses internally.
+ */
+export async function invokeVehicleOperation(params: VehicleOperationInvocationParams): Promise<VehicleOperationInvocationResult> {
+	const { client, manifest, descriptor, toolName, toolCallId, input, context, signal, onUpdate, options } = params;
+	const identity = vehicleIdentity(manifest, descriptor, toolCallId);
+	const resolved = await options.resolveInvocation?.({
+		descriptor,
+		manifest,
+		toolName,
+		toolCallId,
+		input,
+		context,
+	});
+
+	const reportProgress: VehicleInvocationOptions["onProgress"] = (progress) => {
+		onUpdate?.({
+			content: [{ type: "text", text: formatJson(progress) }],
+			details: { vehicle: identity, progress },
+		});
+	};
+	const baseInvocation: VehicleInvocationOptions = {
+		permissions: options.permissions,
+		principal: options.principal,
+		...resolved,
+		operationId: toolCallId,
+		correlationId: resolved?.correlationId ?? context.sessionManager.getSessionId(),
+		signal,
+		onProgress: reportProgress,
+		...(descriptor.idempotency.mode === "keyed" && !resolved?.idempotencyKey ? { idempotencyKey: toolCallId } : {}),
+	};
+
+	publishOperationActivity("started", identity, descriptor);
+
+	// A human's own /safety override, not the effect-level default (that
+	// case is already covered by the approval-required round trip below) --
+	// a client-only gate, never touches invoke() at all on denial, so no
+	// server capability is needed for an effect the server itself never
+	// gates.
+	if (options.safetyPolicyStore?.get(manifest.name, descriptor.name) === "ask") {
+		const approved = await requestLocalApproval(context, descriptor, input, signal);
+		if (!approved) {
+			const failure: VehicleFailure = {
+				code: "vehicle-safety-denied",
+				category: "authorization",
+				message: `${operationKey(descriptor)} was denied by the local /safety policy`,
+				retryable: true,
+			};
+			publishOperationActivity("failed", identity, descriptor, { code: failure.code });
+			throw new PiVehicleInvocationError(failure);
+		}
+	}
+
+	let output: unknown;
+	try {
+		output = await client.invoke(descriptor.name, descriptor.version, input, baseInvocation);
+	} catch (error) {
+		const failure = sanitizedFailure(error);
+		// The registry (once configureApprovals() is enabled there) records a
+		// durable approval.requested event before ever failing this way -- a
+		// caller always has a path forward via vehicle.approval.resolve, this
+		// is just the optional local fast path attempting it automatically.
+		if (failure.code !== "approval-required") {
+			publishOperationActivity("failed", identity, descriptor, { code: failure.code });
+			throw new PiVehicleInvocationError(failure);
+		}
+		const requestId = approvalRequestId(failure);
+		// No requestId to act on, or no UI capable of asking -- the request
+		// stays durably pending (an async/remote approver can still resolve it
+		// later) rather than this call eagerly denying it on the caller's behalf.
+		if (!requestId || !context.hasUI) {
+			publishOperationActivity("failed", identity, descriptor, { code: failure.code });
+			throw new PiVehicleInvocationError(failure);
+		}
+
+		const approved = await requestLocalApproval(context, descriptor, input, signal);
+		let capability: string | undefined;
+		try {
+			const resolveOutput = (await client.invoke(
+				"vehicle.approval.resolve",
+				1,
+				{ requestId, decision: approved ? "granted" : "denied" },
+				{ permissions: options.permissions, principal: options.principal, signal },
+			)) as { capability?: string };
+			capability = resolveOutput.capability;
+		} catch {
+			// The resolve round trip itself failed (missing permission, expired
+			// request) -- fall through to the original approval-required failure,
+			// never mint or assume a capability that was never actually granted.
+		}
+		if (!capability) {
+			publishOperationActivity("failed", identity, descriptor, { code: failure.code });
+			throw new PiVehicleInvocationError(failure);
+		}
+		try {
+			output = await client.invoke(descriptor.name, descriptor.version, input, { ...baseInvocation, approvalCapability: capability });
+		} catch (retryError) {
+			const retryFailure = sanitizedFailure(retryError);
+			publishOperationActivity("failed", identity, descriptor, { code: retryFailure.code });
+			throw new PiVehicleInvocationError(retryFailure);
+		}
+	}
+	publishOperationActivity("completed", identity, descriptor);
+	if (options.onInvoked) {
+		try {
+			await options.onInvoked({ descriptor, manifest, toolName, toolCallId, input, context }, output);
+		} catch {
+			// Best-effort: the invoke() itself already succeeded, so a broadcast failure
+			// must never surface as a failed tool call.
+		}
+	}
+	const followUp = options.interactiveFollowUps?.(descriptor);
+	if (followUp) {
+		const request: PiVehicleInvocationRequest = { descriptor, manifest, toolName, toolCallId, input, context, signal, onUpdate };
+		const result = await followUp(request, output, client);
+		if (result) return { content: [...result.content], details: { vehicle: identity, output: result.output ?? output } };
+	}
+	const content = extractVehicleContent(output) ?? [{ type: "text" as const, text: formatJson(output) }];
+	return {
+		content: [...content],
+		details: { vehicle: identity, output },
+	};
+}
+
 function createTool(
 	client: VehicleClient,
 	manifest: VehicleManifest,
@@ -398,123 +567,19 @@ function createTool(
 			overrides?.renderResult ??
 			((result, resultOptions, theme, context) => renderVehicleResult(descriptor, result, resultOptions, theme, context)),
 		async execute(toolCallId, input, signal, onUpdate, context) {
-			const identity = vehicleIdentity(manifest, descriptor, toolCallId);
-			const resolved = await options.resolveInvocation?.({
-				descriptor,
+			const result = await invokeVehicleOperation({
+				client,
 				manifest,
+				descriptor,
 				toolName,
 				toolCallId,
 				input,
 				context,
-			});
-
-			const reportProgress: VehicleInvocationOptions["onProgress"] = (progress) => {
-				onUpdate?.({
-					content: [{ type: "text", text: formatJson(progress) }],
-					details: { vehicle: identity, progress },
-				});
-			};
-			const baseInvocation: VehicleInvocationOptions = {
-				permissions: options.permissions,
-				principal: options.principal,
-				...resolved,
-				operationId: toolCallId,
-				correlationId: resolved?.correlationId ?? context.sessionManager.getSessionId(),
 				signal,
-				onProgress: reportProgress,
-				...(descriptor.idempotency.mode === "keyed" && !resolved?.idempotencyKey ? { idempotencyKey: toolCallId } : {}),
-			};
-
-			publishOperationActivity("started", identity, descriptor);
-
-			// A human's own /safety override, not the effect-level default (that
-			// case is already covered by the approval-required round trip below) --
-			// a client-only gate, never touches invoke() at all on denial, so no
-			// server capability is needed for an effect the server itself never
-			// gates.
-			if (options.safetyPolicyStore?.get(manifest.name, descriptor.name) === "ask") {
-				const approved = await requestLocalApproval(context, descriptor, input, signal);
-				if (!approved) {
-					const failure: VehicleFailure = {
-						code: "vehicle-safety-denied",
-						category: "authorization",
-						message: `${operationKey(descriptor)} was denied by the local /safety policy`,
-						retryable: true,
-					};
-					publishOperationActivity("failed", identity, descriptor, { code: failure.code });
-					throw new PiVehicleInvocationError(failure);
-				}
-			}
-
-			let output: unknown;
-			try {
-				output = await client.invoke(descriptor.name, descriptor.version, input, baseInvocation);
-			} catch (error) {
-				const failure = sanitizedFailure(error);
-				// The registry (once configureApprovals() is enabled there) records a
-				// durable approval.requested event before ever failing this way -- a
-				// caller always has a path forward via vehicle.approval.resolve, this
-				// is just the optional local fast path attempting it automatically.
-				if (failure.code !== "approval-required") {
-					publishOperationActivity("failed", identity, descriptor, { code: failure.code });
-					throw new PiVehicleInvocationError(failure);
-				}
-				const requestId = approvalRequestId(failure);
-				// No requestId to act on, or no UI capable of asking -- the request
-				// stays durably pending (an async/remote approver can still resolve it
-				// later) rather than this call eagerly denying it on the caller's behalf.
-				if (!requestId || !context.hasUI) {
-					publishOperationActivity("failed", identity, descriptor, { code: failure.code });
-					throw new PiVehicleInvocationError(failure);
-				}
-
-				const approved = await requestLocalApproval(context, descriptor, input, signal);
-				let capability: string | undefined;
-				try {
-					const resolveOutput = (await client.invoke(
-						"vehicle.approval.resolve",
-						1,
-						{ requestId, decision: approved ? "granted" : "denied" },
-						{ permissions: options.permissions, principal: options.principal, signal },
-					)) as { capability?: string };
-					capability = resolveOutput.capability;
-				} catch {
-					// The resolve round trip itself failed (missing permission, expired
-					// request) -- fall through to the original approval-required failure,
-					// never mint or assume a capability that was never actually granted.
-				}
-				if (!capability) {
-					publishOperationActivity("failed", identity, descriptor, { code: failure.code });
-					throw new PiVehicleInvocationError(failure);
-				}
-				try {
-					output = await client.invoke(descriptor.name, descriptor.version, input, { ...baseInvocation, approvalCapability: capability });
-				} catch (retryError) {
-					const retryFailure = sanitizedFailure(retryError);
-					publishOperationActivity("failed", identity, descriptor, { code: retryFailure.code });
-					throw new PiVehicleInvocationError(retryFailure);
-				}
-			}
-			publishOperationActivity("completed", identity, descriptor);
-			if (options.onInvoked) {
-				try {
-					await options.onInvoked({ descriptor, manifest, toolName, toolCallId, input, context }, output);
-				} catch {
-					// Best-effort: the invoke() itself already succeeded, so a broadcast failure
-					// must never surface as a failed tool call.
-				}
-			}
-			const followUp = options.interactiveFollowUps?.(descriptor);
-			if (followUp) {
-				const request: PiVehicleInvocationRequest = { descriptor, manifest, toolName, toolCallId, input, context, signal, onUpdate };
-				const result = await followUp(request, output, client);
-				if (result) return { content: [...result.content], details: { vehicle: identity, output: result.output ?? output } };
-			}
-			const content = extractVehicleContent(output) ?? [{ type: "text" as const, text: formatJson(output) }];
-			return {
-				content: [...content],
-				details: { vehicle: identity, output },
-			};
+				onUpdate,
+				options,
+			});
+			return { content: [...result.content], details: result.details };
 		},
 	};
 }
