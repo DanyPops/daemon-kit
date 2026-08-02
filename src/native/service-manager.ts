@@ -49,3 +49,17 @@ export interface NativeServiceManager {
 	readonly capabilities: NativeManagerCapabilities;
 	inspect(vehicles: readonly VehicleSpec[]): Promise<InspectionOutcome>;
 }
+
+export type NativeOperationOutcome =
+	| { readonly ok: true; readonly diagnostics: readonly Diagnostic[] }
+	| { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
+
+export interface NativeServiceController extends NativeServiceManager {
+	replaceDescriptorAtomically(descriptor: NativeServiceDescriptor): Promise<NativeOperationOutcome>;
+	start(identity: NativeServiceIdentity): Promise<NativeOperationOutcome>;
+	stop(identity: NativeServiceIdentity): Promise<NativeOperationOutcome>;
+}
+
+export interface ReadinessProbe {
+	waitUntilReady(vehicle: VehicleSpec): Promise<NativeOperationOutcome>;
+}

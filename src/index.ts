@@ -3,6 +3,7 @@ export * from "./fleet/hash.js";
 export * from "./fleet/identity.js";
 export * from "./fleet/manifest.js";
 export * from "./fleet/planner.js";
+export * from "./fleet/reconciler.js";
 export * from "./native/launchd.js";
 export * from "./native/service-manager.js";
 export * from "./native/systemd.js";
