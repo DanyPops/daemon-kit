@@ -152,7 +152,7 @@ describe("runProcessSupervisor", () => {
 		try {
 			const logPath = join(dir, "log.txt");
 			let generation = 0;
-			let due = true;
+			let due = false;
 			const units: SupervisedUnitConfig[] = [
 				{
 					name: "probe",
@@ -161,13 +161,18 @@ describe("runProcessSupervisor", () => {
 					backends: [],
 					restart: "no",
 					resolveEnv: () => ({ GENERATION: String(++generation) }),
-					shouldPlannedRestart: () => due,
+					shouldPlannedRestart: () => {
+						if (!due) return false;
+						due = false;
+						return true;
+					},
 				},
 			];
 			const supervisor = runProcessSupervisor(units, { plannedRestartCheckMs: 50 });
 			try {
+				await waitFor(() => startCount(logPath) >= 1);
+				due = true;
 				await waitFor(() => startCount(logPath) >= 2, 4_000);
-				due = false; // stop retriggering once we've observed the one planned restart we're testing for
 				expect(readLog(logPath)).toContain("sigterm");
 			} finally {
 				await supervisor.stop();

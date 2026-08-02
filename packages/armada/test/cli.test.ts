@@ -1,0 +1,155 @@
+import { describe, expect, it } from "bun:test";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type CliIo, runCli } from "../src/cli.js";
+import { type NativeServiceController, type NativeServiceManager, systemdStrategy } from "../src/index.js";
+import { manifestJson } from "./fixtures.js";
+
+function output(): { io: CliIo; stdout: string[]; stderr: string[] } {
+	const stdout: string[] = [];
+	const stderr: string[] = [];
+	return { io: { stdout: (text) => stdout.push(text), stderr: (text) => stderr.push(text) }, stdout, stderr };
+}
+
+const manager: NativeServiceManager = {
+	kind: "systemd",
+	capabilities: {
+		maximumMemoryBytes: true,
+		maximumCpuPercent: true,
+		maximumTasks: true,
+		restartAlways: true,
+		restartOnFailure: true,
+		restartAttemptLimit: true,
+		restartAttemptWindow: true,
+	},
+	inspect: () => Promise.resolve({ ok: true, services: [], diagnostics: [] }),
+};
+
+describe("armada plan", () => {
+	it("runs manifest to plan through the injected native strategy", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
+		const path = join(directory, "armada.json");
+		await writeFile(path, manifestJson());
+		const captured = output();
+		const code = await runCli(["plan", "--manifest", path, "--json"], { manager, io: captured.io });
+		expect(code).toBe(0);
+		expect(JSON.parse(captured.stdout.join(""))).toMatchObject({
+			ok: true,
+			manager: "systemd",
+			operations: [{ kind: "install", name: "papyrus" }],
+		});
+		expect(captured.stderr).toEqual([]);
+	});
+
+	it("reconciles through the injected native controller", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
+		const path = join(directory, "armada.json");
+		await writeFile(path, manifestJson());
+		const events: string[] = [];
+		const controller: NativeServiceController = {
+			...manager,
+			capabilities: systemdStrategy.capabilities,
+			replaceDescriptorAtomically: (descriptor) => {
+				events.push(`replace:${descriptor.identity}`);
+				return Promise.resolve({ ok: true, diagnostics: [] });
+			},
+			start: (identity) => {
+				events.push(`start:${identity}`);
+				return Promise.resolve({ ok: true, diagnostics: [] });
+			},
+			stop: () => Promise.resolve({ ok: true, diagnostics: [] }),
+			remove: () => Promise.resolve({ ok: true, diagnostics: [] }),
+		};
+		const captured = output();
+		const code = await runCli(["reconcile", "--manifest", path, "--json"], {
+			manager: controller,
+			controller,
+			readiness: { waitUntilReady: () => Promise.resolve({ ok: true, diagnostics: [] }) },
+			io: captured.io,
+		});
+		expect(code).toBe(0);
+		expect(JSON.parse(captured.stdout.join(""))).toMatchObject({ ok: true, applied: [{ kind: "install", name: "papyrus" }] });
+		expect(events).toEqual(["replace:armada-papyrus.service", "start:armada-papyrus.service"]);
+	});
+
+	it("reports status and doctor diagnostics as bounded JSON", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
+		const path = join(directory, "armada.json");
+		await writeFile(path, manifestJson());
+		const captured = output();
+		const code = await runCli(["status", "--manifest", path, "--json"], {
+			manager,
+			inspectProcesses: () => Promise.resolve([]),
+			readHandle: () => Promise.resolve(undefined),
+			executableExists: () => true,
+			io: captured.io,
+		});
+		expect(code).toBe(0);
+		expect(JSON.parse(captured.stdout.join(""))).toMatchObject({
+			ok: true,
+			vehicles: [{ name: "papyrus", nativeStatus: "absent", ready: false }],
+		});
+	});
+
+	it("plans duplicate cleanup without signaling before explicit approval", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
+		const path = join(directory, "armada.json");
+		await writeFile(path, manifestJson());
+		const captured = output();
+		const code = await runCli(["cleanup", "papyrus", "--manifest", path, "--json"], {
+			manager,
+			inspectProcesses: () =>
+				Promise.resolve([
+					{ pid: 42, executable: "/opt/papyrus/cli.js", command: "/opt/papyrus/cli.js serve" },
+					{ pid: 43, executable: "/opt/papyrus/cli.js", command: "/opt/papyrus/cli.js serve" },
+				]),
+			readHandle: () => Promise.resolve(undefined),
+			io: captured.io,
+		});
+		expect(code).toBe(0);
+		expect(JSON.parse(captured.stdout.join(""))).toMatchObject({
+			ok: true,
+			plan: { vehicle: "papyrus", consequences: [{ pid: 42 }, { pid: 43 }] },
+		});
+	});
+
+	it("upserts integration Vehicle files into the authoritative manifest", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
+		const manifestPath = join(directory, "armada.json");
+		const vehiclePath = join(directory, "vehicle.json");
+		await writeFile(vehiclePath, JSON.stringify(JSON.parse(manifestJson()).vehicles[0]));
+		const captured = output();
+		const code = await runCli(["upsert", "--vehicle-file", vehiclePath, "--manifest", manifestPath, "--json"], {
+			manager,
+			io: captured.io,
+		});
+		expect(code).toBe(0);
+		expect(JSON.parse(captured.stdout.join(""))).toMatchObject({ ok: true });
+		expect(JSON.parse(await readFile(manifestPath, "utf8")).vehicles).toHaveLength(1);
+	});
+
+	it("upserts a Vehicle declaration from bounded stdin", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
+		const manifestPath = join(directory, "armada.json");
+		const captured = output();
+		const vehicleJson = JSON.stringify(JSON.parse(manifestJson()).vehicles[0]);
+		const code = await runCli(["upsert", "--vehicle-file", "-", "--manifest", manifestPath, "--json"], {
+			manager,
+			io: captured.io,
+			readInput: () => Promise.resolve(vehicleJson),
+		});
+		expect(code).toBe(0);
+		expect(JSON.parse(await readFile(manifestPath, "utf8")).vehicles).toHaveLength(1);
+	});
+
+	it("returns stable machine-readable diagnostics for invalid input", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "armada-cli-"));
+		const path = join(directory, "armada.json");
+		await writeFile(path, "{");
+		const captured = output();
+		const code = await runCli(["plan", "--manifest", path, "--json"], { manager, io: captured.io });
+		expect(code).toBe(1);
+		expect(JSON.parse(captured.stdout.join(""))).toMatchObject({ ok: false, diagnostics: [{ code: "MANIFEST_JSON_INVALID" }] });
+	});
+});
