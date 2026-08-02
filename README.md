@@ -421,6 +421,17 @@ behavior change for every consumer that never sets this option. A thrown
 error propagates as a real tool failure; the primary `invoke()` already
 succeeded and is never rolled back.
 
+Pair it with `executionMode` when the follow-up prompts a human
+synchronously -- `"sequential"` stops the model from batching that call
+alongside other tool calls in the same turn and letting those run before the
+human sees the prompt:
+
+```ts
+await registerVehicleTools(pi, client, {
+  executionMode: (descriptor) => (descriptor.name === "discuss.open" ? "sequential" : undefined),
+});
+```
+
 ## One operation per real action, never an action-dispatch tool
 
 A recurring anti-pattern in agent tool design -- documented independently as

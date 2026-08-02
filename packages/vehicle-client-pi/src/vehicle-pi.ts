@@ -10,7 +10,7 @@ import type {
 	VehiclePrincipal,
 } from "@danypops/vehicle-core";
 import { extractVehicleContent, VehicleError } from "@danypops/vehicle-core";
-import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext, ToolDefinition, ToolExecutionMode } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { publishVehicleActivity } from "./activity-broker.js";
 import { guardExtensionRuntimeInitialized, syncManagedActiveTools } from "./pi-tool-availability.js";
@@ -125,6 +125,15 @@ export interface RegisterVehicleToolsOptions {
 	 * primary output, no extra round trip.
 	 */
 	readonly interactiveFollowUps?: (descriptor: VehicleOperationDescriptor) => PiVehicleInteractiveFollowUp | undefined;
+	/**
+	 * Per-operation override for Pi's own tool-call concurrency semantics --
+	 * e.g. "sequential" for an operation whose interactiveFollowUps prompts a
+	 * human synchronously, so the model can't batch it alongside other tool
+	 * calls and let those run before the human sees the prompt. Undefined (the
+	 * default for every operation) means Pi's own default concurrency mode,
+	 * unchanged from today.
+	 */
+	readonly executionMode?: (descriptor: VehicleOperationDescriptor) => ToolExecutionMode | undefined;
 	/**
 	 * Mirrors the server's own VehicleRegistry.configureApprovals()
 	 * requireApprovalForEffects set (see vehicle-server) so /safety's "ask"
@@ -383,6 +392,7 @@ function createTool(
 		// know it existed and reported it as unavailable when asked directly.
 		promptSnippet: descriptor.description,
 		parameters: descriptor.inputSchema as TSchema,
+		executionMode: options.executionMode?.(descriptor),
 		renderCall: overrides?.renderCall ?? ((args, theme, context) => renderVehicleCall(descriptor, args, theme, context)),
 		renderResult:
 			overrides?.renderResult ??

@@ -357,6 +357,16 @@ describe("registerVehicleTools", () => {
 		expect(called).toBe(false);
 	});
 
+	it("lets a per-operation executionMode override win, defaulting to Pi's own concurrency mode when the resolver returns undefined", async () => {
+		const client = new FakeClient(manifest([operation("discuss.open"), operation("issues.search")]));
+		const { pi, tools } = fakePi();
+		await registerVehicleTools(pi, client, {
+			executionMode: (descriptor) => (descriptor.name === "discuss.open" ? "sequential" : undefined),
+		});
+		expect(tools.find((tool) => tool.name === "discuss_open")?.executionMode).toBe("sequential");
+		expect(tools.find((tool) => tool.name === "issues_search")?.executionMode).toBeUndefined();
+	});
+
 	describe("interactiveFollowUps", () => {
 		it("a follow-up returning a result overrides both content and details.output", async () => {
 			const client = new FakeClient(manifest([operation("discuss.open")]));
