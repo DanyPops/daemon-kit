@@ -334,7 +334,39 @@ describe("VehicleRegistry", () => {
 			expect(error).toBeInstanceOf(VehicleError);
 			expect(error).toMatchObject({ code: "handler-failed", message: "test.echo@1 handler failed", cause: failure });
 			expect((error as VehicleError).toFailure().message).not.toContain("secret");
+			expect((error as VehicleError).toFailure().causeMessage).toBeUndefined();
 		}
+	});
+
+	it("once setExposeHandlerFailureDetails(true) is called, an unexpected handler failure's real message reaches the wire-safe failure", async () => {
+		const registry = registryWith(
+			echoBinding(() => async () => {
+				throw new Error("column 'title' is required");
+			}),
+		);
+		registry.setExposeHandlerFailureDetails(true);
+		try {
+			await registry.invoke("test.echo", 1, { value: "hello" }, { permissions: ["test:echo"] });
+			throw new Error("expected invocation to fail");
+		} catch (error) {
+			const failure = (error as VehicleError).toFailure();
+			expect(failure.message).toBe("test.echo@1 handler failed: column 'title' is required");
+			expect(failure.causeMessage).toBe("column 'title' is required");
+		}
+	});
+
+	it("exposeHandlerFailureDetails also applies to unexpected execution-policy failures", async () => {
+		const policy: VehicleExecutionPolicy = {
+			execute() {
+				return Promise.reject(new Error("policy internals"));
+			},
+		};
+		const registry = registryWith(echoBinding(), policy);
+		registry.setExposeHandlerFailureDetails(true);
+		await expect(registry.invoke("test.echo", 1, { value: "hello" }, { permissions: ["test:echo"] })).rejects.toMatchObject({
+			code: "policy-failed",
+			message: "test.echo@1 execution policy failed: policy internals",
+		});
 	});
 
 	it("binds state once per registry so separate local providers are isolated", async () => {

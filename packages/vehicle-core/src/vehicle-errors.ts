@@ -45,6 +45,14 @@ export interface VehicleFailure {
 	readonly recovery?: VehicleRecovery;
 	readonly details?: JsonValue;
 	readonly operationId?: string;
+	/**
+	 * The underlying cause's own message, when this failure wraps an unexpected error (e.g. a
+	 * handler throwing something other than a VehicleError) -- bounded, never a full stack trace.
+	 * Without this, a caller sees only a generic template like "x handler failed" and has no way
+	 * to tell what actually went wrong or whether the underlying operation may have partially
+	 * applied.
+	 */
+	readonly causeMessage?: string;
 }
 
 export interface VehicleErrorOptions {
@@ -55,6 +63,15 @@ export interface VehicleErrorOptions {
 	readonly details?: JsonValue;
 	readonly operationId?: string;
 	readonly cause?: unknown;
+	/**
+	 * Secure by default (false): `cause` is always attached to the real in-process Error chain
+	 * (for server-side logging/observability), but its message crosses the wire via
+	 * toFailure().causeMessage only when the throw site explicitly opts in here -- an arbitrary
+	 * cause's message could contain a credential, an internal path, or other detail the thrower
+	 * never reviewed for wire-safety. Set true only when the cause is known-safe to show (e.g. a
+	 * validation library's own message intended for the caller).
+	 */
+	readonly exposeCause?: boolean;
 }
 
 export class VehicleError extends Error {
@@ -64,6 +81,7 @@ export class VehicleError extends Error {
 	readonly recovery?: VehicleRecovery;
 	readonly details?: JsonValue;
 	readonly operationId?: string;
+	private readonly exposeCause: boolean;
 
 	constructor(
 		readonly code: string,
@@ -78,9 +96,11 @@ export class VehicleError extends Error {
 		this.recovery = options.recovery;
 		this.details = options.details;
 		this.operationId = options.operationId;
+		this.exposeCause = options.exposeCause ?? false;
 	}
 
 	toFailure(): VehicleFailure {
+		const causeMessage = this.exposeCause ? boundedCauseMessage(this.cause) : undefined;
 		return {
 			code: this.code,
 			category: this.category,
@@ -90,8 +110,18 @@ export class VehicleError extends Error {
 			...(this.recovery === undefined ? {} : { recovery: this.recovery }),
 			...(this.details === undefined ? {} : { details: this.details }),
 			...(this.operationId === undefined ? {} : { operationId: this.operationId }),
+			...(causeMessage === undefined ? {} : { causeMessage }),
 		};
 	}
+}
+
+const MAX_CAUSE_MESSAGE_LENGTH = 500;
+
+/** Extracts a bounded, wire-safe message from an unknown cause -- never the full stack trace, never an unbounded payload. */
+export function boundedCauseMessage(cause: unknown): string | undefined {
+	if (cause instanceof Error && cause.message.length > 0) return cause.message.slice(0, MAX_CAUSE_MESSAGE_LENGTH);
+	if (typeof cause === "string" && cause.length > 0) return cause.slice(0, MAX_CAUSE_MESSAGE_LENGTH);
+	return undefined;
 }
 
 const MAX_VALIDATION_ISSUES = 10;

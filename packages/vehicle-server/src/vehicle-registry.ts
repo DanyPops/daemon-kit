@@ -18,6 +18,7 @@ import type {
 } from "@danypops/vehicle-core";
 import {
 	bindVehicleOperation,
+	boundedCauseMessage,
 	boundedValidationDetails,
 	DEFAULT_APPROVAL_EFFECTS,
 	DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -29,6 +30,18 @@ import {
 	vehicleEventTopic,
 } from "@danypops/vehicle-core";
 import { HmacApprovalAuthority, hashApprovalInput } from "./vehicle-approval-authority.js";
+
+/**
+ * Builds an unexpected-error's client-visible message from the underlying cause -- only when
+ * `expose` is true (see VehicleRegistry.setExposeHandlerFailureDetails's own doc comment for why
+ * this defaults to off). When not exposing, returns the flat, information-free prefix unchanged,
+ * preserving the exact pre-existing wire-safe behavior.
+ */
+function unexpectedFailureMessage(prefix: string, error: unknown, expose: boolean): string {
+	if (!expose) return prefix;
+	const cause = boundedCauseMessage(error);
+	return cause === undefined ? prefix : `${prefix}: ${cause}`;
+}
 
 export interface VehicleExecutionRequest {
 	readonly operation: VehicleOperationDescriptor;
@@ -267,6 +280,14 @@ export class VehicleRegistry {
 	private readonly wildcardListeners = new Set<(name: string, version: number, payload: unknown) => void>();
 	private approvalPolicy?: ApprovalPolicy;
 	private readonly pendingApprovals = new Map<string, VehicleApprovalRequest>();
+	/**
+	 * Secure by default: an unexpected (non-VehicleError) handler exception's own message never
+	 * crosses the wire unless a consumer explicitly opts in via setExposeHandlerFailureDetails().
+	 * A handler's own thrown error could contain anything -- a credential, an internal path, a raw
+	 * SQL fragment -- so the zero-configuration path stays opaque; only a consumer who has reviewed
+	 * its own handlers' failure modes should turn this on.
+	 */
+	private exposeHandlerFailureDetails = false;
 
 	constructor(
 		identity: VehicleManifestIdentity,
@@ -284,6 +305,16 @@ export class VehicleRegistry {
 	setExecutionPolicy(policy: VehicleExecutionPolicy): void {
 		if (this.executionPolicy) throw new Error("Vehicle execution policy is already configured");
 		this.executionPolicy = policy;
+	}
+
+	/**
+	 * Opt-in only, off by default (see the field's own doc comment). Once enabled, an unexpected
+	 * handler/policy exception's own message is included as toFailure()'s causeMessage field --
+	 * only turn this on for a Vehicle whose own handlers are known not to leak sensitive detail in
+	 * a thrown error's message.
+	 */
+	setExposeHandlerFailureDetails(enabled: boolean): void {
+		this.exposeHandlerFailureDetails = enabled;
 	}
 
 	/**
@@ -680,11 +711,11 @@ export class VehicleRegistry {
 			} catch (error) {
 				if (error instanceof VehicleError) throw error;
 				if (signal.aborted) throw abortError(signal, deadline, operationId);
-				throw new VehicleError("handler-failed", `${key} handler failed`, {
-					category: "internal",
-					operationId,
-					cause: error,
-				});
+				throw new VehicleError(
+					"handler-failed",
+					unexpectedFailureMessage(`${key} handler failed`, error, this.exposeHandlerFailureDetails),
+					{ category: "internal", operationId, cause: error, exposeCause: this.exposeHandlerFailureDetails },
+				);
 			}
 		};
 		const request: VehicleExecutionRequest = {
@@ -705,11 +736,11 @@ export class VehicleRegistry {
 				return this.executionPolicy ? await this.executionPolicy.execute(request, invoke) : await invoke(parsedInput);
 			} catch (error) {
 				if (error instanceof VehicleError) throw error;
-				throw new VehicleError("policy-failed", `${key} execution policy failed`, {
-					category: "internal",
-					operationId,
-					cause: error,
-				});
+				throw new VehicleError(
+					"policy-failed",
+					unexpectedFailureMessage(`${key} execution policy failed`, error, this.exposeHandlerFailureDetails),
+					{ category: "internal", operationId, cause: error, exposeCause: this.exposeHandlerFailureDetails },
+				);
 			}
 		})();
 		const output = await awaitWithSignal(pending, signal, deadline, operationId);
@@ -786,7 +817,11 @@ export class VehicleRegistry {
 				} catch (error) {
 					if (error instanceof VehicleError) throw error;
 					if (context.signal.aborted) throw abortError(context.signal, context.deadline, operationId);
-					throw new VehicleError("handler-failed", `${key} handler failed`, { category: "internal", operationId, cause: error });
+					throw new VehicleError(
+						"handler-failed",
+						unexpectedFailureMessage(`${key} handler failed`, error, this.exposeHandlerFailureDetails),
+						{ category: "internal", operationId, cause: error, exposeCause: this.exposeHandlerFailureDetails },
+					);
 				}
 				enforcePayloadSize(output, registration.descriptor.limits.maxResponseBytes, "response", key, operationId);
 				return registration.parseOutput(output, operationId);

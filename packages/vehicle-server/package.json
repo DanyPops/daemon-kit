@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/vehicle-server",
-	"version": "0.15.0",
+	"version": "0.16.0",
 	"description": "The Vehicle server substrate: a supervised, authenticated, loopback-only daemon (process lifecycle, SQLite storage, structured logging, OS service install) plus VehicleRegistry (registration, permission/deadline/payload enforcement, availability, execution policy) and its HTTP hosting surface. A Vehicle IS this daemon -- a long-running service purpose-built to serve AI agents tools.",
 	"license": "MIT",
 	"type": "module",
