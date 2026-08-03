@@ -1,0 +1,148 @@
+name: Reusable npm publish
+
+on:
+  workflow_call:
+    inputs:
+      package-directory:
+        description: Directory containing the package.json to publish
+        required: true
+        type: string
+      tag-prefix:
+        description: Canonical package tag prefix, including -v (for example jittor-v)
+        required: true
+        type: string
+      package-manager:
+        description: bun or npm
+        required: false
+        default: bun
+        type: string
+      install-command:
+        description: Optional root install command override
+        required: false
+        default: ""
+        type: string
+      lint-command:
+        description: Optional root lint command
+        required: false
+        default: ""
+        type: string
+      test-command:
+        description: Optional root test command; defaults to the package manager test command in package-directory
+        required: false
+        default: ""
+        type: string
+      typecheck-command:
+        description: Optional root typecheck command
+        required: false
+        default: ""
+        type: string
+      build-command:
+        description: Optional root build command
+        required: false
+        default: ""
+        type: string
+      prepare-command:
+        description: Optional command run immediately before npm publish
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Validate inputs and release tag
+        env:
+          PACKAGE_DIRECTORY: ${{ inputs.package-directory }}
+          PACKAGE_MANAGER: ${{ inputs.package-manager }}
+          TAG_PREFIX: ${{ inputs.tag-prefix }}
+        shell: bash
+        run: |
+          if [[ "$PACKAGE_MANAGER" != "bun" && "$PACKAGE_MANAGER" != "npm" ]]; then
+            echo "package-manager must be bun or npm" >&2
+            exit 1
+          fi
+          version="$(node -p "require('./$PACKAGE_DIRECTORY/package.json').version")"
+          expected_tag="${TAG_PREFIX}${version}"
+          if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
+            echo "tag $GITHUB_REF_NAME does not match $expected_tag" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        env:
+          COMMAND: ${{ inputs.install-command }}
+          PACKAGE_MANAGER: ${{ inputs.package-manager }}
+        shell: bash
+        run: |
+          if [[ -n "$COMMAND" ]]; then bash -euo pipefail -c "$COMMAND"
+          elif [[ "$PACKAGE_MANAGER" == "bun" ]]; then bun install --frozen-lockfile
+          else npm ci
+          fi
+
+      - if: inputs.lint-command != ''
+        name: Lint
+        env:
+          COMMAND: ${{ inputs.lint-command }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - name: Test
+        env:
+          COMMAND: ${{ inputs.test-command }}
+          PACKAGE_DIRECTORY: ${{ inputs.package-directory }}
+          PACKAGE_MANAGER: ${{ inputs.package-manager }}
+        shell: bash
+        run: |
+          if [[ -n "$COMMAND" ]]; then bash -euo pipefail -c "$COMMAND"
+          elif [[ "$PACKAGE_MANAGER" == "bun" ]]; then bun run --cwd "$PACKAGE_DIRECTORY" test
+          else npm test --workspace="$PACKAGE_DIRECTORY"
+          fi
+
+      - if: inputs.typecheck-command != ''
+        name: Typecheck
+        env:
+          COMMAND: ${{ inputs.typecheck-command }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - if: inputs.build-command != ''
+        name: Build
+        env:
+          COMMAND: ${{ inputs.build-command }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - run: npm install -g npm@latest
+
+      - id: registry
+        name: Check whether the version is already published
+        working-directory: ${{ inputs.package-directory }}
+        shell: bash
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.registry.outputs.published != 'true' && inputs.prepare-command != ''
+        name: Prepare package
+        env:
+          COMMAND: ${{ inputs.prepare-command }}
+        run: bash -euo pipefail -c "$COMMAND"
+
+      - if: steps.registry.outputs.published != 'true'
+        name: Publish
+        working-directory: ${{ inputs.package-directory }}
+        run: npm publish --access public --provenance
