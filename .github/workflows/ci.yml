@@ -1,8 +1,5 @@
 name: CI
 
-# Runs on every push/PR -- vehicle previously had no pre-merge CI at all,
-# only publish.yml's tag-triggered per-package test+typecheck.
-
 on:
   push:
     branches: [main]
@@ -10,7 +7,11 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
