@@ -27,7 +27,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { VehicleFailure, VehicleFailureCategory, VehicleInvocationOptions, VehiclePrincipal } from "@danypops/vehicle-core";
-import { VehicleError } from "@danypops/vehicle-core";
+import { isVehicleError } from "@danypops/vehicle-core";
 import { errorResponse, jsonResponse, requireBearerToken } from "./http.js";
 import type { Logger } from "./logging.js";
 import type { VehicleRegistry } from "./vehicle-registry.js";
@@ -88,7 +88,7 @@ function statusForCategory(category: VehicleFailureCategory): number {
 }
 
 function toFailurePayload(error: unknown): VehicleFailure {
-	if (error instanceof VehicleError) return error.toFailure();
+	if (isVehicleError(error)) return error.toFailure();
 	return { code: "internal", category: "internal", message: "internal error", retryable: false };
 }
 
@@ -100,11 +100,12 @@ function toFailurePayload(error: unknown): VehicleFailure {
  * underlying error/stack this function preserves.
  */
 function logInvokeFailure(logger: Logger, name: string, version: number, operationId: string, error: unknown): void {
-	const cause = error instanceof VehicleError ? error.cause : undefined;
+	const vehicleError = isVehicleError(error) ? error : undefined;
+	const cause = vehicleError?.cause;
 	logger.error(`vehicle invoke failed: ${name}@${version}`, {
 		operationId,
-		code: error instanceof VehicleError ? error.code : undefined,
-		category: error instanceof VehicleError ? error.category : undefined,
+		code: vehicleError?.code,
+		category: vehicleError?.category,
 		message: error instanceof Error ? error.message : String(error),
 		cause: cause instanceof Error ? (cause.stack ?? cause.message) : cause !== undefined ? String(cause) : undefined,
 	});

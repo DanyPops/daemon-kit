@@ -1,5 +1,7 @@
 import type { JsonValue, VehicleSchemaIssue } from "./vehicle-contract.js";
 
+const VEHICLE_ERROR_BRAND = Symbol.for("@danypops/vehicle-core/VehicleError");
+
 export type VehicleFailureCategory =
 	| "validation"
 	| "not_found"
@@ -92,7 +94,7 @@ export function defineErrorMapping(
 		try {
 			return await run();
 		} catch (error) {
-			if (error instanceof VehicleError) throw error;
+			if (isVehicleError(error)) throw error;
 			const rule = rules.find((candidate) =>
 				"errorClass" in candidate ? error instanceof candidate.errorClass : candidate.matches(error),
 			);
@@ -122,6 +124,7 @@ export class VehicleError extends Error {
 		options: VehicleErrorOptions,
 	) {
 		super(message, options.cause === undefined ? undefined : { cause: options.cause });
+		Object.defineProperty(this, VEHICLE_ERROR_BRAND, { value: true });
 		this.name = "VehicleError";
 		this.category = options.category;
 		this.retryable = options.retryable ?? false;
@@ -146,6 +149,11 @@ export class VehicleError extends Error {
 			...(causeMessage === undefined ? {} : { causeMessage }),
 		};
 	}
+}
+
+/** Recognizes VehicleError instances across duplicated package installations in one process. */
+export function isVehicleError(value: unknown): value is VehicleError {
+	return value instanceof Error && Reflect.get(value, VEHICLE_ERROR_BRAND) === true;
 }
 
 const MAX_CAUSE_MESSAGE_LENGTH = 500;

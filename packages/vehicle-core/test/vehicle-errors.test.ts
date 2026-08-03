@@ -59,6 +59,12 @@ describe("defineErrorMapping", () => {
 		await expect(mapError(() => Promise.reject(original))).rejects.toBe(original);
 	});
 
+	it("passes a VehicleError from another installed package copy through unchanged", async () => {
+		const foreign = new Error("foreign mapped failure");
+		Object.defineProperty(foreign, Symbol.for("@danypops/vehicle-core/VehicleError"), { value: true });
+		await expect(mapError(() => Promise.reject(foreign))).rejects.toBe(foreign);
+	});
+
 	it("maps a matching error class while preserving its message", async () => {
 		const failure = await mapError(() => Promise.reject(new MissingWidgetError("widget 42 is missing"))).catch((error: unknown) =>
 			(error as VehicleError).toFailure(),

@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
 	bindVehicleOperation,
 	defineVehicleEvent,
@@ -349,6 +349,17 @@ describe("VehicleRegistry", () => {
 			expect((error as VehicleError).toFailure().message).not.toContain("secret");
 			expect((error as VehicleError).toFailure().causeMessage).toBeUndefined();
 		}
+	});
+
+	it("preserves a mapped VehicleError created by another installed vehicle-core copy", async () => {
+		const foreign = Object.assign(new Error("backend missing"), { code: "operation-rejected", category: "not_found" });
+		Object.defineProperty(foreign, Symbol.for("@danypops/vehicle-core/VehicleError"), { value: true });
+		const registry = registryWith(
+			echoBinding(() => async () => {
+				throw foreign;
+			}),
+		);
+		await expect(registry.invoke("test.echo", 1, { value: "hello" }, { permissions: ["test:echo"] })).rejects.toBe(foreign);
 	});
 
 	it("once setExposeHandlerFailureDetails(true) is called, an unexpected handler failure's real message reaches the wire-safe failure", async () => {

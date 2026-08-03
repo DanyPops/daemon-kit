@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import {
 	createStaticVehicleJobWakeLog,
+	isVehicleError,
 	resolveVehicleJobTerminationReason,
 	selectVehicleJobsForEviction,
 	VehicleError,
@@ -101,7 +102,7 @@ function clampBudget(requested: VehicleJobWakeBudget, ceiling: VehicleJobWakeBud
 }
 
 function toFailure(error: unknown): VehicleFailure {
-	if (error instanceof VehicleError) return error.toFailure();
+	if (isVehicleError(error)) return error.toFailure();
 	return { code: "internal", category: "internal", message: error instanceof Error ? error.message : String(error), retryable: false };
 }
 

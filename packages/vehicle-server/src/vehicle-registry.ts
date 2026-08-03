@@ -24,6 +24,7 @@ import {
 	DEFAULT_APPROVAL_TIMEOUT_MS,
 	defineVehicleOperation,
 	defineVehicleSchema,
+	isVehicleError,
 	VehicleError,
 	vehicleApprovalRequestedEvent,
 	vehicleApprovalResolvedEvent,
@@ -273,9 +274,7 @@ export interface VehiclePackageManifestIdentity extends Omit<VehicleManifestIden
 	readonly version?: never;
 }
 
-export type VehicleRegistryIdentity =
-	| (VehicleManifestIdentity & { readonly packageJsonUrl?: never })
-	| VehiclePackageManifestIdentity;
+export type VehicleRegistryIdentity = (VehicleManifestIdentity & { readonly packageJsonUrl?: never }) | VehiclePackageManifestIdentity;
 
 function resolveManifestIdentity(identity: VehicleRegistryIdentity): VehicleManifestIdentity {
 	if (identity.packageJsonUrl !== undefined) {
@@ -712,7 +711,7 @@ export class VehicleRegistry {
 				enforcePayloadSize(candidate, registration.descriptor.limits.maxRequestBytes, "request", key, operationId);
 				return await registration.invoke(candidate, context);
 			} catch (error) {
-				if (error instanceof VehicleError) throw error;
+				if (isVehicleError(error)) throw error;
 				if (signal.aborted) throw abortError(signal, deadline, operationId);
 				throw new VehicleError(
 					"handler-failed",
@@ -738,7 +737,7 @@ export class VehicleRegistry {
 			try {
 				return this.executionPolicy ? await this.executionPolicy.execute(request, invoke) : await invoke(parsedInput);
 			} catch (error) {
-				if (error instanceof VehicleError) throw error;
+				if (isVehicleError(error)) throw error;
 				throw new VehicleError(
 					"policy-failed",
 					unexpectedFailureMessage(`${key} execution policy failed`, error, this.exposeHandlerFailureDetails),
@@ -818,7 +817,7 @@ export class VehicleRegistry {
 				try {
 					output = await registration.invoke(parsedInput, context);
 				} catch (error) {
-					if (error instanceof VehicleError) throw error;
+					if (isVehicleError(error)) throw error;
 					if (context.signal.aborted) throw abortError(context.signal, context.deadline, operationId);
 					throw new VehicleError(
 						"handler-failed",
