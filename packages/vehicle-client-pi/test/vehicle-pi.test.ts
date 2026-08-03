@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import type { VehicleClient, VehicleInvocationOptions, VehicleManifest, VehicleManifestOperation } from "@danypops/vehicle-core";
+import type {
+	AtomicJsonFsAdapter,
+	VehicleClient,
+	VehicleInvocationOptions,
+	VehicleManifest,
+	VehicleManifestOperation,
+} from "@danypops/vehicle-core";
 import { VehicleError } from "@danypops/vehicle-core";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Check } from "typebox/value";
@@ -55,10 +61,13 @@ class FakeClient implements VehicleClient {
 	closed = false;
 	result: unknown = { ok: true };
 	error?: unknown;
+	/** Simulates the daemon being unreachable: manifest() rejects with this instead of resolving `value`. */
+	manifestError?: unknown;
 
 	constructor(public value: VehicleManifest) {}
 
 	manifest(): Promise<VehicleManifest> {
+		if (this.manifestError) return Promise.reject(this.manifestError);
 		return Promise.resolve(this.value);
 	}
 
@@ -104,6 +113,37 @@ function fakePi(existingNames: string[] = []) {
 		},
 	} as unknown as ExtensionAPI;
 	return { pi, tools, handlers, activeTools: () => [...active], setCallCount: () => setCalls };
+}
+
+/** An in-memory AtomicJsonFsAdapter -- no real disk I/O needed to prove manifestCache's read/write/fall-back behavior. */
+function fakeFs(): AtomicJsonFsAdapter {
+	const files = new Map<string, string>();
+	return {
+		writeFile(path, data) {
+			files.set(path, data);
+			return Promise.resolve();
+		},
+		rename(oldPath, newPath) {
+			const data = files.get(oldPath);
+			if (data === undefined) return Promise.reject(new Error(`ENOENT: ${oldPath}`));
+			files.delete(oldPath);
+			files.set(newPath, data);
+			return Promise.resolve();
+		},
+		unlink(path) {
+			files.delete(path);
+			return Promise.resolve();
+		},
+		readFile(path) {
+			const data = files.get(path);
+			if (data === undefined) {
+				const error = new Error(`ENOENT: ${path}`) as NodeJS.ErrnoException;
+				error.code = "ENOENT";
+				return Promise.reject(error);
+			}
+			return Promise.resolve(data);
+		},
+	};
 }
 
 async function execute(
@@ -978,6 +1018,81 @@ describe("refreshVehicleToolAvailability", () => {
 
 		expect(activeTools()).toEqual([]);
 		expect(refreshed.tools[0]?.permissionsSatisfied).toBe(false);
+	});
+});
+
+describe("registerVehicleTools / refreshVehicleToolAvailability: manifestCache survives a restart/reload while the daemon is unreachable", () => {
+	it("without manifestCache configured, a factory-time manifest() failure still throws -- zero behavior change for every existing caller", async () => {
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		client.manifestError = new Error("daemon unreachable");
+		const { pi } = fakePi();
+		await expect(registerVehicleTools(pi, client)).rejects.toThrow("daemon unreachable");
+	});
+
+	it("a successful registration persists the manifest to the cache file", async () => {
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		const { pi } = fakePi();
+		const fs = fakeFs();
+		const registered = await registerVehicleTools(pi, client, { manifestCache: { filePath: "/cache/vehicle.json", fs } });
+		expect(registered.stale).toBe(false);
+		expect(await fs.readFile("/cache/vehicle.json")).toContain("issues.search");
+	});
+
+	/** The exact production scenario: a prior successful session persisted the cache, then the process restarted/reloaded while the daemon happened to be down (a crash-loop, a slow restart) -- transcript replay of a historical tool call still needs a real renderer, not a thrown registration error. */
+	it("falls back to a previously-cached manifest when the live fetch fails, registering tools and their renderers anyway", async () => {
+		const fs = fakeFs();
+		const warmClient = new FakeClient(manifest([operation("issues.search")]));
+		await registerVehicleTools(fakePi().pi, warmClient, { manifestCache: { filePath: "/cache/vehicle.json", fs } });
+
+		const coldClient = new FakeClient(manifest([operation("issues.search")]));
+		coldClient.manifestError = new Error("daemon unreachable");
+		const { pi, tools } = fakePi();
+		const registered = await registerVehicleTools(pi, coldClient, { manifestCache: { filePath: "/cache/vehicle.json", fs } });
+
+		expect(registered.stale).toBe(true);
+		expect(registered.tools.map((tool) => tool.operationName)).toEqual(["issues.search"]);
+		expect(tools).toHaveLength(1); // the renderer-carrying Pi tool really got registered, not skipped
+	});
+
+	it("still rethrows the original failure when manifestCache is configured but nothing has ever been cached yet", async () => {
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		client.manifestError = new Error("daemon unreachable");
+		const { pi } = fakePi();
+		await expect(
+			registerVehicleTools(pi, client, { manifestCache: { filePath: "/cache/never-written.json", fs: fakeFs() } }),
+		).rejects.toThrow("daemon unreachable");
+	});
+
+	it("a fallback-registered tool still activates once refreshVehicleToolAvailability succeeds against a live daemon, matching the session_start reconciliation every consumer already wires up", async () => {
+		const fs = fakeFs();
+		const warmClient = new FakeClient(manifest([operation("issues.search")]));
+		await registerVehicleTools(fakePi().pi, warmClient, { manifestCache: { filePath: "/cache/vehicle.json", fs } });
+
+		const coldClient = new FakeClient(manifest([operation("issues.search")]));
+		coldClient.manifestError = new Error("daemon unreachable");
+		const { pi, activeTools } = fakePi();
+		const registered = await registerVehicleTools(pi, coldClient, { manifestCache: { filePath: "/cache/vehicle.json", fs } });
+		expect(activeTools()).toEqual(["issues_search"]); // registered active immediately: the cached descriptor was already available:true
+
+		// The daemon comes back -- a live refresh (e.g. pi-status-refresh's own session_start hook) now succeeds.
+		coldClient.manifestError = undefined;
+		const refreshed = await refreshVehicleToolAvailability(pi, coldClient, registered, {
+			manifestCache: { filePath: "/cache/vehicle.json", fs },
+		});
+		expect(refreshed.stale).toBe(false);
+		expect(activeTools()).toEqual(["issues_search"]);
+	});
+
+	it("a failed refresh keeps throwing even with manifestCache configured -- refresh's whole point is verifying a real live daemon, never silently reusing stale data as if it were fresh", async () => {
+		const fs = fakeFs();
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		const { pi } = fakePi();
+		const registered = await registerVehicleTools(pi, client, { manifestCache: { filePath: "/cache/vehicle.json", fs } });
+
+		client.manifestError = new Error("daemon unreachable");
+		await expect(
+			refreshVehicleToolAvailability(pi, client, registered, { manifestCache: { filePath: "/cache/vehicle.json", fs } }),
+		).rejects.toThrow("daemon unreachable");
 	});
 });
 

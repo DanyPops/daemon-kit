@@ -247,6 +247,39 @@ describe("Vehicle HTTP provider + RemoteVehicleClient: local/HTTP parity", () =>
 		await client.close();
 		await expect(client.manifest()).rejects.toThrow("closed");
 	});
+
+	it("the server survives a client hard-disconnecting mid-stream without ever calling /vehicle/cancel (regression: an unguarded controller.enqueue() after a runtime-closed stream used to crash the whole process)", async () => {
+		let unhandledRejections = 0;
+		const onUnhandledRejection = () => {
+			unhandledRejections++;
+		};
+		process.on("unhandledRejection", onUnhandledRejection);
+		try {
+			const { baseUrl, token } = startTestServer();
+			// A raw fetch, not RemoteVehicleClient -- this deliberately skips the client's own
+			// cooperative /vehicle/cancel notification, reproducing a hard disconnect (client
+			// crash, network drop, deadline) the server never gets a heads-up about.
+			const disconnect = new AbortController();
+			const response = await fetch(`${baseUrl}/vehicle/invoke`, {
+				method: "POST",
+				signal: disconnect.signal,
+				headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "text/event-stream" },
+				body: JSON.stringify({ name: "test.never", version: 1, input: { value: "x" } }),
+			});
+			expect(response.status).toBe(200);
+			// Read nothing, just establish the stream is open, then hard-disconnect.
+			response.body?.getReader();
+			disconnect.abort();
+			// Give the server's stream cancel()/registry.invoke() rejection a moment to run;
+			// the real proof is that the process is still healthy enough to answer this at all.
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			const stillAlive = await fetch(`${baseUrl}/vehicle/manifest`, { headers: { authorization: `Bearer ${token}` } });
+			expect(stillAlive.status).toBe(200);
+			expect(unhandledRejections).toBe(0);
+		} finally {
+			process.off("unhandledRejection", onUnhandledRejection);
+		}
+	});
 });
 
 describe("RemoteVehicleClient: manifest() TTL caching", () => {

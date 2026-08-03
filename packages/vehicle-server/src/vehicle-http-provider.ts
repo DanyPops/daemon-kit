@@ -178,7 +178,9 @@ async function handleInvoke(
 	const wantsStream = (request.headers.get("accept") ?? "").includes("text/event-stream");
 
 	if (wantsStream) {
-		return streamInvoke(registry, body.name, body.version, body.input, invocationOptions, logger, () => inFlight.delete(operationId));
+		return streamInvoke(registry, body.name, body.version, body.input, invocationOptions, controller, logger, () =>
+			inFlight.delete(operationId),
+		);
 	}
 
 	try {
@@ -199,29 +201,63 @@ function streamInvoke(
 	version: number,
 	input: unknown,
 	invocationOptions: VehicleInvocationOptions,
+	abortController: AbortController,
 	logger: Logger,
 	cleanup: () => void,
 ): Response {
 	const encoder = new TextEncoder();
+	// A client can disconnect (deadline, its own abort, a dropped connection) at any point
+	// while registry.invoke() is still running -- the runtime then closes this stream's
+	// controller on its own, out from under us. Without tracking that, the eventual
+	// registry.invoke() settlement (progress, result, or error) calls enqueue()/close() on an
+	// already-closed controller and throws, as an unhandled rejection with no .catch --
+	// which crashed the whole process (confirmed live against pipes.service).
+	let closed = false;
 	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {
+			const safeEnqueue = (chunk: Uint8Array): void => {
+				if (closed) return;
+				try {
+					controller.enqueue(chunk);
+				} catch {
+					// Closed by the runtime between our check and this call (client disconnected concurrently) -- same as cancel().
+					closed = true;
+				}
+			};
+			const safeClose = (): void => {
+				if (closed) return;
+				closed = true;
+				try {
+					controller.close();
+				} catch {
+					// Already closed by the runtime -- nothing left to do.
+				}
+			};
 			const withProgress: VehicleInvocationOptions = {
 				...invocationOptions,
-				onProgress: (progress) => controller.enqueue(encoder.encode(`event: progress\ndata: ${JSON.stringify(progress)}\n\n`)),
+				onProgress: (progress) => safeEnqueue(encoder.encode(`event: progress\ndata: ${JSON.stringify(progress)}\n\n`)),
 			};
 			registry.invoke(name, version, input, withProgress).then(
 				(output) => {
-					controller.enqueue(encoder.encode(`event: result\ndata: ${JSON.stringify({ output })}\n\n`));
-					controller.close();
+					safeEnqueue(encoder.encode(`event: result\ndata: ${JSON.stringify({ output })}\n\n`));
+					safeClose();
 					cleanup();
 				},
 				(error: unknown) => {
 					logInvokeFailure(logger, name, version, invocationOptions.operationId ?? "unknown", error);
-					controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify(toFailurePayload(error))}\n\n`));
-					controller.close();
+					safeEnqueue(encoder.encode(`event: error\ndata: ${JSON.stringify(toFailurePayload(error))}\n\n`));
+					safeClose();
 					cleanup();
 				},
 			);
+		},
+		// Fires when the client disconnects (deadline elapsed, its own AbortController, a dropped
+		// connection) -- abort the still-running operation instead of letting it run to completion
+		// for a caller no longer listening, and stop any further writes from this side too.
+		cancel() {
+			closed = true;
+			abortController.abort();
+			cleanup();
 		},
 	});
 	return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });

@@ -1,4 +1,5 @@
 import type {
+	AtomicJsonFsAdapter,
 	VehicleClient,
 	VehicleContentBlock,
 	VehicleEffect,
@@ -9,7 +10,7 @@ import type {
 	VehicleOperationDescriptor,
 	VehiclePrincipal,
 } from "@danypops/vehicle-core";
-import { extractVehicleContent, VehicleError } from "@danypops/vehicle-core";
+import { createAtomicJsonWriter, extractVehicleContent, VehicleError } from "@danypops/vehicle-core";
 import type {
 	AgentToolUpdateCallback,
 	ExtensionAPI,
@@ -157,6 +158,20 @@ export interface RegisterVehicleToolsOptions {
 	 * option existed, a zero-behavior-change default.
 	 */
 	readonly safetyPolicyStore?: VehicleSafetyPolicyStore;
+	/**
+	 * Survives a restart/reload while the daemon is unreachable: a successful
+	 * manifest() fetch is persisted here (atomic write, best-effort -- a failed
+	 * write never fails registration); a failed factory-time fetch falls back
+	 * to reading this file instead of throwing, so tool definitions and their
+	 * renderers still exist for transcript replay of a historical tool call
+	 * even while offline. Live availability (available/permissions) still only
+	 * ever comes from a real manifest -- see RegisteredPiVehicle.stale and
+	 * refreshVehicleToolAvailability, which callers should still wire to
+	 * session_start (e.g. via registerVehicleStatusRefresh) to reconcile once
+	 * the daemon is reachable again. Omitted (the default) preserves today's
+	 * behavior: a factory-time manifest() failure throws.
+	 */
+	readonly manifestCache?: { readonly filePath: string; readonly fs: AtomicJsonFsAdapter };
 }
 
 export interface RegisteredPiVehicleTool {
@@ -175,6 +190,8 @@ export interface RegisteredPiVehicleTool {
 export interface RegisteredPiVehicle {
 	readonly manifest: VehicleManifest;
 	readonly tools: readonly RegisteredPiVehicleTool[];
+	/** True when `manifest` came from options.manifestCache's sidecar file rather than a live fetch -- the daemon was unreachable at registration/refresh time. A caller that cares (e.g. to show a reconnecting indicator) can check this; every existing caller ignoring it sees no behavior change. */
+	readonly stale: boolean;
 }
 
 export class PiVehicleInvocationError extends Error {
@@ -587,12 +604,57 @@ function createTool(
 	};
 }
 
+/**
+ * A live client.manifest() call is the source of truth whenever it succeeds --
+ * on success, best-effort persists it to options.manifestCache for next time
+ * (a failed cache write never fails registration). On failure, falls back to
+ * the cached manifest if one exists (marking the result stale); with no cache
+ * configured, or nothing cached yet, rethrows the original failure unchanged --
+ * identical to registerVehicleTools' behavior before manifestCache existed.
+ */
+async function resolveManifestForRegistration(
+	client: VehicleClient,
+	manifestCache: RegisterVehicleToolsOptions["manifestCache"],
+): Promise<{ manifest: VehicleManifest; stale: boolean }> {
+	try {
+		const manifest = await client.manifest();
+		if (manifestCache) {
+			try {
+				await createAtomicJsonWriter({ fs: manifestCache.fs }).write(manifestCache.filePath, manifest);
+			} catch {
+				// Best-effort: a failed cache write must never fail a successful registration/refresh.
+			}
+		}
+		return { manifest, stale: false };
+	} catch (error) {
+		if (!manifestCache) throw error;
+		let cached: unknown;
+		try {
+			cached = await createAtomicJsonWriter({ fs: manifestCache.fs }).read(manifestCache.filePath);
+		} catch {
+			cached = undefined;
+		}
+		if (cached === undefined) throw error;
+		return { manifest: cached as VehicleManifest, stale: true };
+	}
+}
+
+/** Best-effort cache refresh after a real live fetch -- never used to mask a failed live fetch (refreshVehicleToolAvailability's whole point is verifying against the daemon, so it keeps throwing on failure, matching its behavior before manifestCache existed; pi-status-refresh's own safeRefresh already tolerates that). */
+async function persistManifestCache(manifestCache: RegisterVehicleToolsOptions["manifestCache"], manifest: VehicleManifest): Promise<void> {
+	if (!manifestCache) return;
+	try {
+		await createAtomicJsonWriter({ fs: manifestCache.fs }).write(manifestCache.filePath, manifest);
+	} catch {
+		// Best-effort: a failed cache write must never fail a successful refresh.
+	}
+}
+
 export async function registerVehicleTools(
 	pi: ExtensionAPI,
 	client: VehicleClient,
 	options: RegisterVehicleToolsOptions = {},
 ): Promise<RegisteredPiVehicle> {
-	const manifest = await client.manifest();
+	const { manifest, stale } = await resolveManifestForRegistration(client, options.manifestCache);
 	const projected = projectedNames(manifest, options.toolName ?? defaultToolName);
 	const runtime = tryExtensionRuntimeAction(() => pi.getAllTools());
 	assertNamesAvailable(projected, runtime.status === "ready" ? runtime.value.map((tool) => tool.name) : []);
@@ -637,7 +699,7 @@ export async function registerVehicleTools(
 	}
 	contributeToSafetyRegistry(manifest, tools);
 
-	return { manifest, tools };
+	return { manifest, tools, stale };
 }
 
 /**
@@ -661,6 +723,7 @@ export async function refreshVehicleToolAvailability(
 	options: RegisterVehicleToolsOptions = {},
 ): Promise<RegisteredPiVehicle> {
 	const manifest = await client.manifest();
+	await persistManifestCache(options.manifestCache, manifest);
 	const projected = projectedNames(manifest, options.toolName ?? defaultToolName);
 	const known = new Set(registered.tools.map((tool) => operationKey({ name: tool.operationName, version: tool.operationVersion })));
 
@@ -695,5 +758,5 @@ export async function refreshVehicleToolAvailability(
 	);
 	contributeToSafetyRegistry(manifest, tools);
 
-	return { manifest, tools };
+	return { manifest, tools, stale: false };
 }
