@@ -28,7 +28,7 @@
     },
     "packages/armada": {
       "name": "@danypops/armada",
-      "version": "0.1.1",
+      "version": "0.2.0",
       "bin": {
         "armada": "dist/cli.js",
       },
@@ -55,7 +55,7 @@
     },
     "packages/vehicle-client-pi": {
       "name": "@danypops/vehicle-client-pi",
-      "version": "0.15.1",
+      "version": "0.16.0",
       "dependencies": {
         "@danypops/vehicle-client": "workspace:*",
         "@danypops/vehicle-core": "workspace:*",
@@ -63,6 +63,7 @@
         "malevich-tui-components": "^0.19.0",
       },
       "devDependencies": {
+        "@danypops/pi-extension-harness": "^0.4.0",
         "@types/node": "^22.0.0",
         "typescript": "^5.9.2",
       },
@@ -99,7 +100,7 @@
     },
     "packages/vehicle-server": {
       "name": "@danypops/vehicle-server",
-      "version": "0.13.0",
+      "version": "0.15.0",
       "dependencies": {
         "@danypops/armada": "workspace:*",
         "@danypops/vehicle-core": "workspace:*",
@@ -186,6 +187,8 @@
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.6", "", { "os": "win32", "cpu": "x64" }, "sha512-WN05KwXnTO/2J45RQPvzZMXf7tZUIofHoR35xIPfCo7pQ2RFidxI8sfb5mGsaTxdMmEOzHzOPRCdA5/fCpc7xQ=="],
 
     "@danypops/armada": ["@danypops/armada@workspace:packages/armada"],
+
+    "@danypops/pi-extension-harness": ["@danypops/pi-extension-harness@0.4.0", "", { "dependencies": { "jiti": "^2.7.0" }, "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*", "typebox": "*" } }, "sha512-BzLMi3DH7IelnYMx66rnjb3cgW++xwxmpnlxcZZuaz6LvY++85J8C+qSAG9PEuMeE/mhoItBdNCEWAZASpqeig=="],
 
     "@danypops/vehicle-client": ["@danypops/vehicle-client@workspace:packages/vehicle-client"],
 

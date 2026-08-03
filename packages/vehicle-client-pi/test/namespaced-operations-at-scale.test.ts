@@ -16,6 +16,7 @@
  * action words (`notes.create` vs `tasks.create`).
  */
 import { describe, expect, it } from "bun:test";
+import { createExtensionHarness } from "@danypops/pi-extension-harness";
 import type {
 	VehicleClient,
 	VehicleEffect,
@@ -23,7 +24,6 @@ import type {
 	VehicleManifest,
 	VehicleManifestOperation,
 } from "@danypops/vehicle-core";
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { registerVehicleTools } from "../src/vehicle-pi.ts";
 
 const limits = { defaultTimeoutMs: 1_000, maxTimeoutMs: 5_000, maxRequestBytes: 1_024, maxResponseBytes: 1_024 };
@@ -115,26 +115,10 @@ class FakeClient implements VehicleClient {
 	}
 }
 
-function fakePi() {
-	const tools: ToolDefinition[] = [];
-	let active: string[] = [];
-	const pi = {
-		registerTool(tool: ToolDefinition) {
-			tools.push(tool);
-			active.push(tool.name);
-		},
-		getAllTools() {
-			return [];
-		},
-		getActiveTools() {
-			return [...active];
-		},
-		setActiveTools(names: string[]) {
-			active = [...names];
-		},
-		on() {},
-	} as unknown as ExtensionAPI;
-	return { pi, tools };
+async function registerViaHarness(client: VehicleClient) {
+	const harness = createExtensionHarness(() => {});
+	const registered = await registerVehicleTools(harness.api, client);
+	return { registered, tools: [...harness.tools.values()].map((t) => t.definition) };
 }
 
 describe("namespaced operations at mega-tool-replacing scale", () => {
@@ -143,9 +127,7 @@ describe("namespaced operations at mega-tool-replacing scale", () => {
 		expect(operations).toHaveLength(38);
 
 		const client = new FakeClient({ name: "papyrus-tasks", version: "1.0.0", description: "Task domain.", operations });
-		const { pi, tools } = fakePi();
-
-		const registered = await registerVehicleTools(pi, client);
+		const { registered, tools } = await registerViaHarness(client);
 
 		expect(registered.tools).toHaveLength(38);
 		const names = registered.tools.map((tool) => tool.toolName);
@@ -172,9 +154,7 @@ describe("namespaced operations at mega-tool-replacing scale", () => {
 			description: "Papyrus.",
 			operations: [...taskOps, ...noteOps],
 		});
-		const { pi } = fakePi();
-
-		const registered = await registerVehicleTools(pi, client);
+		const { registered } = await registerViaHarness(client);
 
 		expect(registered.tools).toHaveLength(38 + 7);
 		const names = registered.tools.map((tool) => tool.toolName);

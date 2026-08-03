@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { vehicleWatchTopic, WatchRegistry } from "@danypops/vehicle-core";
 import { RemoteVehicleClient } from "@danypops/vehicle-client/http";
+import { vehicleWatchTopic, WatchRegistry } from "@danypops/vehicle-core";
+import { VehicleRegistry } from "@danypops/vehicle-server";
 import { createVehicleHttpApp } from "@danypops/vehicle-server/http";
 import { PushChannel } from "@danypops/vehicle-server/push-channel";
 import { createVehicleWatchOperations } from "@danypops/vehicle-server/watchers";
-import { VehicleRegistry } from "@danypops/vehicle-server";
 import { startWatchedRefresh, type VehicleWatchTarget } from "../src/vehicle-watched-refresh.ts";
 
 const LIMITS = { defaultTimeoutMs: 1_000, maxTimeoutMs: 5_000, maxRequestBytes: 1_024, maxResponseBytes: 1_024 } as const;

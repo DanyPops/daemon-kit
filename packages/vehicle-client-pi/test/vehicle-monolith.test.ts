@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { resolve } from "node:path";
+import { createExtensionHarness } from "@danypops/pi-extension-harness";
 import { bindVehicleOperation, defineVehicleOperation, defineVehicleSchema } from "@danypops/vehicle-core";
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { verifyLoadableUnderPi } from "../src/pi-load-harness.ts";
 import { createMonolithVehicle } from "../src/vehicle-monolith.ts";
 
@@ -35,53 +35,35 @@ function registerEcho(registry: import("@danypops/vehicle-server").VehicleRegist
 	);
 }
 
-function fakePi() {
-	const tools: ToolDefinition[] = [];
-	const pi = {
-		registerTool(tool: ToolDefinition) {
-			tools.push(tool);
-		},
-		getAllTools() {
-			return [];
-		},
-		getActiveTools() {
-			return [];
-		},
-		setActiveTools() {},
-		on() {},
-	} as unknown as ExtensionAPI;
-	return { pi, tools };
+async function createViaHarness(info: Parameters<typeof createMonolithVehicle>[1], register: Parameters<typeof createMonolithVehicle>[2]) {
+	const harness = createExtensionHarness(() => {});
+	const monolith = await createMonolithVehicle(harness.api, info, register);
+	return { monolith, tools: [...harness.tools.values()].map((t) => t.definition) };
 }
 
 describe("createMonolithVehicle", () => {
 	it("bundles a fresh VehicleRegistry + LocalVehicleClient + registerVehicleTools into one call, no network involved", async () => {
-		const { pi, tools } = fakePi();
-		const monolith = await createMonolithVehicle(pi, { name: "echo-vehicle", version: "1.0.0", description: "test" }, registerEcho);
+		const { monolith, tools } = await createViaHarness({ name: "echo-vehicle", version: "1.0.0", description: "test" }, registerEcho);
 
 		expect(monolith.registry.manifest().operations.map((op) => op.name)).toEqual(["echo.say"]);
 		expect(tools).toHaveLength(1);
 		expect(tools[0]!.name).toBe("echo_say");
 
-		const result = await tools[0]!.execute(
-			"call-1",
-			{ text: "hello" },
-			undefined,
-			undefined,
-			{ sessionManager: { getSessionId: () => "session-1" }, hasUI: false } as never,
-		);
+		const result = await tools[0]!.execute("call-1", { text: "hello" }, undefined, undefined, {
+			sessionManager: { getSessionId: () => "session-1" },
+			hasUI: false,
+		} as never);
 		expect(result.content[0]).toMatchObject({ text: expect.stringContaining("echo: hello") });
 	});
 
 	it("the returned client is the exact LocalVehicleClient instance calling the same registry directly", async () => {
-		const { pi } = fakePi();
-		const monolith = await createMonolithVehicle(pi, { name: "echo-vehicle", version: "1.0.0", description: "test" }, registerEcho);
+		const { monolith } = await createViaHarness({ name: "echo-vehicle", version: "1.0.0", description: "test" }, registerEcho);
 		const output = await monolith.client.invoke<{ text: string }>("echo.say", 1, { text: "direct" });
 		expect(output.text).toBe("echo: direct");
 	});
 
 	it("register receives the real registry before any tool projection happens -- registering nothing yields zero tools, not an error", async () => {
-		const { pi, tools } = fakePi();
-		await createMonolithVehicle(pi, { name: "empty-vehicle", version: "1.0.0", description: "test" }, () => {});
+		const { tools } = await createViaHarness({ name: "empty-vehicle", version: "1.0.0", description: "test" }, () => {});
 		expect(tools).toHaveLength(0);
 	});
 

@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createExtensionHarness } from "@danypops/pi-extension-harness";
 import { createNodeAtomicJsonFsAdapter } from "@danypops/vehicle-server/atomic-json";
-import type { CustomEntry, ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { CustomEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { verifyLoadableUnderPi } from "../src/pi-load-harness.ts";
 import { createReloadSafeWidgetState, type SessionBranchReader } from "../src/vehicle-widget-state.ts";
 
@@ -18,14 +19,14 @@ afterEach(() => {
 	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function fakePi(): { pi: ExtensionAPI; appended: Array<{ customType: string; data: unknown }> } {
-	const appended: Array<{ customType: string; data: unknown }> = [];
-	const pi = {
-		appendEntry: (customType: string, data?: unknown) => {
-			appended.push({ customType, data });
+function fakePi() {
+	const harness = createExtensionHarness(() => {});
+	return {
+		pi: harness.api,
+		get appended() {
+			return harness.appendedEntries;
 		},
-	} as unknown as ExtensionAPI;
-	return { pi, appended };
+	};
 }
 
 function branchOf(entries: Array<{ customType: string; data: unknown }>): SessionBranchReader {

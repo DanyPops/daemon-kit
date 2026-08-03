@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { VehicleSafetyPolicyStore } from "../src/vehicle-safety.ts";
 import {
 	buildAllowedViewTableRows,
 	buildAllViewTableRows,
@@ -14,8 +15,11 @@ import {
 	toolNamespace,
 	type VehicleSafetyRow,
 } from "../src/vehicle-safety-command.ts";
-import { __resetVehicleSafetyRegistryForTests, type VehicleSafetyContribution, type VehicleSafetyContributor } from "../src/vehicle-safety-registry.ts";
-import { VehicleSafetyPolicyStore } from "../src/vehicle-safety.ts";
+import {
+	__resetVehicleSafetyRegistryForTests,
+	type VehicleSafetyContribution,
+	type VehicleSafetyContributor,
+} from "../src/vehicle-safety-registry.ts";
 
 beforeEach(() => {
 	__resetVehicleSafetyRegistryForTests();
@@ -153,7 +157,10 @@ describe("runVehicleSafetyCommand", () => {
 		const policyStore = await VehicleSafetyPolicyStore.restore();
 		const contributor: VehicleSafetyContributor = {
 			source: "papyrus",
-			resolve: () => ({ vehicleName: "papyrus", tools: [{ toolName: "issues_search", operationName: "issues.search", effect: "read", state: "allow" }] }),
+			resolve: () => ({
+				vehicleName: "papyrus",
+				tools: [{ toolName: "issues_search", operationName: "issues.search", effect: "read", state: "allow" }],
+			}),
 		};
 
 		await runVehicleSafetyCommand(ctx, { policyStore, contributors: () => [contributor] });
@@ -166,7 +173,10 @@ describe("runVehicleSafetyCommand", () => {
 		const policyStore = await VehicleSafetyPolicyStore.restore();
 		const contributor: VehicleSafetyContributor = {
 			source: "papyrus",
-			resolve: () => ({ vehicleName: "papyrus", tools: [{ toolName: "issues_search", operationName: "issues.search", effect: "read", state: "allow" }] }),
+			resolve: () => ({
+				vehicleName: "papyrus",
+				tools: [{ toolName: "issues_search", operationName: "issues.search", effect: "read", state: "allow" }],
+			}),
 		};
 
 		await runVehicleSafetyCommand(ctx, { policyStore, contributors: () => [contributor], showPanel: async () => undefined });
@@ -179,7 +189,10 @@ describe("runVehicleSafetyCommand", () => {
 		const policyStore = await VehicleSafetyPolicyStore.restore();
 		const contributor: VehicleSafetyContributor = {
 			source: "papyrus",
-			resolve: () => ({ vehicleName: "papyrus", tools: [{ toolName: "issues_search", operationName: "issues.search", effect: "read", state: "allow" }] }),
+			resolve: () => ({
+				vehicleName: "papyrus",
+				tools: [{ toolName: "issues_search", operationName: "issues.search", effect: "read", state: "allow" }],
+			}),
 		};
 		let panelCalls = 0;
 		const seenRowsPerCall: string[][] = [];
@@ -210,7 +223,10 @@ describe("runVehicleSafetyCommand", () => {
 		const policyStore = await VehicleSafetyPolicyStore.restore();
 		const contributor: VehicleSafetyContributor = {
 			source: "papyrus",
-			resolve: () => ({ vehicleName: "papyrus", tools: [{ toolName: "issues_search", operationName: "issues.search", effect: "read", state: "allow" }] }),
+			resolve: () => ({
+				vehicleName: "papyrus",
+				tools: [{ toolName: "issues_search", operationName: "issues.search", effect: "read", state: "allow" }],
+			}),
 		};
 		let panelCalls = 0;
 

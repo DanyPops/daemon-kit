@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { createExtensionHarness } from "@danypops/pi-extension-harness";
 import type {
 	AtomicJsonFsAdapter,
 	VehicleClient,
@@ -88,31 +89,28 @@ function manifest(operations: readonly VehicleManifestOperation[]): VehicleManif
 	return { name: "test-vehicle", version: "1.0.0", description: "Test Vehicle.", operations };
 }
 
+/**
+ * tools is a real, stably-referenced mutable array (not a getter) so every one of this file's
+ * `const { pi, tools } = fakePi()` destructures keeps seeing later pushes -- matching the
+ * pre-migration hand-rolled fake's own semantics exactly.
+ */
 function fakePi(existingNames: string[] = []) {
 	const tools: ToolDefinition[] = [];
-	const handlers = new Map<string, (...args: never[]) => unknown>();
-	let active = [...existingNames];
-	let setCalls = 0;
-	const pi = {
+	const harness = createExtensionHarness(() => {}, { existingTools: existingNames });
+	const pi: ExtensionAPI = {
+		...harness.api,
 		registerTool(tool: ToolDefinition) {
+			harness.api.registerTool(tool);
 			tools.push(tool);
-			active.push(tool.name);
 		},
-		getAllTools() {
-			return existingNames.map((name) => ({ name }));
-		},
-		getActiveTools() {
-			return [...active];
-		},
-		setActiveTools(names: string[]) {
-			setCalls++;
-			active = [...names];
-		},
-		on(name: string, handler: (...args: never[]) => unknown) {
-			handlers.set(name, handler);
-		},
-	} as unknown as ExtensionAPI;
-	return { pi, tools, handlers, activeTools: () => [...active], setCallCount: () => setCalls };
+	} as ExtensionAPI;
+	return {
+		pi,
+		tools,
+		activeTools: () => [...harness.activeTools],
+		setCallCount: () => harness.activeToolsHistory.length,
+		emit: harness.emit.bind(harness),
+	};
 }
 
 /** An in-memory AtomicJsonFsAdapter -- no real disk I/O needed to prove manifestCache's read/write/fall-back behavior. */
@@ -683,7 +681,7 @@ describe("registerVehicleTools", () => {
 			operationId: "remote-op",
 			cause: new Error("secret internal cause"),
 		});
-		const { pi, tools, handlers } = fakePi();
+		const { pi, tools, emit } = fakePi();
 		await registerVehicleTools(pi, client, { closeClientOnSessionShutdown: true });
 
 		try {
@@ -699,7 +697,7 @@ describe("registerVehicleTools", () => {
 			expect(String(error)).not.toContain("secret internal cause");
 		}
 
-		await handlers.get("session_shutdown")?.();
+		await emit("session_shutdown");
 		expect(client.closed).toBe(true);
 	});
 
