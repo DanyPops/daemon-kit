@@ -79,6 +79,14 @@ describe("defineErrorMapping", () => {
 		expect(failure).toMatchObject({ code: "backend-failed", category: "unavailable", message: "backend is offline" });
 	});
 
+	it("can replace an unmatched error's message at an unreviewed trust boundary", async () => {
+		const safeFallback = defineErrorMapping([], { fallbackCategory: "internal", fallbackMessage: "operation failed" });
+		const failure = await safeFallback(() => Promise.reject(new Error("credential=secret"))).catch(
+			(error: unknown) => (error as VehicleError).toFailure(),
+		);
+		expect(failure).toMatchObject({ category: "internal", message: "operation failed" });
+	});
+
 	it("supports predicate rules for status-carrying errors", async () => {
 		const byStatus = defineErrorMapping([
 			{

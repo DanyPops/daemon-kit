@@ -80,6 +80,7 @@ export type VehicleErrorMapping = VehicleErrorClassMapping | VehicleErrorPredica
 export interface DefineErrorMappingOptions {
 	readonly fallbackCategory?: VehicleFailureCategory;
 	readonly fallbackCode?: string;
+	readonly fallbackMessage?: string;
 }
 
 /** Maps reviewed domain errors into wire-safe Vehicle errors while preserving already-mapped failures. */
@@ -95,7 +96,8 @@ export function defineErrorMapping(
 			const rule = rules.find((candidate) =>
 				"errorClass" in candidate ? error instanceof candidate.errorClass : candidate.matches(error),
 			);
-			const message = error instanceof Error ? error.message : String(error);
+			const causeMessage = error instanceof Error ? error.message : String(error);
+			const message = rule === undefined && options.fallbackMessage !== undefined ? options.fallbackMessage : causeMessage;
 			throw new VehicleError(rule?.code ?? options.fallbackCode ?? "operation-rejected", message, {
 				category: rule?.category ?? options.fallbackCategory ?? "validation",
 				cause: error,
