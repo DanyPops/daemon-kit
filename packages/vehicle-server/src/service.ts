@@ -5,6 +5,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import type { VehicleRegistrar, VehicleRegistrationInput } from "@danypops/armada";
 
 export interface ServiceSpec {
 	/** Used in filenames/labels, e.g. "web-spider". Must be filesystem/registry-value-name safe. */
@@ -163,8 +164,8 @@ export function windowsRunCommand(spec: ServiceSpec): string {
 	return [spec.binPath, ...(spec.args ?? [])].map((value) => `"${value}"`).join(" ");
 }
 
-function armadaVehicle(spec: ServiceSpec): string {
-	return JSON.stringify({
+function toVehicleRegistrationInput(spec: ServiceSpec): VehicleRegistrationInput {
+	return {
 		name: spec.name,
 		version: spec.version,
 		executable: spec.binPath,
@@ -180,17 +181,58 @@ function armadaVehicle(spec: ServiceSpec): string {
 				}
 			: { policy: "never" },
 		readiness: { timeoutMs: 10_000, pollIntervalMs: 100 },
-	});
+	};
 }
 
-/** Delegates desired-state mutation and native reconciliation to Armada. */
-export function installUserService(spec: ServiceSpec, deps: ServiceInstallDeps): ServiceInstallResult {
+function armadaVehicle(spec: ServiceSpec): string {
+	return JSON.stringify(toVehicleRegistrationInput(spec));
+}
+
+function armadaValidationFailure(spec: ServiceSpec): ServiceInstallResult | undefined {
 	if (spec.env && Object.keys(spec.env).length > 0) {
 		return { installed: false, reason: "Armada service declarations cannot contain environment or credential material" };
 	}
 	if (spec.noNewPrivileges || spec.privateTmp || spec.waitForNetwork) {
 		return { installed: false, reason: "legacy systemd-only service controls cannot be projected into Armada" };
 	}
+	return undefined;
+}
+
+/**
+ * In-process counterpart to installUserService() -- calls Armada's own
+ * VehicleRegistrar library directly (see @danypops/armada's registrar.ts)
+ * instead of shelling out to its CLI as a subprocess. Same validation and
+ * Vehicle-spec projection as the CLI-backed path below; async because
+ * Armada's manifest I/O and native reconciliation are. Introduced for
+ * Packed's own daemon-service registration (async end-to-end already, from
+ * its HTTP handlers down) without changing the synchronous CLI-subprocess
+ * contract every other Vehicle-backed daemon's own `service install`
+ * command (web-spider, papyrus, jittor, pipes, lector) already depends on.
+ */
+export async function registerVehicleService(spec: ServiceSpec, registrar: VehicleRegistrar): Promise<ServiceInstallResult> {
+	const invalid = armadaValidationFailure(spec);
+	if (invalid) return invalid;
+	const outcome = await registrar.register(toVehicleRegistrationInput(spec));
+	if (outcome.ok) return { installed: true };
+	return { installed: false, reason: outcome.diagnostics.map((item) => item.message).join("; ") || "Armada registration failed" };
+}
+
+/** In-process counterpart to uninstallUserService() -- see registerVehicleService()'s own doc comment. */
+export async function unregisterVehicleService(name: string, registrar: VehicleRegistrar): Promise<ServiceInstallResult> {
+	const outcome = await registrar.unregister(name);
+	if (outcome.ok) return { installed: true };
+	return { installed: false, reason: outcome.diagnostics.map((item) => item.message).join("; ") || "Armada removal failed" };
+}
+
+/** In-process counterpart to isServiceInstalled() -- see registerVehicleService()'s own doc comment. */
+export function isVehicleServiceRegistered(name: string, registrar: VehicleRegistrar): Promise<boolean> {
+	return registrar.isRegistered(name);
+}
+
+/** Delegates desired-state mutation and native reconciliation to Armada. */
+export function installUserService(spec: ServiceSpec, deps: ServiceInstallDeps): ServiceInstallResult {
+	const invalid = armadaValidationFailure(spec);
+	if (invalid) return invalid;
 	const upsert = deps.runCommand(process.execPath, [deps.armadaCliPath, "upsert", "--vehicle-file", "-", "--json"], armadaVehicle(spec));
 	if (!upsert.ok) return { installed: false, reason: `armada upsert failed: ${upsert.output}` };
 	const reconcile = deps.runCommand(process.execPath, [deps.armadaCliPath, "reconcile", "--json"]);

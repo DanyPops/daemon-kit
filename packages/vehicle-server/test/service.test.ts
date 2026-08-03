@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { VehicleRegistrar, VehicleRegistrationOutcome } from "@danypops/armada";
 import {
 	createNodeServiceInstallDeps,
 	detectLinuxInitSystem,
@@ -6,10 +7,13 @@ import {
 	generateSystemdUnit,
 	installUserService,
 	isServiceInstalled,
+	isVehicleServiceRegistered,
+	registerVehicleService,
 	type RunResult,
 	type ServiceInstallDeps,
 	type ServiceSpec,
 	uninstallUserService,
+	unregisterVehicleService,
 	windowsRunCommand,
 } from "../src/service.ts";
 
@@ -118,6 +122,73 @@ describe("Armada service ownership", () => {
 		expect(isServiceInstalled(SPEC.name, present)).toBe(true);
 		const absent = fakeDeps({ runCommand: () => ({ ok: true, output: JSON.stringify({ vehicles: [] }) }) });
 		expect(isServiceInstalled(SPEC.name, absent)).toBe(false);
+	});
+});
+
+class FakeVehicleRegistrar implements VehicleRegistrar {
+	registerCalls: unknown[] = [];
+	unregisterCalls: string[] = [];
+	registeredNames = new Set<string>();
+	outcome: VehicleRegistrationOutcome = { ok: true, manifestHash: "hash" as never, applied: [], diagnostics: [] };
+	async register(vehicle: unknown): Promise<VehicleRegistrationOutcome> {
+		this.registerCalls.push(vehicle);
+		if (this.outcome.ok) this.registeredNames.add((vehicle as { name: string }).name);
+		return this.outcome;
+	}
+	async unregister(name: string): Promise<VehicleRegistrationOutcome> {
+		this.unregisterCalls.push(name);
+		if (this.outcome.ok) this.registeredNames.delete(name);
+		return this.outcome;
+	}
+	async isRegistered(name: string): Promise<boolean> {
+		return this.registeredNames.has(name);
+	}
+}
+
+describe("Armada service ownership -- in-process registrar path", () => {
+	it("registers a Vehicle spec through the registrar directly, no subprocess", async () => {
+		const registrar = new FakeVehicleRegistrar();
+		const result = await registerVehicleService(SPEC, registrar);
+		expect(result).toEqual({ installed: true });
+		expect(registrar.registerCalls).toEqual([
+			{
+				name: "acme",
+				version: "1.2.3",
+				executable: "/opt/acme/cli.ts",
+				arguments: ["serve"],
+				handlePath: "/run/user/1000/acme/handle.json",
+				restart: { policy: "on-failure", delayMs: 2000, maxAttempts: 10, windowMs: 60000 },
+				readiness: { timeoutMs: 10000, pollIntervalMs: 100 },
+			},
+		]);
+	});
+
+	it("fails before ever calling the registrar when environment or credential material is supplied", async () => {
+		const registrar = new FakeVehicleRegistrar();
+		const result = await registerVehicleService({ ...SPEC, env: { TOKEN: "secret" } }, registrar);
+		expect(result).toEqual({
+			installed: false,
+			reason: "Armada service declarations cannot contain environment or credential material",
+		});
+		expect(registrar.registerCalls).toEqual([]);
+	});
+
+	it("surfaces a failed registration's diagnostics as the reason", async () => {
+		const registrar = new FakeVehicleRegistrar();
+		registrar.outcome = { ok: false, diagnostics: [{ code: "X", severity: "error", path: "/", message: "native failure" }] };
+		const result = await registerVehicleService(SPEC, registrar);
+		expect(result).toEqual({ installed: false, reason: "native failure" });
+	});
+
+	it("unregisters and reports registration status through the registrar directly", async () => {
+		const registrar = new FakeVehicleRegistrar();
+		await registerVehicleService(SPEC, registrar);
+		expect(await isVehicleServiceRegistered(SPEC.name, registrar)).toBe(true);
+
+		const result = await unregisterVehicleService(SPEC.name, registrar);
+		expect(result).toEqual({ installed: true });
+		expect(registrar.unregisterCalls).toEqual(["acme"]);
+		expect(await isVehicleServiceRegistered(SPEC.name, registrar)).toBe(false);
 	});
 });
 
