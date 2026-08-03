@@ -371,7 +371,7 @@ export async function runCli(args: readonly string[], dependencies: CliDependenc
 	return 0;
 }
 
-function managerKind(platform: NodeJS.Platform): NativeManagerKind {
+export function managerKind(platform: NodeJS.Platform): NativeManagerKind {
 	if (platform === "darwin") return "launchd";
 	if (platform === "win32") return "windows-task-scheduler";
 	return "systemd";

@@ -8,7 +8,8 @@ export type ManifestMutationOutcome =
 	| { readonly ok: true; readonly manifest: ArmadaManifest; readonly diagnostics: readonly Diagnostic[] }
 	| { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
 
-async function readExisting(path: string): Promise<ManifestMutationOutcome> {
+/** Bootstraps an empty manifest on ENOENT (a Vehicle's first-ever registration) rather than failing closed -- distinct from the CLI's own reconcile/plan/status commands, which require an already-existing manifest file. */
+export async function readManifestFile(path: string): Promise<ManifestMutationOutcome> {
 	try {
 		const stat = await lstat(path);
 		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_MANIFEST_BYTES) {
@@ -52,7 +53,7 @@ export async function upsertManifestVehicle(path: string, vehicleJson: string): 
 	}
 	const candidate = decodeArmadaManifest(JSON.stringify({ schemaVersion: 1, vehicles: [value] }));
 	if (!candidate.ok) return candidate;
-	const existing = await readExisting(path);
+	const existing = await readManifestFile(path);
 	if (!existing.ok) return existing;
 	const next = [
 		...existing.manifest.vehicles.filter((vehicle) => vehicle.name !== candidate.manifest.vehicles[0]!.name),
@@ -66,7 +67,7 @@ export async function removeManifestVehicle(path: string, name: string): Promise
 	if (!vehicleName.ok) {
 		return { ok: false, diagnostics: [diagnostic("MANIFEST_VEHICLE_NAME_INVALID", "error", "/vehicle", vehicleName.reason)] };
 	}
-	const existing = await readExisting(path);
+	const existing = await readManifestFile(path);
 	if (!existing.ok) return existing;
 	return writeManifest(
 		path,

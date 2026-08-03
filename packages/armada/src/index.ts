@@ -15,3 +15,4 @@ export * from "./native/launchd.js";
 export * from "./native/service-manager.js";
 export * from "./native/systemd.js";
 export * from "./native/windows-task-scheduler.js";
+export * from "./registrar.js";
