@@ -4,7 +4,7 @@
  * but installation and removal never mutate service-manager state directly.
  */
 import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
 export interface ServiceSpec {
 	/** Used in filenames/labels, e.g. "web-spider". Must be filesystem/registry-value-name safe. */
@@ -219,7 +219,7 @@ export function isServiceInstalled(name: string, deps: ServiceInstallDeps): bool
 /** Real Armada CLI dependencies against the actual shell. */
 export function createNodeServiceInstallDeps(): ServiceInstallDeps {
 	return {
-		armadaCliPath: createRequire(import.meta.url).resolve("@danypops/armada/cli"),
+		armadaCliPath: fileURLToPath(import.meta.resolve("@danypops/armada/cli")),
 		runCommand: (command, args, input): RunResult => {
 			try {
 				const output = execFileSync(command, args, {

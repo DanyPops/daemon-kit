@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+	createNodeServiceInstallDeps,
 	detectLinuxInitSystem,
 	generateLaunchdPlist,
 	generateSystemdUnit,
@@ -57,6 +58,10 @@ describe("legacy descriptor rendering", () => {
 });
 
 describe("Armada service ownership", () => {
+	it("resolves Armada's ESM-only CLI export", () => {
+		expect(createNodeServiceInstallDeps().armadaCliPath).toEndWith("/dist/cli.js");
+	});
+
 	it("upserts bounded desired state and reconciles through the published Armada CLI", () => {
 		const deps = fakeDeps();
 		expect(installUserService(SPEC, deps)).toEqual({ installed: true });
