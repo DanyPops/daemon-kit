@@ -39,7 +39,9 @@ direct `pi.events.emit()` call would carry on its own.
 
 The same package carries the rest of this house's Pi-extension-facing
 surface: `./pi-load-harness` (jiti-load-safety verification for any
-Pi-loaded module), `./pi-status-refresh` (`registerVehicleStatusRefresh` --
+Pi-loaded module), `./multi-select-list` (Malevich's bounded multi-select
+state and viewport bound to Pi's theme, ANSI-aware text measurement, and
+semantic keymap), `./pi-status-refresh` (`registerVehicleStatusRefresh` --
 refresh a footer/widget on `session_start` and again whenever one of this
 extension's own projected tools just ran, tolerating a daemon that isn't up
 yet), and the shared `/secrets` Pi command (`./secrets-backend`,
