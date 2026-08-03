@@ -45,13 +45,7 @@ export interface VehicleFailure {
 	readonly recovery?: VehicleRecovery;
 	readonly details?: JsonValue;
 	readonly operationId?: string;
-	/**
-	 * The underlying cause's own message, when this failure wraps an unexpected error (e.g. a
-	 * handler throwing something other than a VehicleError) -- bounded, never a full stack trace.
-	 * Without this, a caller sees only a generic template like "x handler failed" and has no way
-	 * to tell what actually went wrong or whether the underlying operation may have partially
-	 * applied.
-	 */
+	/** The underlying cause's own message, bounded (never a full stack trace). Only set when the throw site opts into exposeCause. */
 	readonly causeMessage?: string;
 }
 
@@ -63,15 +57,51 @@ export interface VehicleErrorOptions {
 	readonly details?: JsonValue;
 	readonly operationId?: string;
 	readonly cause?: unknown;
-	/**
-	 * Secure by default (false): `cause` is always attached to the real in-process Error chain
-	 * (for server-side logging/observability), but its message crosses the wire via
-	 * toFailure().causeMessage only when the throw site explicitly opts in here -- an arbitrary
-	 * cause's message could contain a credential, an internal path, or other detail the thrower
-	 * never reviewed for wire-safety. Set true only when the cause is known-safe to show (e.g. a
-	 * validation library's own message intended for the caller).
-	 */
+	/** Includes cause's message in toFailure().causeMessage. Default false -- an arbitrary cause could carry a credential or internal detail. */
 	readonly exposeCause?: boolean;
+}
+
+export type VehicleErrorClass = abstract new (...args: never[]) => Error;
+
+export interface VehicleErrorClassMapping {
+	readonly errorClass: VehicleErrorClass;
+	readonly category: VehicleFailureCategory;
+	readonly code?: string;
+}
+
+export interface VehicleErrorPredicateMapping {
+	readonly matches: (error: unknown) => boolean;
+	readonly category: VehicleFailureCategory;
+	readonly code?: string;
+}
+
+export type VehicleErrorMapping = VehicleErrorClassMapping | VehicleErrorPredicateMapping;
+
+export interface DefineErrorMappingOptions {
+	readonly fallbackCategory?: VehicleFailureCategory;
+	readonly fallbackCode?: string;
+}
+
+/** Maps reviewed domain errors into wire-safe Vehicle errors while preserving already-mapped failures. */
+export function defineErrorMapping(
+	rules: readonly VehicleErrorMapping[],
+	options: DefineErrorMappingOptions = {},
+): <T>(run: () => T | Promise<T>) => Promise<T> {
+	return async <T>(run: () => T | Promise<T>): Promise<T> => {
+		try {
+			return await run();
+		} catch (error) {
+			if (error instanceof VehicleError) throw error;
+			const rule = rules.find((candidate) =>
+				"errorClass" in candidate ? error instanceof candidate.errorClass : candidate.matches(error),
+			);
+			const message = error instanceof Error ? error.message : String(error);
+			throw new VehicleError(rule?.code ?? options.fallbackCode ?? "operation-rejected", message, {
+				category: rule?.category ?? options.fallbackCategory ?? "validation",
+				cause: error,
+			});
+		}
+	};
 }
 
 export class VehicleError extends Error {

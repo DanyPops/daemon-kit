@@ -30,13 +30,9 @@ import {
 	vehicleEventTopic,
 } from "@danypops/vehicle-core";
 import { HmacApprovalAuthority, hashApprovalInput } from "./vehicle-approval-authority.js";
+import { readPackageVersion } from "./version.js";
 
-/**
- * Builds an unexpected-error's client-visible message from the underlying cause -- only when
- * `expose` is true (see VehicleRegistry.setExposeHandlerFailureDetails's own doc comment for why
- * this defaults to off). When not exposing, returns the flat, information-free prefix unchanged,
- * preserving the exact pre-existing wire-safe behavior.
- */
+/** Appends the cause's own message to `prefix` when `expose` is true, else returns `prefix` unchanged. */
 function unexpectedFailureMessage(prefix: string, error: unknown, expose: boolean): string {
 	if (!expose) return prefix;
 	const cause = boundedCauseMessage(error);
@@ -272,6 +268,23 @@ interface ApprovalResolveOutput {
 	readonly capability?: string;
 }
 
+export interface VehiclePackageManifestIdentity extends Omit<VehicleManifestIdentity, "version"> {
+	readonly packageJsonUrl: URL;
+	readonly version?: never;
+}
+
+export type VehicleRegistryIdentity =
+	| (VehicleManifestIdentity & { readonly packageJsonUrl?: never })
+	| VehiclePackageManifestIdentity;
+
+function resolveManifestIdentity(identity: VehicleRegistryIdentity): VehicleManifestIdentity {
+	if (identity.packageJsonUrl !== undefined) {
+		const { packageJsonUrl, ...manifestIdentity } = identity;
+		return { ...manifestIdentity, version: readPackageVersion(packageJsonUrl, identity.name) };
+	}
+	return identity;
+}
+
 export class VehicleRegistry {
 	private readonly registrations = new Map<string, Registration>();
 	private readonly availability = new Map<string, AvailabilityState>();
@@ -280,25 +293,20 @@ export class VehicleRegistry {
 	private readonly wildcardListeners = new Set<(name: string, version: number, payload: unknown) => void>();
 	private approvalPolicy?: ApprovalPolicy;
 	private readonly pendingApprovals = new Map<string, VehicleApprovalRequest>();
-	/**
-	 * Secure by default: an unexpected (non-VehicleError) handler exception's own message never
-	 * crosses the wire unless a consumer explicitly opts in via setExposeHandlerFailureDetails().
-	 * A handler's own thrown error could contain anything -- a credential, an internal path, a raw
-	 * SQL fragment -- so the zero-configuration path stays opaque; only a consumer who has reviewed
-	 * its own handlers' failure modes should turn this on.
-	 */
+	/** Default false: an unexpected handler exception's message could contain a credential or internal detail. See setExposeHandlerFailureDetails(). */
 	private exposeHandlerFailureDetails = false;
 
 	constructor(
-		identity: VehicleManifestIdentity,
+		identity: VehicleRegistryIdentity,
 		private executionPolicy?: VehicleExecutionPolicy,
 	) {
 		if (!identity.name.trim()) throw new Error("Vehicle name must not be empty");
-		if (!identity.version.trim()) throw new Error("Vehicle version must not be empty");
 		if (!identity.description.trim()) throw new Error("Vehicle description must not be empty");
+		const manifestIdentity = resolveManifestIdentity(identity);
+		if (!manifestIdentity.version.trim()) throw new Error("Vehicle version must not be empty");
 		this.identity = Object.freeze({
-			...identity,
-			...(identity.guidance ? { guidance: Object.freeze([...identity.guidance]) } : {}),
+			...manifestIdentity,
+			...(manifestIdentity.guidance ? { guidance: Object.freeze([...manifestIdentity.guidance]) } : {}),
 		});
 	}
 
@@ -307,12 +315,7 @@ export class VehicleRegistry {
 		this.executionPolicy = policy;
 	}
 
-	/**
-	 * Opt-in only, off by default (see the field's own doc comment). Once enabled, an unexpected
-	 * handler/policy exception's own message is included as toFailure()'s causeMessage field --
-	 * only turn this on for a Vehicle whose own handlers are known not to leak sensitive detail in
-	 * a thrown error's message.
-	 */
+	/** Includes an unexpected handler/policy exception's message in toFailure().causeMessage. Only enable once this Vehicle's own handlers are reviewed for leak risk. */
 	setExposeHandlerFailureDetails(enabled: boolean): void {
 		this.exposeHandlerFailureDetails = enabled;
 	}

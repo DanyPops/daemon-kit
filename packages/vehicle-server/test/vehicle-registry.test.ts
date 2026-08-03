@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "bun:test";
 import {
 	bindVehicleOperation,
@@ -109,6 +110,18 @@ describe("Vehicle operation contracts", () => {
 });
 
 describe("VehicleRegistry", () => {
+	it("keeps the existing explicit-version identity path unchanged", () => {
+		const registry = new VehicleRegistry({ name: "test", version: "1.2.3", description: "Test." });
+		expect(registry.manifest()).toMatchObject({ name: "test", version: "1.2.3", description: "Test." });
+	});
+
+	it("derives its manifest version from the caller's package.json", () => {
+		const packageJsonUrl = new URL("../package.json", import.meta.url);
+		const packageJson = JSON.parse(readFileSync(packageJsonUrl, "utf8")) as { version: string };
+		const registry = new VehicleRegistry({ name: "vehicle-server", packageJsonUrl, description: "Test." });
+		expect(registry.manifest().version).toBe(packageJson.version);
+	});
+
 	it("returns a validated result from the operation's sole owner", async () => {
 		const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
 		registry.register("echo-provider", echoBinding());

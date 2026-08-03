@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { boundedCauseMessage, VehicleError } from "../src/vehicle-errors.ts";
+import { boundedCauseMessage, defineErrorMapping, VehicleError } from "../src/vehicle-errors.ts";
 
 describe("VehicleError.toFailure()", () => {
 	it("omits causeMessage entirely when constructed without a cause -- no behavior change for the common case", () => {
@@ -42,6 +42,54 @@ describe("VehicleError.toFailure()", () => {
 	it("omits causeMessage for a cause with no usable message (e.g. a non-Error, non-string thrown value), even with exposeCause true", () => {
 		const error = new VehicleError("handler-failed", "op failed", { category: "internal", cause: { weird: true }, exposeCause: true });
 		expect(error.toFailure().causeMessage).toBeUndefined();
+	});
+});
+
+describe("defineErrorMapping", () => {
+	class MissingWidgetError extends Error {}
+	class StaleWidgetError extends Error {}
+
+	const mapError = defineErrorMapping([
+		{ errorClass: MissingWidgetError, category: "not_found", code: "widget-not-found" },
+		{ errorClass: StaleWidgetError, category: "conflict", code: "stale-widget" },
+	]);
+
+	it("passes an existing VehicleError through unchanged", async () => {
+		const original = new VehicleError("already-mapped", "already mapped", { category: "authorization" });
+		await expect(mapError(() => Promise.reject(original))).rejects.toBe(original);
+	});
+
+	it("maps a matching error class while preserving its message", async () => {
+		const failure = await mapError(() => Promise.reject(new MissingWidgetError("widget 42 is missing"))).catch(
+			(error: unknown) => (error as VehicleError).toFailure(),
+		);
+		expect(failure).toEqual({
+			code: "widget-not-found",
+			category: "not_found",
+			message: "widget 42 is missing",
+			retryable: false,
+		});
+	});
+
+	it("uses the configured fallback for an unmatched error", async () => {
+		const unavailable = defineErrorMapping([], { fallbackCategory: "unavailable", fallbackCode: "backend-failed" });
+		const failure = await unavailable(() => {
+			throw new Error("backend is offline");
+		}).catch((error: unknown) => (error as VehicleError).toFailure());
+		expect(failure).toMatchObject({ code: "backend-failed", category: "unavailable", message: "backend is offline" });
+	});
+
+	it("supports predicate rules for status-carrying errors", async () => {
+		const byStatus = defineErrorMapping([
+			{
+				matches: (error) => error instanceof Error && "status" in error && error.status === 403,
+				category: "authorization",
+				code: "operation-rejected",
+			},
+		]);
+		const error = Object.assign(new Error("approval denied"), { status: 403 });
+		const failure = await byStatus(() => Promise.reject(error)).catch((caught: unknown) => (caught as VehicleError).toFailure());
+		expect(failure).toMatchObject({ code: "operation-rejected", category: "authorization", message: "approval denied" });
 	});
 });
 
