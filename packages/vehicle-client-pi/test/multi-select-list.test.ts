@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { driveComponent, renderToTerminal } from "@danypops/pi-tui-harness";
+import { renderToTerminal, runMultiSelectViewportScenario } from "@danypops/pi-tui-harness";
 import { KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { createMultiSelectList } from "../src/multi-select-list.ts";
 
@@ -82,20 +82,13 @@ async function plainFrame(rendered: readonly string[], width: number): Promise<s
 
 describe("createMultiSelectList through pi-integral's real VT harness", () => {
 	it("reproduces the four-topic flow: the fifth focus scrolls into view and remains selectable and deselectable", async () => {
-		const list = triageList();
-		const driven = driveComponent(list);
-		const initial = (await plainFrame(driven.render(80), 80)).join("\n");
-		expect(initial).toContain("4. [ ] Symbol and dataflow history");
-		expect(initial).not.toContain("5. [ ] Cross-workspace symbol search");
-
-		driven.pressKeys(["down", "down", "down", "down"]);
-		expect(list.model.focusedItem?.value).toBe(5);
-		expect((await plainFrame(driven.render(80), 80)).join("\n")).toContain("→ 5. [ ] Cross-workspace symbol search");
-
-		driven.pressKey("space");
-		expect(list.checkedValues).toEqual([5]);
-		driven.pressKey("space");
-		expect(list.checkedValues).toEqual([]);
+		const frames = await runMultiSelectViewportScenario({ component: triageList(), width: 80 });
+		expect(frames.initial.join("\n")).toContain("4. [ ] Symbol and dataflow history");
+		expect(frames.initial.join("\n")).not.toContain("5. [ ] Cross-workspace symbol search");
+		expect(frames.focusedBeyondViewport.join("\n")).toContain("→ 5. [ ] Cross-workspace symbol search");
+		expect(frames.checked.join("\n")).toContain("→ 5. [✓] Cross-workspace symbol search");
+		expect(frames.unchecked.join("\n")).toContain("→ 5. [ ] Cross-workspace symbol search");
+		expect(frames.returnedToStart.join("\n")).toContain("→ 1. [ ] Per-item output budgeting");
 	});
 
 	it.each([40, 80, 120] as const)("keeps the focused fifth topic visible at %i columns", async (width) => {
