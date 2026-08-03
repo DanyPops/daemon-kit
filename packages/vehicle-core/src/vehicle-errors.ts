@@ -98,7 +98,8 @@ export function defineErrorMapping(
 			);
 			const causeMessage = error instanceof Error ? error.message : String(error);
 			const message = rule === undefined && options.fallbackMessage !== undefined ? options.fallbackMessage : causeMessage;
-			throw new VehicleError(rule?.code ?? options.fallbackCode ?? "operation-rejected", message, {
+			const code = rule === undefined ? (options.fallbackCode ?? "operation-rejected") : (rule.code ?? "operation-rejected");
+			throw new VehicleError(code, message, {
 				category: rule?.category ?? options.fallbackCategory ?? "validation",
 				cause: error,
 			});

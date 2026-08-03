@@ -60,8 +60,8 @@ describe("defineErrorMapping", () => {
 	});
 
 	it("maps a matching error class while preserving its message", async () => {
-		const failure = await mapError(() => Promise.reject(new MissingWidgetError("widget 42 is missing"))).catch(
-			(error: unknown) => (error as VehicleError).toFailure(),
+		const failure = await mapError(() => Promise.reject(new MissingWidgetError("widget 42 is missing"))).catch((error: unknown) =>
+			(error as VehicleError).toFailure(),
 		);
 		expect(failure).toEqual({
 			code: "widget-not-found",
@@ -81,10 +81,18 @@ describe("defineErrorMapping", () => {
 
 	it("can replace an unmatched error's message at an unreviewed trust boundary", async () => {
 		const safeFallback = defineErrorMapping([], { fallbackCategory: "internal", fallbackMessage: "operation failed" });
-		const failure = await safeFallback(() => Promise.reject(new Error("credential=secret"))).catch(
-			(error: unknown) => (error as VehicleError).toFailure(),
+		const failure = await safeFallback(() => Promise.reject(new Error("credential=secret"))).catch((error: unknown) =>
+			(error as VehicleError).toFailure(),
 		);
 		expect(failure).toMatchObject({ category: "internal", message: "operation failed" });
+	});
+
+	it("does not apply the fallback code to a matched rule with no explicit code", async () => {
+		const mapping = defineErrorMapping([{ errorClass: MissingWidgetError, category: "not_found" }], {
+			fallbackCode: "handler-failed",
+		});
+		const failure = await mapping(() => Promise.reject(new MissingWidgetError("missing"))).catch((error: unknown) => error as VehicleError);
+		expect(failure.code).toBe("operation-rejected");
 	});
 
 	it("supports predicate rules for status-carrying errors", async () => {
