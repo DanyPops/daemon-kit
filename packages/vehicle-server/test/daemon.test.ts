@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, mock } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +12,7 @@ import {
 	runDaemonProcess,
 	startDaemon,
 } from "../src/daemon.ts";
-import { createLogger } from "../src/logging.ts";
+import { createLogger, type Logger } from "../src/logging.ts";
 import { readDaemonHandle } from "../src/paths.ts";
 import { getCurrentRpcCallId } from "../src/rpc-correlation.ts";
 
@@ -247,6 +247,77 @@ describe("startDaemon", () => {
 		daemon = await startDaemon({ daemonLabel: "Acme", handlePath, lockPath, buildApp: trivialApp });
 		expect(daemon.port).toBeGreaterThan(0);
 		expect(readDaemonHandle(handlePath)?.port).toBe(daemon.port);
+	});
+
+	it("a \"service\"-provenance start reaps an unmanaged (auto-spawn) holder and binds, instead of exiting as a normal join", async () => {
+		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
+		const handlePath = join(dir, "handle.json");
+		const lockPath = join(dir, "daemon.lock");
+		writeFileSync(lockPath, "999321\nauto-spawn\n");
+		const events: Array<{ level: string; msg: string; fields?: Record<string, unknown> }> = [];
+		let holderAlive = true;
+		const logger: Logger = {
+			debug: (msg, fields) => events.push({ level: "debug", msg, fields }),
+			info: (msg, fields) => events.push({ level: "info", msg, fields }),
+			warn: (msg, fields) => events.push({ level: "warn", msg, fields }),
+			error: (msg, fields) => events.push({ level: "error", msg, fields }),
+		};
+		daemon = await startDaemon({
+			daemonLabel: "Acme",
+			handlePath,
+			lockPath,
+			buildApp: trivialApp,
+			env: { DAEMON_KIT_LAUNCH_PROVENANCE: "service" },
+			logger,
+			lockReclaim: {
+				isPidAlive: () => holderAlive,
+				kill: (_pid, signal) => {
+					if (signal === "SIGTERM") holderAlive = false;
+				},
+				sleep: () => Promise.resolve(),
+			},
+		});
+		expect(daemon.port).toBeGreaterThan(0);
+		expect(readDaemonHandle(handlePath)?.pid).toBe(process.pid);
+		expect(events.some((e) => e.level === "warn" && e.msg === "daemon lock reaped" && e.fields?.holderPid === 999321)).toBe(true);
+	});
+
+	it("a \"service\"-provenance start still exits as a normal join against a genuine sibling supervised instance", async () => {
+		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
+		const handlePath = join(dir, "handle.json");
+		const lockPath = join(dir, "daemon.lock");
+		writeFileSync(lockPath, "999322\nservice\n");
+		const kill = mock(() => {});
+		await expect(
+			startDaemon({
+				daemonLabel: "Acme",
+				handlePath,
+				lockPath,
+				buildApp: trivialApp,
+				env: { DAEMON_KIT_LAUNCH_PROVENANCE: "service" },
+				lockReclaim: { isPidAlive: () => true, kill },
+			}),
+		).rejects.toBeInstanceOf(DaemonAlreadyRunningError);
+		expect(kill).not.toHaveBeenCalled();
+	});
+
+	it("an \"auto-spawn\"-provenance start never reaps -- it still exits as a normal join, exactly like before this feature existed", async () => {
+		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
+		const handlePath = join(dir, "handle.json");
+		const lockPath = join(dir, "daemon.lock");
+		// A real, currently-alive pid (this test process itself) -- the non-"service" path never
+		// consults lockReclaim at all (it calls plain acquireDaemonLock, not the reap-aware
+		// acquireDaemonLockAsService), so there is no injectable isPidAlive to fake aliveness with here.
+		writeFileSync(lockPath, `${process.pid}\nauto-spawn\n`);
+		await expect(
+			startDaemon({
+				daemonLabel: "Acme",
+				handlePath,
+				lockPath,
+				buildApp: trivialApp,
+				env: { DAEMON_KIT_LAUNCH_PROVENANCE: "auto-spawn" },
+			}),
+		).rejects.toBeInstanceOf(DaemonAlreadyRunningError);
 	});
 
 	it("stop() releases the single-instance lock, letting an entirely new startDaemon() succeed afterward", async () => {

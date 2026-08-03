@@ -1,18 +1,22 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, mock } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
 	acquireDaemonLock,
+	acquireDaemonLockAsService,
 	ensureAuthToken,
 	LOOPBACK_HOST,
+	type ReclaimLogEvent,
 	readDaemonHandle,
 	releaseDaemonLock,
 	removeDaemonHandle,
 	resolveDaemonPaths,
 	writeDaemonHandle,
 } from "../src/paths.ts";
+
+const NO_DELAY_SLEEP = () => Promise.resolve();
 
 const NAMES = {
 	stateDirectoryName: "acme-daemon",
@@ -126,7 +130,7 @@ describe("acquireDaemonLock / releaseDaemonLock", () => {
 			const first = acquireDaemonLock(lockPath, () => true);
 			expect(first).toEqual({ acquired: true });
 			const second = acquireDaemonLock(lockPath, () => true); // pretend the holder pid is alive
-			expect(second).toEqual({ acquired: false, holderPid: process.pid });
+			expect(second).toEqual({ acquired: false, holderPid: process.pid, holderProvenance: "unknown" });
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -161,6 +165,30 @@ describe("acquireDaemonLock / releaseDaemonLock", () => {
 		}
 	});
 
+	it("records and reports the acquiring caller's own provenance to a later failed acquisition", () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			acquireDaemonLock(lockPath, () => true, "service");
+			const second = acquireDaemonLock(lockPath, () => true, "auto-spawn");
+			expect(second).toEqual({ acquired: false, holderPid: process.pid, holderProvenance: "service" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("reports no recorded provenance for a lock file written before this field existed", () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			writeFileSync(lockPath, `${process.pid}\n`); // legacy single-line format, no provenance
+			const result = acquireDaemonLock(lockPath, () => true);
+			expect(result).toEqual({ acquired: false, holderPid: process.pid, holderProvenance: null });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("releaseDaemonLock is idempotent and lets a subsequent acquire succeed immediately", () => {
 		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
 		const lockPath = join(dir, "daemon.lock");
@@ -169,6 +197,151 @@ describe("acquireDaemonLock / releaseDaemonLock", () => {
 			releaseDaemonLock(lockPath);
 			releaseDaemonLock(lockPath); // must not throw
 			expect(acquireDaemonLock(lockPath, () => true)).toEqual({ acquired: true });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("acquireDaemonLockAsService", () => {
+	it("acquires directly when nothing else holds the lock, recording provenance \"service\"", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			const events: ReclaimLogEvent[] = [];
+			const result = await acquireDaemonLockAsService(lockPath, { log: (e) => events.push(e) });
+			expect(result).toEqual({ acquired: true });
+			expect(events).toEqual([]); // no contention at all -- nothing to log
+			expect(acquireDaemonLock(lockPath, () => true)).toEqual({ acquired: false, holderPid: process.pid, holderProvenance: "service" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("leaves a genuine sibling supervised instance alone -- a same-provenance holder is not reaped", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			acquireDaemonLock(lockPath, () => true, "service");
+			const kill = mock(() => {});
+			const events: ReclaimLogEvent[] = [];
+			const result = await acquireDaemonLockAsService(lockPath, { isPidAlive: () => true, kill, log: (e) => events.push(e) });
+			expect(result).toEqual({ acquired: false, holderPid: process.pid, holderProvenance: "service" });
+			expect(kill).not.toHaveBeenCalled();
+			expect(events).toEqual([
+				{ outcome: "skipped", holderPid: process.pid, holderProvenance: "service", reason: "holder is itself a supervised instance" },
+			]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("reaps an unmanaged holder (auto-spawn) that exits cleanly on SIGTERM, then acquires", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			writeFileSync(lockPath, `999123\nauto-spawn\n`);
+			let alive = true;
+			const kill = mock((_pid: number, signal: NodeJS.Signals) => {
+				if (signal === "SIGTERM") alive = false; // this fake holder shuts down cleanly on SIGTERM
+			});
+			const events: ReclaimLogEvent[] = [];
+			const result = await acquireDaemonLockAsService(lockPath, {
+				isPidAlive: () => alive,
+				kill,
+				sleep: NO_DELAY_SLEEP,
+				log: (e) => events.push(e),
+			});
+			expect(result).toEqual({ acquired: true });
+			expect(kill).toHaveBeenCalledWith(999123, "SIGTERM");
+			expect(kill).not.toHaveBeenCalledWith(999123, "SIGKILL");
+			expect(events).toEqual([{ outcome: "reaped", holderPid: 999123, holderProvenance: "auto-spawn", method: "sigterm" }]);
+			expect(acquireDaemonLock(lockPath, () => true)).toEqual({ acquired: false, holderPid: process.pid, holderProvenance: "service" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("escalates to SIGKILL when the unmanaged holder ignores SIGTERM past the grace period", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			writeFileSync(lockPath, `999124\nunknown\n`);
+			let alive = true;
+			const kill = mock((_pid: number, signal: NodeJS.Signals) => {
+				if (signal === "SIGKILL") alive = false; // ignores SIGTERM, only SIGKILL actually lands
+			});
+			const events: ReclaimLogEvent[] = [];
+			const result = await acquireDaemonLockAsService(lockPath, {
+				isPidAlive: () => alive,
+				kill,
+				sleep: NO_DELAY_SLEEP,
+				graceMs: 50,
+				pollIntervalMs: 10,
+				log: (e) => events.push(e),
+			});
+			expect(result).toEqual({ acquired: true });
+			expect(kill).toHaveBeenCalledWith(999124, "SIGTERM");
+			expect(kill).toHaveBeenCalledWith(999124, "SIGKILL");
+			expect(events).toEqual([{ outcome: "reaped", holderPid: 999124, holderProvenance: "unknown", method: "sigkill" }]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("treats a lock file with no recorded provenance (pre-migration format) as reapable, same as unknown", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			writeFileSync(lockPath, `999125\n`); // legacy format
+			let alive = true;
+			const kill = mock((_pid: number, signal: NodeJS.Signals) => {
+				if (signal === "SIGTERM") alive = false;
+			});
+			const result = await acquireDaemonLockAsService(lockPath, { isPidAlive: () => alive, kill, sleep: NO_DELAY_SLEEP });
+			expect(result).toEqual({ acquired: true });
+			expect(kill).toHaveBeenCalledWith(999125, "SIGTERM");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("never force-clears the lock when the holder survives even SIGKILL", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			writeFileSync(lockPath, `999126\nauto-spawn\n`);
+			const events: ReclaimLogEvent[] = [];
+			const result = await acquireDaemonLockAsService(lockPath, {
+				isPidAlive: () => true, // never dies, no matter what's sent
+				kill: () => {},
+				sleep: NO_DELAY_SLEEP,
+				graceMs: 20,
+				pollIntervalMs: 10,
+				log: (e) => events.push(e),
+			});
+			expect(result).toEqual({ acquired: false, holderPid: 999126, holderProvenance: "auto-spawn" });
+			expect(events).toEqual([
+				{ outcome: "skipped", holderPid: 999126, holderProvenance: "auto-spawn", reason: "holder did not exit even after SIGKILL" },
+			]);
+			// The lock file itself must still be intact -- never force-cleared while a real holder might still be alive.
+			expect(acquireDaemonLock(lockPath, () => true)).toEqual({ acquired: false, holderPid: 999126, holderProvenance: "auto-spawn" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("skips reaping when the holder has no live pid to signal at all", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "daemon-kit-lock-"));
+		const lockPath = join(dir, "daemon.lock");
+		try {
+			// A holder that reports dead the very first check -- acquireDaemonLock itself steals a
+			// stale lock rather than ever reporting {acquired:false, holderPid:null}, but the reclaim
+			// path must still degrade safely if it ever did.
+			const events: ReclaimLogEvent[] = [];
+			const result = await acquireDaemonLockAsService(lockPath, { log: (e) => events.push(e) });
+			expect(result).toEqual({ acquired: true });
+			expect(events).toEqual([]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

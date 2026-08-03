@@ -31,7 +31,15 @@ import type { Socket } from "node:net";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { Logger } from "./logging.ts";
-import { acquireDaemonLock, LOOPBACK_HOST, releaseDaemonLock, removeDaemonHandle, writeDaemonHandle } from "./paths.ts";
+import {
+	acquireDaemonLock,
+	acquireDaemonLockAsService,
+	LOOPBACK_HOST,
+	type ReclaimDeps,
+	releaseDaemonLock,
+	removeDaemonHandle,
+	writeDaemonHandle,
+} from "./paths.ts";
 import type { PushChannel } from "./push-channel.ts";
 import { runWithRpcCallId } from "./rpc-correlation.ts";
 
@@ -138,10 +146,43 @@ export interface StartDaemonOptions {
 	pushChannel?: PushChannel;
 	/** Defaults to "/push". */
 	pushPath?: string;
+	/**
+	 * Overrides for the lock-reclaim behavior that only activates when this daemon's own
+	 * launch provenance is "service" (see LAUNCH_PROVENANCE_ENV_VAR) and the current lock
+	 * holder is not -- an ad hoc auto-spawned process (or a pre-migration lock file with no
+	 * recorded provenance) has no standing to block a supervised restart. Real defaults
+	 * (process.kill, a real setTimeout-backed sleep, a 5s grace period) apply when omitted;
+	 * tests inject fakes to exercise the race without spawning real processes or waiting
+	 * real wall-clock time. See paths.ts's acquireDaemonLockAsService.
+	 */
+	lockReclaim?: ReclaimDeps;
 }
 
 const NOOP_LOGGER: Logger = { debug() {}, info() {}, warn() {}, error() {} };
 const DEFAULT_IDLE_TICK_MS = 30_000;
+
+/**
+ * Wraps a caller-supplied lockReclaim (if any) so every reclaim decision is always logged
+ * through this daemon's real logger, in addition to -- never instead of -- a test's own
+ * injected log spy. A reap is warn-level (it changed what's running); a skip is info-level
+ * (expected/no-op most of the time, but still worth a trace for "why didn't it take over").
+ */
+function reclaimDepsWithLogging(options: StartDaemonOptions, logger: Logger): ReclaimDeps {
+	const injected = options.lockReclaim;
+	return {
+		...injected,
+		log: (event) => {
+			const level = event.outcome === "reaped" ? "warn" : "info";
+			logger[level](`daemon lock ${event.outcome}`, {
+				holderPid: event.holderPid,
+				holderProvenance: event.holderProvenance,
+				...(event.method ? { method: event.method } : {}),
+				...(event.reason ? { reason: event.reason } : {}),
+			});
+			injected?.log?.(event);
+		},
+	};
+}
 
 interface ListeningServer {
 	port: number;
@@ -252,10 +293,17 @@ function startNodeListener(app: DaemonApp, onRequest: () => void): Promise<Liste
 export async function startDaemon(options: StartDaemonOptions): Promise<RunningDaemon> {
 	const logger = options.logger ?? NOOP_LOGGER;
 	const lockPath = options.lockPath ?? join(dirname(options.handlePath), "daemon.lock");
+	const provenance = readLaunchProvenance(options.env ?? process.env);
 
 	// Claimed before anything else -- a losing process must not build the app,
 	// bind a port, or touch the handle file. See DaemonAlreadyRunningError.
-	const lock = acquireDaemonLock(lockPath);
+	//
+	// A "service"-launched daemon (Armada/systemd-supervised) additionally reclaims the lock
+	// from an unmanaged holder instead of just losing to it -- see acquireDaemonLockAsService.
+	// Any other provenance (auto-spawn/unknown) keeps today's plain behavior unchanged: losing
+	// the race there is a normal join between equally-unprivileged callers, not something to
+	// escalate over.
+	const lock = provenance === "service" ? await acquireDaemonLockAsService(lockPath, reclaimDepsWithLogging(options, logger)) : acquireDaemonLock(lockPath, undefined, provenance);
 	if (!lock.acquired) throw new DaemonAlreadyRunningError(lock.holderPid);
 
 	if (options.pushChannel && !isBun) {
@@ -300,7 +348,6 @@ export async function startDaemon(options: StartDaemonOptions): Promise<RunningD
 		);
 	}
 
-	const provenance = readLaunchProvenance(options.env ?? process.env);
 	const effectiveIdleBudgetMs = resolveIdleBudgetMs(options.idleBudgetMs, provenance);
 
 	let idleTimer: ReturnType<typeof setInterval> | undefined;

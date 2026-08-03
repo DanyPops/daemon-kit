@@ -174,7 +174,17 @@ export function removeDaemonHandle(handlePath: string): void {
 	rmSync(handlePath, { force: true });
 }
 
-export type AcquireLockResult = { acquired: true } | { acquired: false; holderPid: number | null };
+/**
+ * Independently declared from daemon.ts's own LaunchProvenance (same three literals) rather
+ * than imported -- this file stays dependency-free by design (see the module doc comment),
+ * and the two unions are structurally identical so a LaunchProvenance value already passes
+ * through unchanged wherever this type is expected.
+ */
+export type LockLaunchProvenance = "auto-spawn" | "service" | "unknown";
+
+export type AcquireLockResult =
+	| { acquired: true }
+	| { acquired: false; holderPid: number | null; holderProvenance: LockLaunchProvenance | null };
 
 function defaultIsPidAlive(pid: number): boolean {
 	try {
@@ -187,12 +197,26 @@ function defaultIsPidAlive(pid: number): boolean {
 	}
 }
 
-function tryCreateLock(lockPath: string): boolean {
+function defaultKill(pid: number, signal: NodeJS.Signals): void {
+	try {
+		process.kill(pid, signal);
+	} catch {
+		// Already gone -- nothing left to signal, not a failure of the reclaim itself.
+	}
+}
+
+function defaultSleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function tryCreateLock(lockPath: string, provenance: LockLaunchProvenance): boolean {
 	try {
 		// O_CREAT|O_EXCL ('wx'): a single atomic syscall that fails with EEXIST
 		// if the file already exists -- no check-then-act window, the same
-		// atomicity class as writeDaemonHandle's write-then-rename.
-		writeFileSync(lockPath, `${process.pid}\n`, { mode: 0o600, flag: "wx" });
+		// atomicity class as writeDaemonHandle's write-then-rename. Provenance on
+		// its own line, not parsed by anything that predates it -- a lock file
+		// written before this field existed just reads back with provenance null.
+		writeFileSync(lockPath, `${process.pid}\n${provenance}\n`, { mode: 0o600, flag: "wx" });
 		return true;
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
@@ -200,10 +224,15 @@ function tryCreateLock(lockPath: string): boolean {
 	}
 }
 
-function readLockPid(lockPath: string): number | null {
+function readLockInfo(lockPath: string): { pid: number; provenance: LockLaunchProvenance | null } | null {
 	try {
-		const pid = Number.parseInt(readFileSync(lockPath, "utf8").trim(), 10);
-		return Number.isInteger(pid) ? pid : null;
+		const lines = readFileSync(lockPath, "utf8").split("\n");
+		const pid = Number.parseInt((lines[0] ?? "").trim(), 10);
+		if (!Number.isInteger(pid)) return null;
+		const rawProvenance = (lines[1] ?? "").trim();
+		const provenance =
+			rawProvenance === "auto-spawn" || rawProvenance === "service" || rawProvenance === "unknown" ? rawProvenance : null;
+		return { pid, provenance };
 	} catch {
 		return null;
 	}
@@ -221,24 +250,144 @@ function readLockPid(lockPath: string): number | null {
  * behind without running the matching releaseDaemonLock) is detected via a
  * liveness check and atomically stolen rather than blocking forever --
  * self-healing without any manual cleanup.
+ *
+ * `provenance` records who is asking (matching daemon.ts's own launch-provenance
+ * signal) so a later failed acquisition can tell an unmanaged holder apart from a
+ * supervised one -- see acquireDaemonLockAsService, the only current reader of
+ * holderProvenance.
  */
-export function acquireDaemonLock(lockPath: string, isPidAlive: (pid: number) => boolean = defaultIsPidAlive): AcquireLockResult {
+export function acquireDaemonLock(
+	lockPath: string,
+	isPidAlive: (pid: number) => boolean = defaultIsPidAlive,
+	provenance: LockLaunchProvenance = "unknown",
+): AcquireLockResult {
 	mkdirSync(dirname(lockPath), { recursive: true, mode: 0o700 });
-	if (tryCreateLock(lockPath)) return { acquired: true };
+	if (tryCreateLock(lockPath, provenance)) return { acquired: true };
 
-	const existing = readLockPid(lockPath);
-	if (existing !== null && isPidAlive(existing)) return { acquired: false, holderPid: existing };
+	const existing = readLockInfo(lockPath);
+	if (existing !== null && isPidAlive(existing.pid)) {
+		return { acquired: false, holderPid: existing.pid, holderProvenance: existing.provenance };
+	}
 
 	// Stale (dead pid) or unreadable/corrupt lock -- steal it. A concurrent
 	// stealer could win the race between this rm and the next create; either
 	// way exactly one of them ends up holding the lock afterward, since the
 	// create itself is still atomic.
 	rmSync(lockPath, { force: true });
-	if (tryCreateLock(lockPath)) return { acquired: true };
-	return { acquired: false, holderPid: readLockPid(lockPath) };
+	if (tryCreateLock(lockPath, provenance)) return { acquired: true };
+	const stolen = readLockInfo(lockPath);
+	return { acquired: false, holderPid: stolen?.pid ?? null, holderProvenance: stolen?.provenance ?? null };
 }
 
 /** Releases the single-instance lock. Idempotent -- safe to call even if this process never held it. */
 export function releaseDaemonLock(lockPath: string): void {
 	rmSync(lockPath, { force: true });
+}
+
+export interface ReclaimLogEvent {
+	readonly outcome: "reaped" | "skipped";
+	readonly holderPid: number | null;
+	readonly holderProvenance: LockLaunchProvenance | null;
+	readonly method?: "sigterm" | "sigkill";
+	readonly reason?: string;
+}
+
+export interface ReclaimDeps {
+	isPidAlive?: (pid: number) => boolean;
+	kill?: (pid: number, signal: NodeJS.Signals) => void;
+	/** Called between liveness polls while waiting out the grace period. Defaults to a real setTimeout-backed delay; tests inject a no-delay version so the grace period costs no real wall-clock time. */
+	sleep?: (ms: number) => Promise<void>;
+	/** Total time budget for each of the SIGTERM and (if needed) SIGKILL waits. Defaults to 5s -- this is a loopback RPC server with no long-running work to flush, closer to nginx's fast-shutdown posture than a stateful job's. */
+	graceMs?: number;
+	pollIntervalMs?: number;
+	/** One record per decision, not just per kill -- a skipped reap needs to be exactly as visible as an executed one. */
+	log?: (event: ReclaimLogEvent) => void;
+}
+
+const DEFAULT_RECLAIM_GRACE_MS = 5_000;
+const DEFAULT_RECLAIM_POLL_INTERVAL_MS = 100;
+
+async function waitUntilDead(
+	pid: number,
+	isPidAlive: (pid: number) => boolean,
+	sleep: (ms: number) => Promise<void>,
+	graceMs: number,
+	pollIntervalMs: number,
+): Promise<boolean> {
+	const attempts = Math.max(1, Math.ceil(graceMs / pollIntervalMs));
+	for (let attempt = 0; attempt < attempts && isPidAlive(pid); attempt++) {
+		await sleep(pollIntervalMs);
+	}
+	return !isPidAlive(pid);
+}
+
+/**
+ * acquireDaemonLock, plus one extra right reserved to a "service"-provenance caller (an
+ * Armada/systemd-supervised (re)start): reclaiming the lock from an unmanaged holder that
+ * has no standing to block it. A holder that is itself "service"-provenance is left alone
+ * exactly like a plain acquireDaemonLock failure -- that is a genuine simultaneous-restart
+ * race between two supervised launches, not an orphan to reap. A holder with no recorded
+ * provenance at all (a lock file written before this field existed) is treated the same as
+ * "unknown" -- reapable -- matching readLaunchProvenance's own fallback rule elsewhere in
+ * this kit (an unrecognized launch is closer to auto-spawn than to a trusted service).
+ *
+ * Never reaped blind: the holder's liveness is re-checked immediately before signaling it
+ * (closing the gap between acquireDaemonLock's own check and this call), and the lock is
+ * force-cleared only once the holder is confirmed dead -- never while it might still be a
+ * live, legitimately-running process. This mirrors Armada's own fleet cleanup (fleet/cleanup.ts),
+ * which re-derives its kill plan from live state immediately before executing it rather than
+ * trusting an earlier snapshot.
+ */
+export async function acquireDaemonLockAsService(lockPath: string, deps: ReclaimDeps = {}): Promise<AcquireLockResult> {
+	const isPidAlive = deps.isPidAlive ?? defaultIsPidAlive;
+	const kill = deps.kill ?? defaultKill;
+	const sleep = deps.sleep ?? defaultSleep;
+	const graceMs = deps.graceMs ?? DEFAULT_RECLAIM_GRACE_MS;
+	const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_RECLAIM_POLL_INTERVAL_MS;
+
+	const first = acquireDaemonLock(lockPath, isPidAlive, "service");
+	if (first.acquired) return first;
+
+	if (first.holderProvenance === "service" || first.holderPid === null) {
+		deps.log?.({
+			outcome: "skipped",
+			holderPid: first.holderPid,
+			holderProvenance: first.holderProvenance,
+			reason: first.holderProvenance === "service" ? "holder is itself a supervised instance" : "no live holder pid to reap",
+		});
+		return first;
+	}
+
+	const holderPid = first.holderPid;
+	if (!isPidAlive(holderPid)) {
+		// Died between the read above and here -- acquireDaemonLock already steals a dead
+		// holder's lock on its own, so just retry rather than signaling a pid that is gone.
+		return acquireDaemonLock(lockPath, isPidAlive, "service");
+	}
+
+	kill(holderPid, "SIGTERM");
+	let exited = await waitUntilDead(holderPid, isPidAlive, sleep, graceMs, pollIntervalMs);
+	let method: "sigterm" | "sigkill" = "sigterm";
+	if (!exited) {
+		method = "sigkill";
+		kill(holderPid, "SIGKILL");
+		exited = await waitUntilDead(holderPid, isPidAlive, sleep, graceMs, pollIntervalMs);
+	}
+	if (!exited) {
+		deps.log?.({
+			outcome: "skipped",
+			holderPid,
+			holderProvenance: first.holderProvenance,
+			reason: "holder did not exit even after SIGKILL",
+		});
+		return { acquired: false, holderPid, holderProvenance: first.holderProvenance };
+	}
+
+	// The reaped process's own shutdown path (which would call releaseDaemonLock itself) can't
+	// be trusted to have run -- SIGKILL never gives it the chance, and even a clean SIGTERM exit
+	// races this function's own next acquire attempt -- so force-clear unconditionally now that
+	// the holder is confirmed dead.
+	releaseDaemonLock(lockPath);
+	deps.log?.({ outcome: "reaped", holderPid, holderProvenance: first.holderProvenance, method });
+	return acquireDaemonLock(lockPath, isPidAlive, "service");
 }
