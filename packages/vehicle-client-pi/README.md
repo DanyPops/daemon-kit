@@ -13,7 +13,10 @@ result, and collapsible JSON otherwise -- built on
 [`malevich-tui-components`](https://www.npmjs.com/package/malevich-tui-components).
 A consumer with real UX investment in one operation can still supply its
 own pair via `registerVehicleTools(pi, client, { renderers })`; every other
-operation keeps the generic rendering.
+operation keeps the generic rendering. Call `registerVehicleTools()` from an
+async extension factory so Pi has those renderers before replaying persisted
+tool rows. Runtime-dependent availability synchronization is deferred to
+`session_start` automatically.
 
 That rendering is the human TUI channel only. What the model itself reads
 is separate: an operation's output defaults to raw formatted JSON, but an

@@ -174,33 +174,21 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerVehicleTools } from "@danypops/vehicle-client-pi";
 import { createIssuesVehicleClient } from "./issues-client.js";
 
-export default function (pi: ExtensionAPI) {
-  pi.on("session_start", async () => {
-    const client = createIssuesVehicleClient();
-    await registerVehicleTools(pi, client, {
-      permissions: ["issues:read"],
-      principal: { id: "pi-extension" },
-      closeClientOnSessionShutdown: true,
-    });
+export default async function (pi: ExtensionAPI) {
+  const client = createIssuesVehicleClient();
+  await registerVehicleTools(pi, client, {
+    permissions: ["issues:read"],
+    principal: { id: "pi-extension" },
+    closeClientOnSessionShutdown: true,
   });
 }
 ```
 
-**Call `registerVehicleTools()` from within a `pi.on("session_start", ...)` handler
-(or later) -- never directly from the extension's top-level factory body, even
-if the factory is itself `async` and its promise is awaited.** Pi's extension
-runtime only finishes initializing after every extension's factory has
-resolved; `registerVehicleTools()` needs `pi.getAllTools()` (collision
-detection) and `pi.getActiveTools()`/`setActiveTools()` (activation sync),
-both of which throw `"Extension runtime not initialized"` when called too
-early. Confirmed live, twice, independently, in two different real Vehicle-based
-extensions that called it directly from the top-level factory -- both had
-every one of their projected tools silently invisible to the model, with the
-underlying error swallowed by each extension's own daemon-unreachable
-try/catch. `registerVehicleTools()` now turns that specific failure into a
-clear, actionable error instead of leaking Pi's cryptic one-liner or being
-swallowed silently several frames up -- but the fix is still to call it from
-`session_start`, not to rely on the clearer error message.
+Register from an async extension factory. Pi awaits the factory before replaying
+the transcript, so historical tool rows receive their custom renderers after a
+restart or `/reload`. Pi action methods are not available during extension
+loading; `registerVehicleTools()` registers definitions immediately and defers
+only active-tool synchronization to `session_start`.
 
 Operation names are projected to Pi-safe names (`issues.search`
 becomes `issues_search`); multiple versions receive `_vN` suffixes. Existing or
@@ -225,8 +213,6 @@ skips the call entirely when nothing would actually change:
 ```ts
 import { refreshVehicleToolAvailability } from "@danypops/vehicle-client-pi";
 
-// Both calls assume they're running from within (or after) session_start --
-// same requirement as registerVehicleTools() itself, see above.
 let registered = await registerVehicleTools(pi, client, { permissions: ["issues:read"] });
 setInterval(async () => {
   registered = await refreshVehicleToolAvailability(pi, client, registered, { permissions: ["issues:read"] });

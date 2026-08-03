@@ -760,23 +760,42 @@ describe("registerVehicleTools", () => {
 		expect(activeTools()).toEqual(["issues_search"]);
 	});
 
-	it('turns Pi\'s cryptic "Extension runtime not initialized" error (calling registerVehicleTools from the top-level factory body) into a clear, actionable one', async () => {
-		const client = new FakeClient(manifest([operation("issues.search")]));
-		const { pi } = fakePi();
-		const notInitialized = new Error("Extension runtime not initialized. Action methods cannot be called during extension loading.");
-		const brokenPi = {
-			...pi,
-			getAllTools: () => {
-				throw notInitialized;
+	it("registers renderers during async extension loading and defers runtime-dependent activation until session_start", async () => {
+		const client = new FakeClient(manifest([operation("issues.search", 1, { available: false })]));
+		const tools: ToolDefinition[] = [];
+		const sessionStartHandlers: Array<() => void> = [];
+		let loading = true;
+		let activeTools: string[] = [];
+		const actionMethod = <T>(value: T): T => {
+			if (loading) throw new Error("Extension runtime not initialized. Action methods cannot be called during extension loading.");
+			return value;
+		};
+		const pi = {
+			registerTool(tool: ToolDefinition) {
+				tools.push(tool);
+				activeTools.push(tool.name);
+			},
+			getAllTools: () => actionMethod(tools),
+			getActiveTools: () => actionMethod([...activeTools]),
+			setActiveTools(names: string[]) {
+				actionMethod(undefined);
+				activeTools = [...names];
+			},
+			on(name: string, handler: () => void) {
+				if (name === "session_start") sessionStartHandlers.push(handler);
 			},
 		} as unknown as ExtensionAPI;
 
-		await expect(registerVehicleTools(brokenPi, client)).rejects.toThrow(/session_start/);
-		try {
-			await registerVehicleTools(brokenPi, client);
-		} catch (error) {
-			expect((error as Error).cause).toBe(notInitialized);
-		}
+		await registerVehicleTools(pi, client);
+
+		expect(tools).toHaveLength(1);
+		expect(tools[0]?.renderResult).toBeDefined();
+		expect(activeTools).toEqual(["issues_search"]);
+		expect(sessionStartHandlers).toHaveLength(1);
+
+		loading = false;
+		for (const handler of sessionStartHandlers) handler();
+		expect(activeTools).toEqual([]);
 	});
 
 	it('sets promptSnippet so Pi\'s "Available tools" system-prompt section lists the tool -- omitted entirely otherwise, confirmed live', async () => {

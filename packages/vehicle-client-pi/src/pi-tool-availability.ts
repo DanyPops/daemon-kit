@@ -2,31 +2,35 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const NOT_INITIALIZED_MARKER = "Extension runtime not initialized";
 
+export type ExtensionRuntimeActionOutcome<T> = { readonly status: "ready"; readonly value: T } | { readonly status: "loading" };
+
 /**
- * pi.getAllTools()/getActiveTools()/setActiveTools() (Pi's "action methods")
- * throw a generic, uninformative "Extension runtime not initialized. Action
- * methods cannot be called during extension loading" when called directly
- * from an extension's own top-level factory body -- Pi only finishes
- * initializing the extension runtime after every extension's factory (and
- * its returned promise, if async) has resolved. This is a real, easy-to-hit
- * mistake: confirmed live, twice, independently -- two different Vehicle-
- * based Pi extensions each called registerVehicleTools() directly from their
- * top-level factory, and the resulting error was silently swallowed by each
- * extension's own daemon-unreachable try/catch, making every one of their
- * projected tools invisible to the model with zero visible sign why.
- *
- * Wraps any call to one of these methods so that specific failure becomes a
- * loud, actionable error instead of either a cryptic one-liner or (worse) a
- * silently swallowed exception several call-frames up.
+ * Probes a Pi action method without treating extension loading as exceptional.
+ * Extension factories may register definitions while action methods remain
+ * unavailable; callers can defer only the runtime-dependent part to
+ * session_start.
  */
+export function tryExtensionRuntimeAction<T>(fn: () => T): ExtensionRuntimeActionOutcome<T> {
+	try {
+		return { status: "ready", value: fn() };
+	} catch (error) {
+		if (error instanceof Error && error.message.includes(NOT_INITIALIZED_MARKER)) {
+			return { status: "loading" };
+		}
+		throw error;
+	}
+}
+
+/** Makes an accidental Pi action-method call during extension loading fail with
+ * the lifecycle boundary named. Registration uses tryExtensionRuntimeAction()
+ * instead because tool definitions are valid during loading. */
 export function guardExtensionRuntimeInitialized<T>(fn: () => T): T {
 	try {
 		return fn();
 	} catch (error) {
 		if (error instanceof Error && error.message.includes(NOT_INITIALIZED_MARKER)) {
 			throw new Error(
-				'Called a Pi "action method" (getAllTools/getActiveTools/setActiveTools) before Pi\'s extension runtime finished initializing. ' +
-					'This happens when registerVehicleTools()/refreshVehicleToolAvailability() is called directly from an extension\'s top-level factory body -- call it from within a pi.on("session_start", ...) handler instead (or later), never from the factory body itself, even if the factory is async and awaited.',
+				'Called a Pi "action method" (getAllTools/getActiveTools/setActiveTools) before Pi\'s extension runtime finished initializing. Defer this action to session_start.',
 				{ cause: error },
 			);
 		}

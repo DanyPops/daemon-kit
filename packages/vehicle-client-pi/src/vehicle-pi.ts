@@ -19,7 +19,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { publishVehicleActivity } from "./activity-broker.js";
-import { guardExtensionRuntimeInitialized, syncManagedActiveTools } from "./pi-tool-availability.js";
+import { guardExtensionRuntimeInitialized, syncManagedActiveTools, tryExtensionRuntimeAction } from "./pi-tool-availability.js";
 import { renderVehicleCall, renderVehicleResult } from "./vehicle-render.js";
 import { classifyVehicleOperationSafety, type VehicleSafetyPolicyStore, type VehicleSafetyState } from "./vehicle-safety.js";
 import { registerVehicleSafetyContributor } from "./vehicle-safety-registry.js";
@@ -360,7 +360,10 @@ function projectedNames(
 	}));
 }
 
-function assertNamesAvailable(pi: ExtensionAPI, projected: readonly { descriptor: VehicleManifestOperation; toolName: string }[]): void {
+function assertNamesAvailable(
+	projected: readonly { descriptor: VehicleManifestOperation; toolName: string }[],
+	existingToolNames: readonly string[],
+): void {
 	const owners = new Map<string, string>();
 	for (const { descriptor, toolName } of projected) {
 		if (!/^[a-zA-Z0-9_-]+$/.test(toolName)) {
@@ -372,7 +375,7 @@ function assertNamesAvailable(pi: ExtensionAPI, projected: readonly { descriptor
 		}
 		owners.set(toolName, operationKey(descriptor));
 	}
-	const existing = new Set(guardExtensionRuntimeInitialized(() => pi.getAllTools()).map((tool) => tool.name));
+	const existing = new Set(existingToolNames);
 	for (const { descriptor, toolName } of projected) {
 		if (existing.has(toolName)) {
 			throw new Error(`Pi tool '${toolName}' is already registered; refusing to override it with ${operationKey(descriptor)}`);
@@ -591,7 +594,8 @@ export async function registerVehicleTools(
 ): Promise<RegisteredPiVehicle> {
 	const manifest = await client.manifest();
 	const projected = projectedNames(manifest, options.toolName ?? defaultToolName);
-	assertNamesAvailable(pi, projected);
+	const runtime = tryExtensionRuntimeAction(() => pi.getAllTools());
+	assertNamesAvailable(projected, runtime.status === "ready" ? runtime.value.map((tool) => tool.name) : []);
 
 	for (const { descriptor, toolName } of projected) {
 		pi.registerTool(createTool(client, manifest, descriptor, toolName, options));
@@ -617,12 +621,20 @@ export async function registerVehicleTools(
 	// from the very first registration -- registering them at all (rather
 	// than skipping) keeps them ready to flip active later via
 	// refreshVehicleToolAvailability, since Pi has no unregisterTool() to add
-	// them back with afterward.
-	syncManagedActiveTools(
-		pi,
-		tools.map((tool) => tool.toolName),
-		tools.filter((tool) => tool.available && tool.safetyState !== "blocked").map((tool) => tool.toolName),
-	);
+	// them back with afterward. During extension loading, definitions can be
+	// registered but Pi's active-tool action methods are not ready yet; defer
+	// only availability sync so renderers exist before transcript replay.
+	const syncAvailability = () =>
+		syncManagedActiveTools(
+			pi,
+			tools.map((tool) => tool.toolName),
+			tools.filter((tool) => tool.available && tool.safetyState !== "blocked").map((tool) => tool.toolName),
+		);
+	if (runtime.status === "ready") {
+		syncAvailability();
+	} else {
+		pi.on("session_start", syncAvailability);
+	}
 	contributeToSafetyRegistry(manifest, tools);
 
 	return { manifest, tools };
@@ -653,7 +665,12 @@ export async function refreshVehicleToolAvailability(
 	const known = new Set(registered.tools.map((tool) => operationKey({ name: tool.operationName, version: tool.operationVersion })));
 
 	const newlyProjected = projected.filter(({ descriptor }) => !known.has(operationKey(descriptor)));
-	if (newlyProjected.length > 0) assertNamesAvailable(pi, newlyProjected);
+	if (newlyProjected.length > 0) {
+		assertNamesAvailable(
+			newlyProjected,
+			guardExtensionRuntimeInitialized(() => pi.getAllTools()).map((tool) => tool.name),
+		);
+	}
 
 	const tools: RegisteredPiVehicleTool[] = [];
 	for (const { descriptor, toolName } of projected) {
