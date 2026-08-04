@@ -1,12 +1,10 @@
 /**
- * Real, standalone "faux Pi agent" subprocess: drives the exact same client chain a real Pi
- * extension's session_start does (connectWithVersionCheck, then registerVehicleTools against
- * the resulting client) as a genuinely separate OS process with its own PID, module cache, and
- * process-local state -- an in-process Promise.all of N calls would share all of that and could
- * never catch a cross-process race the real bug depends on.
+ * Real "faux Pi agent" subprocess: runs the same client chain a real Pi extension's
+ * session_start does (connectWithVersionCheck, then registerVehicleTools) as a genuinely
+ * separate OS process -- an in-process Promise.all would share memory and miss the
+ * cross-process race this exists to catch.
  *
- * Spawned via `bun run` by test/multi-agent-daemon-singleton.test.ts. Reports exactly one
- * NDJSON result line on stdout; never writes to a shared file.
+ * Spawned via `bun run` by multi-agent-daemon-singleton.test.ts. Reports one NDJSON line.
  */
 import { createExtensionHarness } from "@danypops/pi-extension-harness";
 import { connectWithVersionCheck, spawnDetachedDaemon } from "@danypops/vehicle-client/daemon-client";
@@ -32,9 +30,17 @@ function emit(result: Record<string, unknown>): void {
 	process.stdout.write(`${JSON.stringify({ agentId, ...result })}\n`);
 }
 
+// Every distinct handle this agent ever saw, and every pid it ever sent SIGTERM to -- reported
+// alongside the result so a failure can be traced to which port/pid it targeted and killed.
+const observedHandles: DaemonHandle[] = [];
+const killTargets: DaemonHandle[] = [];
+
 function readHandle(): DaemonHandle | null {
 	try {
-		return JSON.parse(require("node:fs").readFileSync(handlePath, "utf8")) as DaemonHandle;
+		const handle = JSON.parse(require("node:fs").readFileSync(handlePath, "utf8")) as DaemonHandle;
+		const last = observedHandles[observedHandles.length - 1];
+		if (!last || last.port !== handle.port || last.pid !== handle.pid) observedHandles.push(handle);
+		return handle;
 	} catch {
 		return null;
 	}
@@ -50,10 +56,8 @@ try {
 				spawnDetachedDaemon({
 					binPath: "bun",
 					args: ["run", daemonScriptPath],
-					// Matches every real production caller (e.g. papyrus's client.ts): spread
-					// process.env first -- an env object with no PATH means the spawned "bun"
-					// can never even be found, an entirely different failure than what this
-					// suite exists to catch.
+					// Spread process.env first (matches papyrus's real client.ts) -- without it
+					// "bun" has no PATH to be found on.
 					env: { ...process.env, HANDLE_PATH: handlePath, DAEMON_TOKEN: token, DAEMON_VERSION: expectedVersion },
 					spawn: (command, args, options) => {
 						require("node:child_process")
@@ -67,6 +71,7 @@ try {
 			expectedVersion,
 			readVersion: async (client) => (await client.manifest()).version,
 			killStaleProcess: (handle) => {
+				killTargets.push(handle);
 				try {
 					process.kill(handle.pid, "SIGTERM");
 				} catch {
@@ -80,7 +85,14 @@ try {
 
 	const pi = createExtensionHarness(() => {}).api;
 	const registered = await registerVehicleTools(pi, client);
-	emit({ ok: true, toolCount: registered.tools.length, operationNames: registered.tools.map((tool) => tool.operationName) });
+	emit({
+		ok: true,
+		toolCount: registered.tools.length,
+		operationNames: registered.tools.map((tool) => tool.operationName),
+		observedHandles,
+		killTargets,
+		connectedTo: (client as unknown as { baseUrl?: string }).baseUrl,
+	});
 } catch (error) {
-	emit({ ok: false, error: error instanceof Error ? error.message : String(error) });
+	emit({ ok: false, error: error instanceof Error ? error.message : String(error), observedHandles, killTargets });
 }

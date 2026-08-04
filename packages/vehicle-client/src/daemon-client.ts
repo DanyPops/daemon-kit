@@ -322,7 +322,7 @@ export type ExpectedVersion = string | (() => string) | (() => Promise<string>);
 export interface VersionCheckOptions<Handle extends DaemonHandleLike, Client> {
 	/** This extension's own expected daemon version/protocol identifier. Resolved fresh on every call -- see ExpectedVersion. */
 	expectedVersion: ExpectedVersion;
-	/** Reads the connected daemon's reported version (e.g. via its /health response). Errors propagate unchanged -- an inconclusive read never triggers a kill. */
+	/** Reads the connected daemon's reported version (e.g. via its /health response). A connection failure here is retried -- see connectRetry -- rather than propagated as-is; every other error still propagates unchanged, and an inconclusive read never triggers a kill. */
 	readVersion: (client: Client) => Promise<string>;
 	/** Best-effort graceful shutdown request against the stale daemon. Its failure is swallowed -- killStaleProcess is the real fallback that must always work. */
 	requestShutdown?: (client: Client) => Promise<void>;
@@ -332,6 +332,62 @@ export interface VersionCheckOptions<Handle extends DaemonHandleLike, Client> {
 	shutdownTimeoutMs?: number;
 	/** Poll interval while waiting for the handle file to clear. Defaults to 50ms. */
 	shutdownPollIntervalMs?: number;
+	/**
+	 * Bounded retry/backoff around the initial connect+readVersion round trip -- closes a real
+	 * TOCTOU race: two concurrent callers can both connect to the same stale daemon, but only
+	 * one needs to actually kill it -- every other in-flight caller's own readVersion() then
+	 * hits a connection freshly closed out from under it and would otherwise throw, even though
+	 * the daemon is being correctly replaced. Retrying re-reads the handle fresh each attempt,
+	 * so it picks up whatever the current real state is (often an already-live replacement)
+	 * instead of propagating a transient failure that was never a real problem. Modeled on
+	 * connectPushChannel's own reconnect backoff. Sized larger than vehicle-client-pi's
+	 * registerVehicleTools handshake retry (which closes the analogous race one layer up, but
+	 * only needs to survive a daemon's ~100-300ms cold boot): this retry must survive a whole
+	 * concurrent kill-wait-respawn cycle, which shutdownTimeoutMs alone allows up to 2000ms for.
+	 * Defaults to attempts:8, initialDelayMs:100, maxDelayMs:1000, growFactor:1.8 (~5.2s worst
+	 * case). Set attempts:1 to restore the old immediate-failure behavior exactly.
+	 */
+	connectRetry?: ConnectVersionCheckRetryOptions;
+}
+
+export interface ConnectVersionCheckRetryOptions {
+	/** Total attempts at the connect+readVersion round trip, including the first. Defaults to 4. */
+	readonly attempts?: number;
+	/** Delay before the second attempt. Defaults to 50ms. */
+	readonly initialDelayMs?: number;
+	/** No retry delay is ever allowed to exceed this. Defaults to 500ms. */
+	readonly maxDelayMs?: number;
+	/** Multiplier applied to the delay after each failed attempt. Defaults to 2.5. */
+	readonly growFactor?: number;
+}
+
+/** Same jittered exponential-backoff formula as connectPushChannel's reconnect delay,
+ * duplicated locally rather than shared since this file deliberately has no imports of its
+ * own (see the module doc comment). */
+function versionCheckRetryDelayMs(attempt: number, initialDelayMs: number, maxDelayMs: number, growFactor: number): number {
+	const raw = Math.min(initialDelayMs * growFactor ** (attempt - 1), maxDelayMs);
+	return raw * (0.8 + Math.random() * 0.4); // +/-20% jitter
+}
+
+async function connectAndReadVersionWithRetry<Handle extends DaemonHandleLike, Client>(
+	policy: ConnectPolicyOptions<Handle, Client>,
+	versionCheck: VersionCheckOptions<Handle, Client>,
+): Promise<{ client: Client; runningVersion: string }> {
+	const attempts = versionCheck.connectRetry?.attempts ?? 8;
+	const initialDelayMs = versionCheck.connectRetry?.initialDelayMs ?? 100;
+	const maxDelayMs = versionCheck.connectRetry?.maxDelayMs ?? 1_000;
+	const growFactor = versionCheck.connectRetry?.growFactor ?? 1.8;
+
+	for (let attempt = 1; ; attempt++) {
+		try {
+			const client = await connectWithPolicy(policy);
+			const runningVersion = await versionCheck.readVersion(client);
+			return { client, runningVersion };
+		} catch (error) {
+			if (attempt >= attempts) throw error;
+			await new Promise((resolve) => setTimeout(resolve, versionCheckRetryDelayMs(attempt, initialDelayMs, maxDelayMs, growFactor)));
+		}
+	}
 }
 
 /**
@@ -355,8 +411,7 @@ export async function connectWithVersionCheck<Handle extends DaemonHandleLike, C
 	policy: ConnectPolicyOptions<Handle, Client>,
 	versionCheck: VersionCheckOptions<Handle, Client>,
 ): Promise<Client> {
-	const client = await connectWithPolicy(policy);
-	const runningVersion = await versionCheck.readVersion(client);
+	const { client, runningVersion } = await connectAndReadVersionWithRetry(policy, versionCheck);
 	const expectedVersion =
 		typeof versionCheck.expectedVersion === "function" ? await versionCheck.expectedVersion() : versionCheck.expectedVersion;
 	if (runningVersion === expectedVersion) return client;

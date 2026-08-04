@@ -1,11 +1,7 @@
 /**
- * Real, standalone Vehicle daemon subprocess for multi-agent daemon-lifecycle tests. Spawned
- * via `bun run` by test/multi-agent-daemon-singleton.test.ts, never imported directly -- it
- * needs to be a genuinely separate OS process so the daemon's own PID is real, observable
- * ground truth (an in-process Bun.serve daemon has no PID of its own to churn).
- *
- * Every lifecycle event (start, request, shutdown) is a single NDJSON line on stdout, read by
- * the parent test via pi-process-harness's ManagedProcess.onStdout -- no shared log file.
+ * Real Vehicle daemon subprocess for multi-agent-daemon-singleton.test.ts. Genuinely separate
+ * OS process, spawned via `bun run` -- an in-process Bun.serve daemon has no PID of its own to
+ * churn. Every lifecycle event is one NDJSON line on stdout.
  */
 import { bindVehicleOperation, defineVehicleOperation, defineVehicleSchema } from "@danypops/vehicle-core";
 import { VehicleRegistry } from "@danypops/vehicle-server";
@@ -45,11 +41,9 @@ registry.register(
 
 const app = createVehicleHttpApp({ registry, token });
 
-// runDaemonProcess (not startDaemon directly) -- it's the real production entry point that
-// wires SIGINT/SIGTERM to a genuine graceful stop() (which clears the handle file) before
-// exiting. A hand-rolled `process.on("SIGTERM", () => process.exit(0))` skips that handle-file
-// cleanup entirely, which was confirmed live to make connectWithVersionCheck's post-kill poll
-// loop see a handle that never clears and hand back a client pointed at the now-dead process.
+// runDaemonProcess (not startDaemon) wires SIGTERM to a real stop() that clears the handle
+// file. A hand-rolled exit handler skips that, leaving a handle connectWithVersionCheck's
+// post-kill poll never sees clear -- confirmed live to hand back a client pointed at a dead pid.
 runDaemonProcess({
 	daemonLabel: "MultiAgentTestDaemon",
 	handlePath,

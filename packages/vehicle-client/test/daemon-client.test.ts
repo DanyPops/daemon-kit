@@ -787,7 +787,7 @@ describe("connectWithVersionCheck", () => {
 		expect(killCalls).toBe(0);
 	});
 
-	it("propagates a readVersion() failure unchanged -- an inconclusive read never triggers a kill", async () => {
+	it("still propagates a readVersion() failure once the bounded connect retry is exhausted -- an inconclusive read never triggers a kill", async () => {
 		let killCalls = 0;
 		await expect(
 			connectWithVersionCheck<DaemonHandleLike, VersionedFakeClient>(
@@ -806,10 +806,38 @@ describe("connectWithVersionCheck", () => {
 					killStaleProcess: () => {
 						killCalls++;
 					},
+					// attempts:1 keeps this deterministic and fast -- the retry itself is covered by
+					// its own test below.
+					connectRetry: { attempts: 1 },
 				},
 			),
 		).rejects.toThrow("health endpoint unreachable");
 		expect(killCalls).toBe(0);
+	});
+
+	it("retries the connect+readVersion round trip and succeeds once a transient failure clears -- closes the TOCTOU race where a concurrent caller kills the same stale daemon first", async () => {
+		let readVersionCalls = 0;
+		const client = await connectWithVersionCheck<DaemonHandleLike, VersionedFakeClient>(
+			{
+				readHandle: () => FAKE_HANDLE,
+				buildClient: (handle) => ({ port: handle.port, version: "1.2.0" }),
+				autoStart: true,
+				spawn: () => {},
+				fallbackMessage: "unreachable",
+			},
+			{
+				expectedVersion: "1.2.0",
+				readVersion: async (client) => {
+					readVersionCalls++;
+					if (readVersionCalls < 3) throw new Error("connection refused -- daemon mid-replacement");
+					return client.version;
+				},
+				killStaleProcess: () => {},
+				connectRetry: { attempts: 5, initialDelayMs: 1, maxDelayMs: 5 },
+			},
+		);
+		expect(client.version).toBe("1.2.0");
+		expect(readVersionCalls).toBe(3);
 	});
 
 	it("resolves a function expectedVersion fresh on every call instead of a cached string, matching -- no kill when the live value now matches", async () => {
