@@ -191,6 +191,17 @@ interface ListeningServer {
 
 type DaemonApp = { fetch(request: Request): Promise<Response> };
 
+// Bun.serve's own idleTimeout defaults to 10s and applies per-connection regardless of how long a
+// given request is expected to take -- confirmed live against a real running daemon: a genuine
+// cross-process Node client hitting a real Vehicle SSE invoke() response (vehicle-http-provider.ts's
+// wantsStream) that goes quiet between progress ticks got its socket actively closed by Bun at ~12s,
+// surfacing as Node's "fetch failed" / SocketError "other side closed" (UND_ERR_SOCKET) -- independent
+// of and before any operation-level VehicleLimits.maxTimeoutMs deadline ever got a chance to apply.
+// Bounded (not server.timeout(request, 0)'s literal no-timeout) to the same order of magnitude as this
+// ecosystem's longest-lived longRunning operations today, applied only to the one request that
+// actually asked for a streaming response -- every ordinary request keeps Bun's normal 10s.
+const STREAMING_IDLE_TIMEOUT_S = 3_600;
+
 function startBunListener(options: StartDaemonOptions, app: DaemonApp, pushPath: string, onRequest: () => void): Promise<ListeningServer> {
 	const server = Bun.serve({
 		hostname: LOOPBACK_HOST,
@@ -199,6 +210,9 @@ function startBunListener(options: StartDaemonOptions, app: DaemonApp, pushPath:
 			onRequest();
 			if (options.pushChannel && new URL(request.url).pathname === pushPath) {
 				return options.pushChannel.upgrade(request, bunServer) ?? undefined;
+			}
+			if ((request.headers.get("accept") ?? "").includes("text/event-stream")) {
+				bunServer.timeout(request, STREAMING_IDLE_TIMEOUT_S);
 			}
 			return runWithRpcCallId(randomUUID(), () => app.fetch(request));
 		},

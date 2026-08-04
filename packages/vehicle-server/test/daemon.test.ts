@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -249,7 +249,7 @@ describe("startDaemon", () => {
 		expect(readDaemonHandle(handlePath)?.port).toBe(daemon.port);
 	});
 
-	it("a \"service\"-provenance start reaps an unmanaged (auto-spawn) holder and binds, instead of exiting as a normal join", async () => {
+	it('a "service"-provenance start reaps an unmanaged (auto-spawn) holder and binds, instead of exiting as a normal join', async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
 		const lockPath = join(dir, "daemon.lock");
@@ -282,7 +282,7 @@ describe("startDaemon", () => {
 		expect(events.some((e) => e.level === "warn" && e.msg === "daemon lock reaped" && e.fields?.holderPid === 999321)).toBe(true);
 	});
 
-	it("a \"service\"-provenance start still exits as a normal join against a genuine sibling supervised instance", async () => {
+	it('a "service"-provenance start still exits as a normal join against a genuine sibling supervised instance', async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
 		const lockPath = join(dir, "daemon.lock");
@@ -301,7 +301,7 @@ describe("startDaemon", () => {
 		expect(kill).not.toHaveBeenCalled();
 	});
 
-	it("an \"auto-spawn\"-provenance start never reaps -- it still exits as a normal join, exactly like before this feature existed", async () => {
+	it('an "auto-spawn"-provenance start never reaps -- it still exits as a normal join, exactly like before this feature existed', async () => {
 		dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
 		const handlePath = join(dir, "handle.json");
 		const lockPath = join(dir, "daemon.lock");
@@ -481,4 +481,40 @@ describe("startDaemon: per-request rpcCallId correlation (Bun listener)", () => 
 		expect(typeof fast.rpcCallId).toBe("string");
 		expect(slow.rpcCallId).not.toBe(fast.rpcCallId);
 	});
+
+	it("raises a text/event-stream request's own idle timeout well past Bun's own 10s default, and leaves every ordinary request alone", async () => {
+		// Regression guard for a real live incident: Bun.serve's own idleTimeout (default 10s) killed a
+		// real Vehicle SSE invoke() response mid-wait, independent of and before any operation-level
+		// VehicleLimits.maxTimeoutMs deadline ever got a chance to apply -- confirmed live via a real
+		// cross-process client against a real running daemon (Node's fetch surfaced it as "fetch failed" /
+		// SocketError "other side closed", UND_ERR_SOCKET, at ~12s). Spies on the real Bun server's own
+		// .timeout(request, seconds) instead of waiting out a real idle window, which this suite's own
+		// sibling test already covers happening for real ("survives an idle gap..." above did that with a
+		// real Bun fetch() client and never caught this -- the real bug only showed up cross-process).
+		const calls: Array<{ seconds: number }> = [];
+		// biome-ignore lint/suspicious/noExplicitAny: Bun.serve's overloaded signature can't be spied through cleanly; only .timeout()'s own args matter here.
+		const originalServe = Bun.serve.bind(Bun) as (options: any) => ReturnType<typeof Bun.serve>;
+		// biome-ignore lint/suspicious/noExplicitAny: same as above -- the mock's own options param.
+		const serveSpy = spyOn(Bun, "serve").mockImplementation(((options: any) => {
+			const server = originalServe(options);
+			spyOn(server, "timeout").mockImplementation(((_request: Request, seconds: number) => {
+				calls.push({ seconds });
+			}) as typeof server.timeout);
+			return server;
+		}) as typeof Bun.serve);
+		try {
+			dir = mkdtempSync(join(tmpdir(), "daemon-kit-daemon-"));
+			const handlePath = join(dir, "handle.json");
+			daemon = await startDaemon({
+				daemonLabel: "Acme",
+				handlePath,
+				buildApp: () => ({ fetch: async () => new Response("ok") }),
+			});
+			await fetch(`http://127.0.0.1:${daemon.port}/`, { headers: { accept: "text/event-stream" } });
+			await fetch(`http://127.0.0.1:${daemon.port}/`);
+			expect(calls).toEqual([{ seconds: 3_600 }]);
+		} finally {
+			serveSpy.mockRestore();
+		}
+	}, 10_000);
 });
