@@ -57,11 +57,26 @@ function effectStyle(theme: Theme, effect: VehicleEffect, text: string): string 
 	return firstDistinctStyle(baseline, candidates, fallback);
 }
 
+/** A scalar value renders as itself; anything structured (array/object) falls back to compact JSON just for that one value, never for the whole args bag. */
+function formatArgValue(value: unknown): string {
+	if (typeof value === "string") return value;
+	if (typeof value === "number" || typeof value === "boolean" || value === null) return String(value);
+	return JSON.stringify(value) ?? String(value);
+}
+
+/**
+ * A real "Tool Command" line, not a raw JSON args dump -- `key=value key2=value2`,
+ * matching how Pi's own built-in tools (grep, bash) render their own calls.
+ * Omits undefined-valued keys entirely rather than printing "key=undefined".
+ */
 function compactArgs(args: unknown, width: number): string {
 	if (args === undefined || args === null) return "";
-	if (typeof args === "object" && !Array.isArray(args) && Object.keys(args as object).length === 0) return "";
-	const json = JSON.stringify(args);
-	return json === undefined ? "" : truncateToWidth(json, width);
+	if (typeof args !== "object" || Array.isArray(args)) return truncateToWidth(formatArgValue(args), width);
+	const pairs = Object.entries(args as Record<string, unknown>)
+		.filter(([, value]) => value !== undefined)
+		.map(([key, value]) => `${key}=${formatArgValue(value)}`);
+	if (pairs.length === 0) return "";
+	return truncateToWidth(pairs.join(" "), width);
 }
 
 export function renderVehicleCall(
@@ -71,7 +86,8 @@ export function renderVehicleCall(
 	context: RenderCallContext,
 ): Component {
 	const argsText = compactArgs(args, Math.max(10, context.cwd ? 60 : 60));
-	const line = argsText ? `${descriptor.name} ${theme.fg("dim", argsText)}` : descriptor.name;
+	const name = theme.bold(descriptor.name);
+	const line = argsText ? `${name} ${theme.fg("dim", argsText)}` : name;
 	return new Text({ text: effectStyle(theme, descriptor.effect, line), measure });
 }
 

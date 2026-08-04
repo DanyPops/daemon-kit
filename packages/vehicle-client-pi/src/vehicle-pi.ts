@@ -222,14 +222,18 @@ export interface RegisteredPiVehicle {
 	readonly stale: boolean;
 }
 
+/** sanitizedFailure()'s own fallback code for a raw transport-level throw -- carries zero information on its own (every failure is "a vehicle client failed"), unlike a real domain code (not-found, validation, deadline-exceeded, ...) which is worth showing as-is. */
+const GENERIC_TRANSPORT_FAILURE_CODE = "vehicle-client-failed";
+
 export class PiVehicleInvocationError extends Error {
-	constructor(readonly failure: VehicleFailure) {
+	constructor(
+		readonly failure: VehicleFailure,
+		/** The failing Vehicle's own manifest name (e.g. "papyrus") -- substituted for the generic transport-failure code so the visible message says which backend failed instead of repeating a label that's true of every such failure. */
+		vehicleName?: string,
+	) {
 		// causeMessage was captured but never shown -- Pi surfaces this .message, not .failure.
-		super(
-			failure.causeMessage === undefined
-				? `${failure.code}: ${failure.message}`
-				: `${failure.code}: ${failure.message} (${failure.causeMessage})`,
-		);
+		const label = failure.code === GENERIC_TRANSPORT_FAILURE_CODE && vehicleName ? vehicleName : failure.code;
+		super(failure.causeMessage === undefined ? `${label}: ${failure.message}` : `${label}: ${failure.message} (${failure.causeMessage})`);
 		this.name = "PiVehicleInvocationError";
 	}
 }
@@ -363,7 +367,7 @@ function sanitizedFailure(error: unknown): VehicleFailure {
 	// diagnosable only as the opaque top-level "fetch failed" until this was captured.
 	const causeMessage = error instanceof Error ? boundedCauseMessage(error.cause) : undefined;
 	return {
-		code: "vehicle-client-failed",
+		code: GENERIC_TRANSPORT_FAILURE_CODE,
 		category: "unavailable",
 		message: error instanceof Error ? error.message : "Vehicle client invocation failed",
 		retryable: false,
@@ -528,7 +532,7 @@ export async function invokeVehicleOperation(params: VehicleOperationInvocationP
 				retryable: true,
 			};
 			publishOperationActivity("failed", identity, descriptor, { code: failure.code });
-			throw new PiVehicleInvocationError(failure);
+			throw new PiVehicleInvocationError(failure, manifest.name);
 		}
 	}
 
@@ -543,7 +547,7 @@ export async function invokeVehicleOperation(params: VehicleOperationInvocationP
 		// is just the optional local fast path attempting it automatically.
 		if (failure.code !== "approval-required") {
 			publishOperationActivity("failed", identity, descriptor, { code: failure.code });
-			throw new PiVehicleInvocationError(failure);
+			throw new PiVehicleInvocationError(failure, manifest.name);
 		}
 		const requestId = approvalRequestId(failure);
 		// No requestId to act on, or no UI capable of asking -- the request
@@ -551,7 +555,7 @@ export async function invokeVehicleOperation(params: VehicleOperationInvocationP
 		// later) rather than this call eagerly denying it on the caller's behalf.
 		if (!requestId || !context.hasUI) {
 			publishOperationActivity("failed", identity, descriptor, { code: failure.code });
-			throw new PiVehicleInvocationError(failure);
+			throw new PiVehicleInvocationError(failure, manifest.name);
 		}
 
 		const approved = await requestLocalApproval(context, descriptor, input, signal);
@@ -571,14 +575,14 @@ export async function invokeVehicleOperation(params: VehicleOperationInvocationP
 		}
 		if (!capability) {
 			publishOperationActivity("failed", identity, descriptor, { code: failure.code });
-			throw new PiVehicleInvocationError(failure);
+			throw new PiVehicleInvocationError(failure, manifest.name);
 		}
 		try {
 			output = await client.invoke(descriptor.name, descriptor.version, input, { ...baseInvocation, approvalCapability: capability });
 		} catch (retryError) {
 			const retryFailure = sanitizedFailure(retryError);
 			publishOperationActivity("failed", identity, descriptor, { code: retryFailure.code });
-			throw new PiVehicleInvocationError(retryFailure);
+			throw new PiVehicleInvocationError(retryFailure, manifest.name);
 		}
 	}
 	publishOperationActivity("completed", identity, descriptor);

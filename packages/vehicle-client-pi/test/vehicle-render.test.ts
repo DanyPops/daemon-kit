@@ -1,7 +1,17 @@
 import { describe, expect, it } from "bun:test";
 import type { VehicleEffect, VehicleOperationDescriptor } from "@danypops/vehicle-core";
 import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { Box, visibleWidth } from "@earendil-works/pi-tui";
 import { renderVehicleCall, renderVehicleResult } from "../src/vehicle-render.ts";
+
+// A theme that emits real ANSI SGR escape codes (truecolor, like a real theme's
+// fg() output), not the plain "<color>text" markers fakeTheme/flatTheme use --
+// those can never exercise an ANSI-blind width miscalculation, since they carry
+// no actual escape bytes for a naive .length-based measure to miscount.
+const ansiTheme = {
+	fg: (color: string, text: string) => (color === "error" ? `\x1b[38;2;212;114;138m${text}\x1b[39m` : text),
+	bold: (text: string) => text,
+} as unknown as Theme;
 
 // keyHint() (used by the row-truncation "more" note) reads pi's global theme singleton,
 // independent of the fakeTheme/flatTheme fakes below -- it throws "Theme not initialized" without this.
@@ -49,10 +59,31 @@ function callContext(overrides: Record<string, unknown> = {}) {
 }
 
 describe("renderVehicleCall", () => {
-	it("includes the operation name and compact args", () => {
+	it("includes the operation name and compact args as key=value pairs, not raw JSON", () => {
 		const component = renderVehicleCall(descriptor("read"), { backend: "github" }, fakeTheme, callContext());
-		expect(component.render(80).join("\n")).toContain("issue.list");
-		expect(component.render(80).join("\n")).toContain('"backend":"github"');
+		const line = component.render(80).join("\n");
+		expect(line).toContain("issue.list");
+		expect(line).toContain("backend=github");
+		expect(line).not.toContain("{");
+		expect(line).not.toContain('"');
+	});
+
+	it("joins several args with spaces, skipping undefined values", () => {
+		const component = renderVehicleCall(
+			descriptor("read"),
+			{ backend: "github", limit: 5, missing: undefined },
+			fakeTheme,
+			callContext(),
+		);
+		const line = component.render(80).join("\n");
+		expect(line).toContain("backend=github limit=5");
+		expect(line).not.toContain("missing");
+	});
+
+	it("renders the operation name bold, matching a real Tool Command title", () => {
+		const boldTheme = { ...fakeTheme, bold: (text: string) => `[b]${text}[/b]` } as unknown as Theme;
+		const component = renderVehicleCall(descriptor("read"), {}, boldTheme, callContext());
+		expect(component.render(80)[0]).toContain("[b]issue.list[/b]");
 	});
 
 	it("omits the args snippet for an empty-object call", () => {
@@ -335,5 +366,28 @@ describe("renderVehicleResult", () => {
 			resultContext({ isError: true }),
 		);
 		expect(component.render(80).join("\n")).toContain("backend unreachable");
+	});
+
+	// Regression guard for a real reported symptom: an error result's background box
+	// visibly cut short of the terminal's own width, unlike the call line above it --
+	// exactly the "ANSI-blind default measure" bug class malevich-tui-components has
+	// already hit in Table and Envelope (real ANSI escape bytes counted as visible
+	// characters, undercounting the padding a styled line needs). Wraps the error
+	// Component in a real pi-tui Box with a background function, mirroring Pi's own
+	// tool-execution.ts (both the call and result renderers share one Box/one width).
+	it("pads an ANSI-styled error result to the full box width, matching every other line -- no ragged background edge", () => {
+		const longMessage = "vehicle-client-failed: Vehicle operation deadline exceeded";
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [{ type: "text", text: longMessage }], details: {} },
+			{ isPartial: false, expanded: false },
+			ansiTheme,
+			resultContext({ isError: true }),
+		);
+		const box = new Box(1, 1, (text) => `\x1b[41m${text}\x1b[49m`);
+		box.addChild(component);
+		const lines = box.render(80);
+		expect(lines.length).toBeGreaterThan(0);
+		for (const line of lines) expect(visibleWidth(line)).toBe(80);
 	});
 });

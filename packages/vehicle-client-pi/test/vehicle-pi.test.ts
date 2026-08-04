@@ -517,8 +517,27 @@ describe("registerVehicleTools", () => {
 			expect(failure.code).toBe("vehicle-client-failed");
 			expect(failure.message).toBe("fetch failed");
 			expect(failure.causeMessage).toBe("connect ECONNREFUSED 127.0.0.1:41203");
-			// .message (not just .failure) is what Pi's surface actually shows.
-			expect((error as Error).message).toBe("vehicle-client-failed: fetch failed (connect ECONNREFUSED 127.0.0.1:41203)");
+			// .message (not just .failure) is what Pi's surface actually shows -- labeled with the
+			// failing Vehicle's own name (this fixture's manifest is named "test-vehicle"), not the
+			// generic "vehicle-client-failed" code, which carries zero information a user doesn't
+			// already have (every failure here is "a vehicle client failed").
+			expect((error as Error).message).toBe("test-vehicle: fetch failed (connect ECONNREFUSED 127.0.0.1:41203)");
+		}
+	});
+
+	it("still shows a real domain error code as-is, unlike the generic transport-failure fallback", async () => {
+		const client = new FakeClient(manifest([operation("fail.test")]));
+		client.error = new VehicleError("not-found", "task xyz not found", { category: "not_found" });
+		const { pi, tools } = fakePi();
+		await registerVehicleTools(pi, client, {});
+		try {
+			await execute(tools[0]!, { value: "go" });
+			throw new Error("expected invocation failure");
+		} catch (error) {
+			expect(error).toBeInstanceOf(PiVehicleInvocationError);
+			// A real domain code is informative on its own -- the Vehicle-name substitution
+			// only ever applies to the one generic transport-failure fallback code.
+			expect((error as Error).message).toBe("not-found: task xyz not found");
 		}
 	});
 
