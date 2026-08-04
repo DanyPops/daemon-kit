@@ -16,22 +16,15 @@
  * to its own transform only when needed).
  */
 import { pathToFileURL } from "node:url";
+import { JITI_NATIVE_MODULES } from "@danypops/pi-extension-harness";
 
 /**
- * Packages whose module-level state (e.g. a Map literal) must be evaluated
- * in the real V8 realm, not jiti's transform scope, or later `instanceof`/
- * identity checks against that state silently fail. Vendored from Pi's own
- * extension loader; kept in sync manually since jiti resolution is loader
- * policy, not something a dependency can introspect at runtime.
+ * Re-exported for any existing consumer of this module's own public surface
+ * -- the real source of truth is @danypops/pi-extension-harness, which this
+ * package already depends on; see that package's own jiti-native-modules.ts
+ * for why the list exists and its Pi-loader-internals provenance.
  */
-export const JITI_NATIVE_MODULES: readonly string[] = [
-	"jsdom",
-	"lru-cache",
-	"@asamuzakjp/css-color",
-	"css-tree",
-	"@asamuzakjp/dom-selector",
-	"nwsapi",
-];
+export { JITI_NATIVE_MODULES };
 
 export type PiLoadPath = "native-esm" | "jiti-try-native-false" | "jiti-try-native-true";
 

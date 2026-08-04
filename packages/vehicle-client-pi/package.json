@@ -55,6 +55,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@danypops/pi-extension-harness": "^0.4.0",
 		"@danypops/vehicle-client": "workspace:*",
 		"@danypops/vehicle-core": "workspace:*",
 		"@danypops/vehicle-server": "workspace:*",
@@ -72,7 +73,6 @@
 		}
 	},
 	"devDependencies": {
-		"@danypops/pi-extension-harness": "^0.4.0",
 		"@danypops/pi-tui-harness": "^0.0.2",
 		"@types/node": "^22.0.0",
 		"typescript": "^5.9.3"
