@@ -499,6 +499,27 @@ describe("registerVehicleTools", () => {
 		expect(result.content[0]).toMatchObject({ text: expect.stringContaining("task-1") });
 	});
 
+	it("surfaces a plain transport error's own .cause (e.g. Node fetch's real ECONNREFUSED/ECONNRESET detail), not just its opaque top-level message", async () => {
+		// Regression guard for a real live incident: pi-pipes' ci.wait surfaced only "vehicle-client-failed:
+		// fetch failed" with zero further detail -- Node's fetch() always populates a TypeError's .cause with
+		// the real underlying reason (ECONNREFUSED, ECONNRESET, DNS failure, ...), but sanitizedFailure()'s
+		// generic fallback branch dropped it on the floor, leaving nothing to diagnose from.
+		const client = new FakeClient(manifest([operation("focus.test")]));
+		client.error = new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED 127.0.0.1:41203") });
+		const { pi, tools } = fakePi();
+		await registerVehicleTools(pi, client, {});
+		try {
+			await execute(tools[0]!, { value: "go" });
+			throw new Error("expected invocation failure");
+		} catch (error) {
+			expect(error).toBeInstanceOf(PiVehicleInvocationError);
+			const failure = (error as PiVehicleInvocationError).failure;
+			expect(failure.code).toBe("vehicle-client-failed");
+			expect(failure.message).toBe("fetch failed");
+			expect(failure.causeMessage).toBe("connect ECONNREFUSED 127.0.0.1:41203");
+		}
+	});
+
 	it("never calls onInvoked when invoke() itself fails", async () => {
 		const client = new FakeClient(manifest([operation("focus.test")]));
 		client.error = new VehicleError("upstream-busy", "Provider is busy", { category: "unavailable", retryable: true });

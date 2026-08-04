@@ -282,6 +282,40 @@ describe("Vehicle HTTP provider + RemoteVehicleClient: local/HTTP parity", () =>
 	});
 });
 
+describe("RemoteVehicleClient: server disconnects mid-SSE-stream", () => {
+	it("surfaces a clear error, not a hang, when the server is killed between two progress ticks", async () => {
+		const { baseUrl, token } = startTestServer();
+		const client = new RemoteVehicleClient({ baseUrl, token });
+		const progress: unknown[] = [];
+		const invocation = client.invoke<{ echoed: string }>(
+			"test.slow",
+			1,
+			{ value: "hi" },
+			{
+				onProgress: (p) => {
+					progress.push(p);
+					// Kill the connection right after the first tick, before the second tick/result ever arrives --
+					// simulating a daemon restart or network drop mid-wait, the same shape as a real long ci.wait().
+					server?.stop(true);
+				},
+			},
+		);
+		let caught: unknown;
+		try {
+			await invocation;
+			throw new Error("expected invoke() to reject");
+		} catch (error) {
+			caught = error;
+		}
+		expect(progress).toEqual([{ step: 1 }]);
+		expect(caught).toBeInstanceOf(Error);
+		// Real, observed shape (Bun's own fetch): distinct from Node/undici's "fetch failed" for an
+		// initial-connect failure -- the two runtimes report a severed stream differently, which is
+		// itself the finding: a bare error message alone can't tell you which failure mode occurred.
+		expect((caught as Error).message).toContain("socket connection was closed unexpectedly");
+	});
+});
+
 describe("RemoteVehicleClient: manifest() TTL caching", () => {
 	it("is off by default -- every call hits the server fresh, zero behavior change for existing callers", async () => {
 		const { baseUrl, token } = startTestServer();

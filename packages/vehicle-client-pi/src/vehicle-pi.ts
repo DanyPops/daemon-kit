@@ -10,7 +10,7 @@ import type {
 	VehicleOperationDescriptor,
 	VehiclePrincipal,
 } from "@danypops/vehicle-core";
-import { createAtomicJsonWriter, extractVehicleContent, VehicleError } from "@danypops/vehicle-core";
+import { boundedCauseMessage, createAtomicJsonWriter, extractVehicleContent, VehicleError } from "@danypops/vehicle-core";
 import type {
 	AgentToolUpdateCallback,
 	ExtensionAPI,
@@ -323,11 +323,18 @@ function publishOperationActivity(
 function sanitizedFailure(error: unknown): VehicleFailure {
 	if (error instanceof VehicleError) return error.toFailure();
 	if (error instanceof PiVehicleInvocationError) return error.failure;
+	// This branch only ever sees a raw transport-level throw (a stale/dead connection, a fetch()
+	// failure, a stream read error) -- never a domain rejection, which VehicleError already carries
+	// its own opt-in exposeCause for. Node's fetch() populates a TypeError's .cause with the real
+	// underlying reason (ECONNREFUSED, ECONNRESET, a DNS failure); a real live incident was
+	// diagnosable only as the opaque top-level "fetch failed" until this was captured.
+	const causeMessage = error instanceof Error ? boundedCauseMessage(error.cause) : undefined;
 	return {
 		code: "vehicle-client-failed",
 		category: "unavailable",
 		message: error instanceof Error ? error.message : "Vehicle client invocation failed",
 		retryable: false,
+		...(causeMessage === undefined ? {} : { causeMessage }),
 	};
 }
 
