@@ -9,12 +9,14 @@
 		"typecheck": "bun run build && bun run --filter './packages/*' typecheck",
 		"format": "biome format --write .",
 		"lint": "biome lint . && eslint packages --max-warnings 0",
-		"lint:deps": "bunx sherif@1.13.0",
+		"lint:deps": "bunx sherif@1.13.0 --fail-on-warnings",
+		"policy": "packed-policy",
 		"check": "biome check --write . && eslint packages --max-warnings 0"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.6",
 		"@danypops/armada": "workspace:*",
+		"@danypops/packed": "^0.7.0",
 		"@danypops/vehicle-client": "workspace:*",
 		"@danypops/vehicle-client-pi": "workspace:*",
 		"@danypops/vehicle-conformance": "workspace:*",

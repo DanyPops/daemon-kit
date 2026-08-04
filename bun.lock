@@ -7,6 +7,7 @@
       "devDependencies": {
         "@biomejs/biome": "^2.5.6",
         "@danypops/armada": "workspace:*",
+        "@danypops/packed": "^0.7.0",
         "@danypops/vehicle-client": "workspace:*",
         "@danypops/vehicle-client-pi": "workspace:*",
         "@danypops/vehicle-conformance": "workspace:*",
@@ -188,6 +189,8 @@
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.6", "", { "os": "win32", "cpu": "x64" }, "sha512-WN05KwXnTO/2J45RQPvzZMXf7tZUIofHoR35xIPfCo7pQ2RFidxI8sfb5mGsaTxdMmEOzHzOPRCdA5/fCpc7xQ=="],
 
     "@danypops/armada": ["@danypops/armada@workspace:packages/armada"],
+
+    "@danypops/packed": ["@danypops/packed@0.7.0", "", { "bin": { "packed-policy": "dist/repository-policy-cli.js" } }, "sha512-9P56MZEuxd6SmnfXSVNlb0dePNTwVU+3zBvlScZRejChL7VvfNx3XyWUIRVZOubL+n4XtZUCw+VhwrXnd7TXaQ=="],
 
     "@danypops/pi-extension-harness": ["@danypops/pi-extension-harness@0.4.0", "", { "dependencies": { "jiti": "^2.7.0" }, "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*", "typebox": "*" } }, "sha512-BzLMi3DH7IelnYMx66rnjb3cgW++xwxmpnlxcZZuaz6LvY++85J8C+qSAG9PEuMeE/mhoItBdNCEWAZASpqeig=="],
 
