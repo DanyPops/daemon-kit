@@ -26,9 +26,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
 
       - run: bun install
+      - run: node scripts/check-release-discipline.mjs
       - run: bun run check
       - run: bun run build
 
