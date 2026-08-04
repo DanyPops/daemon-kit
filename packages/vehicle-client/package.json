@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/vehicle-client",
-	"version": "0.5.2",
+	"version": "0.5.3",
 	"description": "Vehicle clients: a same-process LocalVehicleClient (./local), an authenticated-HTTP RemoteVehicleClient (./http), plus the generic connection-resilience toolkit any client reaching a Vehicle server needs (retry-on-stale-connection, auto-spawn/fail-closed policy, version checking, push-channel reconnection, authenticated RPC over HTTP or a Unix socket).",
 	"license": "MIT",
 	"type": "module",
