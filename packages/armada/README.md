@@ -72,6 +72,24 @@ armada remove example --json
 
 Use `--manifest <path>` with any command to select a different manifest.
 
+## Testing integrations
+
+`@danypops/armada/testing` provides an isolated real-registrar harness backed by a stateful mock native controller and mock Vehicle applications. Readiness can complete automatically, wait for `markReady()`, or return a timeout without touching the host service manager.
+
+```ts
+import { createArmadaTestHarness } from "@danypops/armada/testing";
+
+const harness = await createArmadaTestHarness({ readiness: "manual" });
+try {
+  const registering = harness.registrar.register(vehicle);
+  await harness.waitForEvent("ready-wait:example");
+  harness.application("example").markReady();
+  await registering;
+} finally {
+  await harness.dispose();
+}
+```
+
 ## Development
 
 From the Vehicle repository root:
