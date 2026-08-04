@@ -25,6 +25,9 @@ describe("createArmadaTestHarness", () => {
 				"ready:mock-vehicle",
 			]);
 			expect(harness.application("mock-vehicle").state()).toBe("ready");
+			expect(await harness.status()).toMatchObject({
+				vehicles: [{ name: "mock-vehicle", nativeStatus: "running", ready: true, descriptorDrift: false }],
+			});
 			const manifest = JSON.parse(await readFile(harness.manifestPath, "utf8")) as { vehicles: Array<{ name: string }> };
 			expect(manifest.vehicles.map((item) => item.name)).toEqual(["mock-vehicle"]);
 		} finally {
@@ -60,6 +63,7 @@ describe("createArmadaTestHarness", () => {
 			const app = harness.application("mock-vehicle");
 			app.crash();
 			expect(app.state()).toBe("crashed");
+			expect(await harness.status()).toMatchObject({ vehicles: [{ nativeStatus: "failed", ready: false }] });
 			app.restart();
 			expect(app.state()).toBe("starting");
 			app.exitCleanly();

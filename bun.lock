@@ -28,7 +28,7 @@
     },
     "packages/armada": {
       "name": "@danypops/armada",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "bin": {
         "armada": "dist/cli.js",
       },

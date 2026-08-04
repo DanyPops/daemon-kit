@@ -74,7 +74,7 @@ Use `--manifest <path>` with any command to select a different manifest.
 
 ## Testing integrations
 
-`@danypops/armada/testing` provides an isolated real-registrar harness backed by a stateful mock native controller and mock Vehicle applications. Readiness can complete automatically, wait for `markReady()`, or return a timeout without touching the host service manager.
+`@danypops/armada/testing` provides an isolated real-registrar harness backed by a stateful mock native controller and mock Vehicle applications. Readiness can complete automatically, wait for `markReady()`, or return a timeout without touching the host service manager. `status()` projects mock application state through Armada's real fleet-status builder.
 
 ```ts
 import { createArmadaTestHarness } from "@danypops/armada/testing";
