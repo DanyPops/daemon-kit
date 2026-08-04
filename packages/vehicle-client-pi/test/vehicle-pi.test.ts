@@ -517,6 +517,8 @@ describe("registerVehicleTools", () => {
 			expect(failure.code).toBe("vehicle-client-failed");
 			expect(failure.message).toBe("fetch failed");
 			expect(failure.causeMessage).toBe("connect ECONNREFUSED 127.0.0.1:41203");
+			// .message (not just .failure) is what Pi's surface actually shows.
+			expect((error as Error).message).toBe("vehicle-client-failed: fetch failed (connect ECONNREFUSED 127.0.0.1:41203)");
 		}
 	});
 

@@ -224,7 +224,12 @@ export interface RegisteredPiVehicle {
 
 export class PiVehicleInvocationError extends Error {
 	constructor(readonly failure: VehicleFailure) {
-		super(`${failure.code}: ${failure.message}`);
+		// causeMessage was captured but never shown -- Pi surfaces this .message, not .failure.
+		super(
+			failure.causeMessage === undefined
+				? `${failure.code}: ${failure.message}`
+				: `${failure.code}: ${failure.message} (${failure.causeMessage})`,
+		);
 		this.name = "PiVehicleInvocationError";
 	}
 }
