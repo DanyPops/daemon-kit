@@ -31,10 +31,13 @@ describe("verifyLoadableUnderPi", () => {
 // extension dependency -- its published artifact must remain loadable
 // through every Pi extension load path.
 describe("vehicle-client-pi (the pre-compiled Pi host projection)", () => {
+	// A real tsc build subprocess (~3s locally) sits close to bun test's
+	// default 5000ms hook timeout, tipping over intermittently on a loaded
+	// CI runner. Give it real headroom instead of racing the default.
 	beforeAll(() => {
 		const result = spawnSync("bun", ["run", "build"], { cwd: ROOT, stdio: "inherit" });
 		if (result.status !== 0) throw new Error("bun run build failed -- see output above");
-	});
+	}, 30_000);
 
 	it("source (src/vehicle-pi.ts) loads under every Pi extension load path", async () => {
 		expectAllPathsOk(await verifyLoadableUnderPi(SRC("vehicle-pi.ts")));

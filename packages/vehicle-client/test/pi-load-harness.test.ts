@@ -17,10 +17,13 @@ function expectAllPathsOk(results: Awaited<ReturnType<typeof verifyLoadableUnder
 // pi-extension daemon-client.ts) -- both must stay loadable through every
 // path Pi's own extension loader can take.
 describe("vehicle-client (the Pi-extension-facing connection seam)", () => {
+	// A real tsc build subprocess sits close to bun test's default 5000ms
+	// hook timeout, tipping over intermittently on a loaded CI runner. Give
+	// it real headroom instead of racing the default.
 	beforeAll(() => {
 		const result = spawnSync("bun", ["run", "build"], { cwd: ROOT, stdio: "inherit" });
 		if (result.status !== 0) throw new Error("bun run build failed -- see output above");
-	});
+	}, 30_000);
 
 	it("rpc-client.ts loads under every Pi extension load path", async () => {
 		expectAllPathsOk(await verifyLoadableUnderPi(SRC("rpc-client.ts")));
