@@ -811,6 +811,62 @@ describe("connectWithVersionCheck", () => {
 		).rejects.toThrow("health endpoint unreachable");
 		expect(killCalls).toBe(0);
 	});
+
+	it("resolves a function expectedVersion fresh on every call instead of a cached string, matching -- no kill when the live value now matches", async () => {
+		let spawnCalls = 0;
+		let liveVersion = "1.2.0"; // simulates readPackageVersion() reflecting an on-disk update between calls
+		const client = await connectWithVersionCheck<DaemonHandleLike, VersionedFakeClient>(
+			{
+				readHandle: () => FAKE_HANDLE,
+				buildClient: (handle) => ({ port: handle.port, version: "1.2.0" }),
+				autoStart: true,
+				spawn: () => {
+					spawnCalls++;
+				},
+				fallbackMessage: "unreachable",
+			},
+			{
+				expectedVersion: () => liveVersion,
+				readVersion: async (c) => c.version,
+				killStaleProcess: () => {},
+			},
+		);
+		expect(client.port).toBe(4242);
+		expect(spawnCalls).toBe(0);
+		// The supplier is genuinely re-invoked, not cached from the first call -- a subsequent
+		// change to what it returns is picked up on the very next connect.
+		liveVersion = "9.9.9";
+		await expect(
+			connectWithVersionCheck<DaemonHandleLike, VersionedFakeClient>(
+				{
+					readHandle: () => FAKE_HANDLE,
+					buildClient: (handle) => ({ port: handle.port, version: "1.2.0" }),
+					fallbackMessage: "unreachable",
+				},
+				{
+					expectedVersion: () => liveVersion,
+					readVersion: async (c) => c.version,
+					killStaleProcess: () => {},
+				},
+			),
+		).rejects.toThrow(/expected 9\.9\.9/);
+	});
+
+	it("resolves an async function expectedVersion, awaiting it before comparing", async () => {
+		const client = await connectWithVersionCheck<DaemonHandleLike, VersionedFakeClient>(
+			{
+				readHandle: () => FAKE_HANDLE,
+				buildClient: (handle) => ({ port: handle.port, version: "1.2.0" }),
+				fallbackMessage: "unreachable",
+			},
+			{
+				expectedVersion: async () => "1.2.0",
+				readVersion: async (c) => c.version,
+				killStaleProcess: () => {},
+			},
+		);
+		expect(client.port).toBe(4242);
+	});
 });
 
 describe("connectWithPolicy", () => {

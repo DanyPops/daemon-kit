@@ -10,4 +10,4 @@
  * @danypops/vehicle-server, and this package already lists it as a real
  * dependency.)
  */
-export { readPackageVersion } from "@danypops/vehicle-server/version";
+export { createLiveVersionExpectation, readPackageVersion } from "@danypops/vehicle-server/version";

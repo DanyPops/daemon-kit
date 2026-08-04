@@ -309,9 +309,19 @@ export async function connectWithPolicy<Handle extends DaemonHandleLike, Client>
 	throw new Error(options.fallbackMessage);
 }
 
+/**
+ * A plain string is fine for a genuinely fixed/compiled version. Everything else should pass a
+ * supplier instead: a plain string can never be "fresh" by construction, so caching one read
+ * once at module load (the natural, obvious way to read "my own version") goes stale the
+ * moment `npm update` rewrites package.json underneath an already-running process -- every
+ * later connect then sees a permanent, never-self-healing false mismatch. See
+ * createLiveVersionExpectation() (./version.ts) for the correct always-fresh supplier.
+ */
+export type ExpectedVersion = string | (() => string) | (() => Promise<string>);
+
 export interface VersionCheckOptions<Handle extends DaemonHandleLike, Client> {
-	/** This extension's own expected daemon version/protocol identifier. */
-	expectedVersion: string;
+	/** This extension's own expected daemon version/protocol identifier. Resolved fresh on every call -- see ExpectedVersion. */
+	expectedVersion: ExpectedVersion;
 	/** Reads the connected daemon's reported version (e.g. via its /health response). Errors propagate unchanged -- an inconclusive read never triggers a kill. */
 	readVersion: (client: Client) => Promise<string>;
 	/** Best-effort graceful shutdown request against the stale daemon. Its failure is swallowed -- killStaleProcess is the real fallback that must always work. */
@@ -347,7 +357,9 @@ export async function connectWithVersionCheck<Handle extends DaemonHandleLike, C
 ): Promise<Client> {
 	const client = await connectWithPolicy(policy);
 	const runningVersion = await versionCheck.readVersion(client);
-	if (runningVersion === versionCheck.expectedVersion) return client;
+	const expectedVersion =
+		typeof versionCheck.expectedVersion === "function" ? await versionCheck.expectedVersion() : versionCheck.expectedVersion;
+	if (runningVersion === expectedVersion) return client;
 
 	// Without a spawn() a replacement can never come back -- killing the
 	// stale daemon here would leave the caller with nothing at all, strictly
@@ -355,7 +367,7 @@ export async function connectWithVersionCheck<Handle extends DaemonHandleLike, C
 	// plainly instead of silently leaving either a dead or a stale daemon.
 	if (!policy.spawn) {
 		throw new Error(
-			`stale daemon detected (running ${runningVersion}, expected ${versionCheck.expectedVersion}) but no spawn() is configured to replace it -- restart the daemon manually`,
+			`stale daemon detected (running ${runningVersion}, expected ${expectedVersion}) but no spawn() is configured to replace it -- restart the daemon manually`,
 		);
 	}
 
