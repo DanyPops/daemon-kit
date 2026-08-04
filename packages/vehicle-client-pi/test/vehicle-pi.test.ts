@@ -1041,11 +1041,30 @@ describe("refreshVehicleToolAvailability", () => {
 });
 
 describe("registerVehicleTools / refreshVehicleToolAvailability: manifestCache survives a restart/reload while the daemon is unreachable", () => {
-	it("without manifestCache configured, a factory-time manifest() failure still throws -- zero behavior change for every existing caller", async () => {
+	/** A permanent failure still throws, same as before the handshake retry existed -- it just no longer throws on the very first attempt: see RegisterVehicleToolsOptions.handshake. */
+	it("without manifestCache configured, a factory-time manifest() failure still throws once the bounded handshake retry is exhausted", async () => {
 		const client = new FakeClient(manifest([operation("issues.search")]));
 		client.manifestError = new Error("daemon unreachable");
 		const { pi } = fakePi();
-		await expect(registerVehicleTools(pi, client)).rejects.toThrow("daemon unreachable");
+		await expect(registerVehicleTools(pi, client, { handshake: { attempts: 1 } })).rejects.toThrow("daemon unreachable");
+	});
+
+	it("retries the initial manifest fetch and succeeds once a transient failure clears, without ever touching manifestCache", async () => {
+		const client = new FakeClient(manifest([operation("issues.search")]));
+		client.manifestError = new Error("daemon unreachable");
+		const { pi } = fakePi();
+		let manifestCallCount = 0;
+		const originalManifest = client.manifest.bind(client);
+		client.manifest = () => {
+			manifestCallCount++;
+			if (manifestCallCount >= 3) client.manifestError = undefined;
+			return originalManifest();
+		};
+
+		const registered = await registerVehicleTools(pi, client, { handshake: { attempts: 5, initialDelayMs: 1, maxDelayMs: 5 } });
+
+		expect(manifestCallCount).toBe(3);
+		expect(registered.tools.map((tool) => tool.operationName)).toEqual(["issues.search"]);
 	});
 
 	it("a successful registration persists the manifest to the cache file", async () => {
@@ -1066,7 +1085,10 @@ describe("registerVehicleTools / refreshVehicleToolAvailability: manifestCache s
 		const coldClient = new FakeClient(manifest([operation("issues.search")]));
 		coldClient.manifestError = new Error("daemon unreachable");
 		const { pi, tools } = fakePi();
-		const registered = await registerVehicleTools(pi, coldClient, { manifestCache: { filePath: "/cache/vehicle.json", fs } });
+		const registered = await registerVehicleTools(pi, coldClient, {
+			manifestCache: { filePath: "/cache/vehicle.json", fs },
+			handshake: { attempts: 1 },
+		});
 
 		expect(registered.stale).toBe(true);
 		expect(registered.tools.map((tool) => tool.operationName)).toEqual(["issues.search"]);
@@ -1078,7 +1100,10 @@ describe("registerVehicleTools / refreshVehicleToolAvailability: manifestCache s
 		client.manifestError = new Error("daemon unreachable");
 		const { pi } = fakePi();
 		await expect(
-			registerVehicleTools(pi, client, { manifestCache: { filePath: "/cache/never-written.json", fs: fakeFs() } }),
+			registerVehicleTools(pi, client, {
+				manifestCache: { filePath: "/cache/never-written.json", fs: fakeFs() },
+				handshake: { attempts: 1 },
+			}),
 		).rejects.toThrow("daemon unreachable");
 	});
 
@@ -1090,7 +1115,10 @@ describe("registerVehicleTools / refreshVehicleToolAvailability: manifestCache s
 		const coldClient = new FakeClient(manifest([operation("issues.search")]));
 		coldClient.manifestError = new Error("daemon unreachable");
 		const { pi, activeTools } = fakePi();
-		const registered = await registerVehicleTools(pi, coldClient, { manifestCache: { filePath: "/cache/vehicle.json", fs } });
+		const registered = await registerVehicleTools(pi, coldClient, {
+			manifestCache: { filePath: "/cache/vehicle.json", fs },
+			handshake: { attempts: 1 },
+		});
 		expect(activeTools()).toEqual(["issues_search"]); // registered active immediately: the cached descriptor was already available:true
 
 		// The daemon comes back -- a live refresh (e.g. pi-status-refresh's own session_start hook) now succeeds.

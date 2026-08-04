@@ -172,6 +172,34 @@ export interface RegisterVehicleToolsOptions {
 	 * behavior: a factory-time manifest() failure throws.
 	 */
 	readonly manifestCache?: { readonly filePath: string; readonly fs: AtomicJsonFsAdapter };
+	/**
+	 * Bounded retry/backoff around the initial manifest handshake -- the real-world gap this
+	 * closes: a Pi extension's session_start calls registerVehicleTools() exactly once, and a
+	 * daemon that is transiently unreachable at that exact moment (mid-restart from a
+	 * legitimate version-check kill/respawn, or a package update swapping files out from under
+	 * a live process) previously meant every Vehicle-projected tool was silently, permanently
+	 * missing for the rest of that session -- no reload required to trigger it, and no reload
+	 * could fix it either, since the next session_start would just race the same restart again
+	 * if it was still in progress. Modeled on connectPushChannel's own jittered exponential
+	 * backoff (min/max/growFactor, +/-20% jitter) and gRPC/Kubernetes-style bounded readiness
+	 * probing: retry a few times over roughly half a second, then give up -- long enough to
+	 * survive a real restart (observed ~100-300ms in production), short enough that a
+	 * genuinely-down daemon still fails fast. Defaults to attempts:4, initialDelayMs:50,
+	 * maxDelayMs:500, growFactor:2.5. Set attempts:1 to restore the old immediate-failure
+	 * behavior exactly.
+	 */
+	readonly handshake?: RegisterVehicleToolsHandshakeOptions;
+}
+
+export interface RegisterVehicleToolsHandshakeOptions {
+	/** Total attempts at the initial manifest fetch, including the first. Defaults to 4. */
+	readonly attempts?: number;
+	/** Delay before the second attempt. Defaults to 50ms. */
+	readonly initialDelayMs?: number;
+	/** No retry delay is ever allowed to exceed this. Defaults to 500ms. */
+	readonly maxDelayMs?: number;
+	/** Multiplier applied to the delay after each failed attempt. Defaults to 2.5. */
+	readonly growFactor?: number;
 }
 
 export interface RegisteredPiVehicleTool {
@@ -619,12 +647,54 @@ function createTool(
  * configured, or nothing cached yet, rethrows the original failure unchanged --
  * identical to registerVehicleTools' behavior before manifestCache existed.
  */
+const DEFAULT_HANDSHAKE_ATTEMPTS = 4;
+const DEFAULT_HANDSHAKE_INITIAL_DELAY_MS = 50;
+const DEFAULT_HANDSHAKE_MAX_DELAY_MS = 500;
+const DEFAULT_HANDSHAKE_GROW_FACTOR = 2.5;
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Jittered exponential backoff, same shape as connectPushChannel's own reconnect delay (vehicle-client/daemon-client.ts): +/-20% jitter prevents several concurrent Pi sessions from retrying a just-restarted daemon in lockstep. */
+function handshakeRetryDelayMs(attemptJustFailed: number, options: RegisterVehicleToolsHandshakeOptions | undefined): number {
+	const initialDelayMs = options?.initialDelayMs ?? DEFAULT_HANDSHAKE_INITIAL_DELAY_MS;
+	const maxDelayMs = options?.maxDelayMs ?? DEFAULT_HANDSHAKE_MAX_DELAY_MS;
+	const growFactor = options?.growFactor ?? DEFAULT_HANDSHAKE_GROW_FACTOR;
+	const raw = Math.min(initialDelayMs * growFactor ** (attemptJustFailed - 1), maxDelayMs);
+	return raw * (0.8 + Math.random() * 0.4);
+}
+
+/**
+ * Retries client.manifest() itself, bounded, before resolveManifestForRegistration ever falls
+ * back to a stale cache or rethrows -- see RegisterVehicleToolsOptions.handshake for why this
+ * exists. A transient failure (the daemon mid-restart) recovers here without ever touching the
+ * cache-fallback/throw path below; only a failure that outlasts every attempt reaches it.
+ */
+async function fetchManifestWithHandshakeRetry(
+	client: VehicleClient,
+	handshake: RegisterVehicleToolsHandshakeOptions | undefined,
+): Promise<VehicleManifest> {
+	const attempts = Math.max(1, handshake?.attempts ?? DEFAULT_HANDSHAKE_ATTEMPTS);
+	for (let attempt = 1; attempt <= attempts; attempt++) {
+		try {
+			return await client.manifest();
+		} catch (error) {
+			if (attempt === attempts) throw error;
+			await sleep(handshakeRetryDelayMs(attempt, handshake));
+		}
+	}
+	// Unreachable: the loop above always either returns or throws on its final attempt.
+	throw new Error("fetchManifestWithHandshakeRetry: exhausted attempts without a terminal result");
+}
+
 async function resolveManifestForRegistration(
 	client: VehicleClient,
 	manifestCache: RegisterVehicleToolsOptions["manifestCache"],
+	handshake: RegisterVehicleToolsOptions["handshake"],
 ): Promise<{ manifest: VehicleManifest; stale: boolean }> {
 	try {
-		const manifest = await client.manifest();
+		const manifest = await fetchManifestWithHandshakeRetry(client, handshake);
 		if (manifestCache) {
 			try {
 				await createAtomicJsonWriter({ fs: manifestCache.fs }).write(manifestCache.filePath, manifest);
@@ -661,7 +731,7 @@ export async function registerVehicleTools(
 	client: VehicleClient,
 	options: RegisterVehicleToolsOptions = {},
 ): Promise<RegisteredPiVehicle> {
-	const { manifest, stale } = await resolveManifestForRegistration(client, options.manifestCache);
+	const { manifest, stale } = await resolveManifestForRegistration(client, options.manifestCache, options.handshake);
 	const projected = projectedNames(manifest, options.toolName ?? defaultToolName);
 	const runtime = tryExtensionRuntimeAction(() => pi.getAllTools());
 	assertNamesAvailable(projected, runtime.status === "ready" ? runtime.value.map((tool) => tool.name) : []);
