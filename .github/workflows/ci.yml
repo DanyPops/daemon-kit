@@ -19,6 +19,8 @@ jobs:
       - run: bun run check
       - run: bun run typecheck
       - if: matrix.os == 'ubuntu-latest'
+        run: bun run lint:deps
+      - if: matrix.os == 'ubuntu-latest'
         run: bun run test
       - if: matrix.os != 'ubuntu-latest'
         run: bun test packages/armada/test
