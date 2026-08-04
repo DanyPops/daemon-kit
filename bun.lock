@@ -43,7 +43,7 @@
     },
     "packages/vehicle-client": {
       "name": "@danypops/vehicle-client",
-      "version": "0.5.2",
+      "version": "0.6.0",
       "dependencies": {
         "@danypops/vehicle-core": "workspace:*",
         "@danypops/vehicle-server": "workspace:*",
@@ -56,7 +56,7 @@
     },
     "packages/vehicle-client-pi": {
       "name": "@danypops/vehicle-client-pi",
-      "version": "0.16.2",
+      "version": "0.16.4",
       "dependencies": {
         "@danypops/pi-extension-harness": "^0.4.0",
         "@danypops/vehicle-client": "workspace:*",
@@ -65,6 +65,7 @@
         "malevich-tui-components": "^0.20.3",
       },
       "devDependencies": {
+        "@danypops/pi-process-harness": "^0.1.1",
         "@danypops/pi-tui-harness": "^0.0.2",
         "@types/node": "^22.0.0",
         "typescript": "^5.9.3",
@@ -102,7 +103,7 @@
     },
     "packages/vehicle-server": {
       "name": "@danypops/vehicle-server",
-      "version": "0.17.1",
+      "version": "0.18.0",
       "dependencies": {
         "@danypops/armada": "workspace:*",
         "@danypops/vehicle-core": "workspace:*",
@@ -193,6 +194,8 @@
     "@danypops/packed": ["@danypops/packed@0.7.0", "", { "bin": { "packed-policy": "dist/repository-policy-cli.js" } }, "sha512-9P56MZEuxd6SmnfXSVNlb0dePNTwVU+3zBvlScZRejChL7VvfNx3XyWUIRVZOubL+n4XtZUCw+VhwrXnd7TXaQ=="],
 
     "@danypops/pi-extension-harness": ["@danypops/pi-extension-harness@0.4.0", "", { "dependencies": { "jiti": "^2.7.0" }, "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*", "typebox": "*" } }, "sha512-BzLMi3DH7IelnYMx66rnjb3cgW++xwxmpnlxcZZuaz6LvY++85J8C+qSAG9PEuMeE/mhoItBdNCEWAZASpqeig=="],
+
+    "@danypops/pi-process-harness": ["@danypops/pi-process-harness@0.1.1", "", { "dependencies": { "@earendil-works/pi-ai": "*" }, "peerDependencies": { "@earendil-works/pi-coding-agent": "*" } }, "sha512-Rg2iiUp9vYE4HT86ZG8Ov9tx3KkCDR+MN8XUjpXSvVoVnTWCGumA/qscPZiol7vYJfRePiZvDlMBnLy8/D5jGQ=="],
 
     "@danypops/pi-tui-harness": ["@danypops/pi-tui-harness@0.0.2", "", { "dependencies": { "@xterm/headless": "^6.0.0" }, "peerDependencies": { "@earendil-works/pi-tui": "*" } }, "sha512-XIQI2qNiH6/DSOXWOu27P7CG+ptXJsafbsEiS2LZMmuEMG9Ve5bpVhbC4xgOu8wuZF9ysAZEi8p5L6ZOoK50vw=="],
 
