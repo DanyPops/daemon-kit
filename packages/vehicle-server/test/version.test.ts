@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { readPackageVersion } from "../src/version.ts";
+import { createLiveVersionExpectation, readPackageVersion } from "../src/version.ts";
 
 function writeManifest(content: unknown): { url: URL; dir: string } {
 	const dir = mkdtempSync(join(tmpdir(), "daemon-kit-version-"));
@@ -44,6 +44,22 @@ describe("readPackageVersion", () => {
 		const { url, dir } = writeManifest("[1,2,3]");
 		try {
 			expect(() => readPackageVersion(url, "Acme")).toThrow("Acme package manifest must be an object");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("createLiveVersionExpectation", () => {
+	it("re-reads the manifest fresh on every call rather than caching the first read -- the whole point versus a module-level const", () => {
+		const { url, dir } = writeManifest({ version: "1.0.0" });
+		try {
+			const expectedVersion = createLiveVersionExpectation(url, "Acme");
+			expect(expectedVersion()).toBe("1.0.0");
+
+			// Simulates `npm update` rewriting package.json underneath an already-running process.
+			writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "2.0.0" }));
+			expect(expectedVersion()).toBe("2.0.0");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

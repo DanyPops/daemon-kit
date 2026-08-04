@@ -27,3 +27,17 @@ export function readPackageVersion(packageJsonUrl: URL, projectLabel: string): s
 	}
 	return version;
 }
+
+/**
+ * A connectWithVersionCheck-ready ExpectedVersion supplier (see @danypops/vehicle-client's
+ * daemon-client.ts) that re-reads packageJsonUrl fresh on every call, never caching. Fixes the
+ * exact bug a module-level `const VERSION = readPackageVersion(...)` produces: a long-lived
+ * process's cached version goes stale the instant `npm update` rewrites package.json
+ * underneath it, so every later connect sees a permanent, never-self-healing false mismatch --
+ * confirmed live in @danypops/papyrus (repeated daemon kill/respawn churn on every call from a
+ * process that started before an update, never converging since a respawned daemon runs the
+ * same source and reports the same real version).
+ */
+export function createLiveVersionExpectation(packageJsonUrl: URL, projectLabel: string): () => string {
+	return () => readPackageVersion(packageJsonUrl, projectLabel);
+}
