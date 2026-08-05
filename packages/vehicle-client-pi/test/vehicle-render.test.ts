@@ -1,8 +1,76 @@
 import { describe, expect, it } from "bun:test";
 import type { VehicleEffect, VehicleOperationDescriptor } from "@danypops/vehicle-core";
-import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { initTheme, Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Box, visibleWidth } from "@earendil-works/pi-tui";
 import { pickIdentityArgument, renderVehicleCall, renderVehicleResult } from "../src/vehicle-render.ts";
+
+// The real Theme class -- not a hand-rolled fake -- built through its own public
+// constructor with every ThemeColor/ThemeBg token filled in (TypeScript enforces
+// completeness: an added or renamed token fails to compile here). Theme.fg()/bg()
+// throw "Unknown theme color" for any token missing from these maps, exactly as a
+// real installed theme's own resolved palette would -- every fakeTheme/flatTheme/
+// ansiTheme above accepts any string silently and can never catch that class of bug.
+const REAL_FG_COLORS: Record<ThemeColor, string> = {
+	accent: "#ee0000",
+	border: "#4d4d4d",
+	borderAccent: "#ee0000",
+	borderMuted: "#383838",
+	success: "#6c9b4b",
+	error: "#bd6e51",
+	warning: "#dca614",
+	muted: "#8f8f8f",
+	dim: "#757575",
+	text: "#e0e0e0",
+	thinkingText: "#8f8f8f",
+	userMessageText: "#e0e0e0",
+	customMessageText: "#e0e0e0",
+	customMessageLabel: "#876fd4",
+	toolTitle: "#d39292",
+	toolOutput: "#e0e0e0",
+	mdHeading: "#e0e0e0",
+	mdLink: "#0066cc",
+	mdLinkUrl: "#0066cc",
+	mdCode: "#e0e0e0",
+	mdCodeBlock: "#e0e0e0",
+	mdCodeBlockBorder: "#383838",
+	mdQuote: "#8f8f8f",
+	mdQuoteBorder: "#383838",
+	mdHr: "#383838",
+	mdListBullet: "#e0e0e0",
+	toolDiffAdded: "#6c9b4b",
+	toolDiffRemoved: "#bd6e51",
+	toolDiffContext: "#8f8f8f",
+	syntaxComment: "#8f8f8f",
+	syntaxKeyword: "#876fd4",
+	syntaxFunction: "#63bdbd",
+	syntaxVariable: "#e0e0e0",
+	syntaxString: "#6c9b4b",
+	syntaxNumber: "#dca614",
+	syntaxType: "#63bdbd",
+	syntaxOperator: "#e0e0e0",
+	syntaxPunctuation: "#e0e0e0",
+	thinkingOff: "#8f8f8f",
+	thinkingMinimal: "#8f8f8f",
+	thinkingLow: "#8f8f8f",
+	thinkingMedium: "#8f8f8f",
+	thinkingHigh: "#8f8f8f",
+	thinkingXhigh: "#8f8f8f",
+	thinkingMax: "#8f8f8f",
+	bashMode: "#e0e0e0",
+};
+
+// ThemeBg isn't exported from the package's top-level barrel -- inferred instead of
+// annotated, still structurally checked against Theme's real constructor below.
+const REAL_BG_COLORS = {
+	selectedBg: "#292929",
+	userMessageBg: "#1f1f1f",
+	customMessageBg: "#1b0d33",
+	toolPendingBg: "#1f1f1f",
+	toolSuccessBg: "#1d2b12",
+	toolErrorBg: "#4c1405",
+};
+
+const realTheme = new Theme(REAL_FG_COLORS, REAL_BG_COLORS, "truecolor");
 
 // A theme that emits real ANSI SGR escape codes (truecolor, like a real theme's
 // fg() output), not the plain "<color>text" markers fakeTheme/flatTheme use --
@@ -131,6 +199,35 @@ describe("renderVehicleCall", () => {
 		);
 		expect(component.render(80).join("\n")).toBe("<muted>issue.list <accent>abc-123");
 	});
+});
+
+// Golden: drives renderVehicleCall through the REAL Theme class (see realTheme above)
+// across every VehicleEffect and every arg shape this file exercises with the permissive
+// fakes -- asserts it never throws and always renders a non-empty line. This is the test
+// that would have caught the accent-token risk (theme.fg throws "Unknown theme color" for
+// any token a real installed theme's resolved palette doesn't define), which no
+// fakeTheme/flatTheme/ansiTheme-based test can ever exercise.
+describe("renderVehicleCall against the real Theme class (golden)", () => {
+	const effects: VehicleEffect[] = ["read", "local-write", "external-write", "destructive", "open-world"];
+	const argShapes: Record<string, unknown> = {
+		empty: {},
+		undefinedArgs: undefined,
+		identityOnly: { id: "abc-123" },
+		identityPlusRest: { id: "abc-123", status: "review", limit: 5 },
+		cwdRedundant: { project_root: "/tmp", id: "abc-123" },
+		noIdentity: { backend: "github", limit: 5 },
+	};
+
+	for (const effect of effects) {
+		for (const [shapeName, args] of Object.entries(argShapes)) {
+			it(`renders effect=${effect} args=${shapeName} without throwing, producing a non-empty line`, () => {
+				const component = renderVehicleCall(descriptor(effect), args, realTheme, callContext({ cwd: "/tmp" }));
+				const line = component.render(80).join("\n");
+				expect(line.length).toBeGreaterThan(0);
+				expect(line).toContain("issue.list");
+			});
+		}
+	}
 });
 
 describe("pickIdentityArgument", () => {
