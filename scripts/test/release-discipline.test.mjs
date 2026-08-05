@@ -28,6 +28,34 @@ describe("release discipline", () => {
 		expect(candidates).toEqual({ removedDeclarations: [], removedProperties: [], addedRequiredProperties: [] });
 	});
 
+	it("ignores a non-exported function's own multi-line parameter list -- not an interface property, even though each param sits on its own line", () => {
+		const candidates = findBreakingTypeCandidates(`
+ async function awaitWithSignal<T>(
+-	operation: Promise<T>,
++	operation: Promise<T>,
++	signal: AbortSignal,
++	deadline: number,
++	operationId: string,
++	key: string,
++	timeoutMs: number,
+ ): Promise<T> {
+`);
+		expect(candidates).toEqual({ removedDeclarations: [], removedProperties: [], addedRequiredProperties: [] });
+	});
+
+	it("still catches a required property added inside a real exported interface, even with the same param-list shape nearby", () => {
+		const candidates = findBreakingTypeCandidates(`
+ export interface ServiceSpec {
+ 	readonly descriptorPath: string;
++	readonly handlePath: string;
+ }
+ async function unrelatedHelper(
++	someParam: string,
+ ): void {}
+`);
+		expect(candidates).toEqual({ removedDeclarations: [], removedProperties: [], addedRequiredProperties: ["handlePath"] });
+	});
+
 	it("requires an explicit pre-1.0 breaking note", () => {
 		const candidates = { removedDeclarations: [], removedProperties: ["descriptorPath"], addedRequiredProperties: ["handlePath"] };
 		expect(() =>

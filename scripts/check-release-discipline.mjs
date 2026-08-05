@@ -20,13 +20,35 @@ function declarationNames(lines, prefix) {
 	return names;
 }
 
+const EXPORT_BLOCK_OPEN_PATTERN = /^export\s+(?:interface\s+\w+|type\s+\w+\s*=)\b/;
+
+/**
+ * Scoped to an actual exported interface/type-literal body -- an unexported function's own
+ * multi-line parameter list (one param per line, e.g. after a Biome reformat) matches the
+ * bare `name: Type` shape just as well as a real interface property, with nothing in the
+ * original unscoped version to tell them apart. Tracks brace depth across every diff line
+ * (context included) and only counts a `${prefix}` line while depth is at or below the level
+ * an `export interface`/`export type =` line's own opening brace introduced.
+ */
 function propertyNames(lines, prefix, requiredOnly) {
 	const names = new Set();
 	const optional = requiredOnly ? "" : "[?]?";
-	const pattern = new RegExp(`^\\${prefix}\\s*(?:readonly\\s+)?([A-Za-z_$][\\w$]*)${optional}\\s*:`);
-	for (const line of lines) {
-		const match = line.match(pattern);
-		if (match?.[1] && (!requiredOnly || !line.includes(`${match[1]}?`))) names.add(match[1]);
+	const propertyPattern = new RegExp(`^\\s*(?:readonly\\s+)?([A-Za-z_$][\\w$]*)${optional}\\s*:`);
+	let depth = 0;
+	let exportedAtDepth = null;
+	for (const rawLine of lines) {
+		const marker = rawLine.length > 0 ? rawLine[0] : " ";
+		const content = rawLine.length > 0 ? rawLine.slice(1) : "";
+		const opensExportBlock = exportedAtDepth === null && EXPORT_BLOCK_OPEN_PATTERN.test(content) && content.includes("{");
+		if (marker === prefix && exportedAtDepth !== null && depth >= exportedAtDepth) {
+			const match = content.match(propertyPattern);
+			if (match?.[1] && (!requiredOnly || !content.includes(`${match[1]}?`))) names.add(match[1]);
+		}
+		const opens = (content.match(/\{/g) ?? []).length;
+		const closes = (content.match(/\}/g) ?? []).length;
+		if (opensExportBlock) exportedAtDepth = depth + 1;
+		depth += opens - closes;
+		if (exportedAtDepth !== null && depth < exportedAtDepth) exportedAtDepth = null;
 	}
 	return names;
 }
