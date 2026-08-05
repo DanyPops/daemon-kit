@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { VehicleEffect, VehicleOperationDescriptor } from "@danypops/vehicle-core";
 import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { Box, visibleWidth } from "@earendil-works/pi-tui";
-import { renderVehicleCall, renderVehicleResult } from "../src/vehicle-render.ts";
+import { pickIdentityArgument, renderVehicleCall, renderVehicleResult } from "../src/vehicle-render.ts";
 
 // A theme that emits real ANSI SGR escape codes (truecolor, like a real theme's
 // fg() output), not the plain "<color>text" markers fakeTheme/flatTheme use --
@@ -94,6 +94,65 @@ describe("renderVehicleCall", () => {
 	it("falls back to a hardcoded ANSI color when the theme never distinguishes any candidate token from plain text", () => {
 		const component = renderVehicleCall(descriptor("destructive"), {}, flatTheme, callContext());
 		expect(component.render(80)[0]).toContain("\x1b[31m");
+	});
+
+	it("drops an arg whose value equals context.cwd, e.g. a redundant project_root", () => {
+		const component = renderVehicleCall(
+			descriptor("read"),
+			{ project_root: "/tmp", status: "review" },
+			fakeTheme,
+			callContext({ cwd: "/tmp" }),
+		);
+		const line = component.render(80).join("\n");
+		expect(line).not.toContain("project_root");
+		expect(line).not.toContain("/tmp");
+		expect(line).toContain("status=review");
+	});
+
+	it("surfaces a recognized identity arg (id/name/title/...) plainly and first, not buried in key=value order", () => {
+		const component = renderVehicleCall(
+			descriptor("read"),
+			{ status: "review", id: "abc-123" },
+			fakeTheme,
+			callContext(),
+		);
+		const line = component.render(80).join("\n");
+		expect(line).not.toContain("id=abc-123");
+		expect(line.indexOf("<accent>abc-123")).toBeGreaterThan(-1);
+		expect(line.indexOf("<dim>status=review")).toBeGreaterThan(line.indexOf("<accent>abc-123"));
+	});
+
+	it("combines cwd-suppression and identity-arg promotion together", () => {
+		const component = renderVehicleCall(
+			descriptor("read"),
+			{ project_root: "/tmp", id: "abc-123" },
+			fakeTheme,
+			callContext({ cwd: "/tmp" }),
+		);
+		expect(component.render(80).join("\n")).toBe("<muted>issue.list <accent>abc-123");
+	});
+});
+
+describe("pickIdentityArgument", () => {
+	it("returns the first present, non-empty string value from a priority-ordered key list", () => {
+		expect(pickIdentityArgument({ status: "open", title: "Fix the bug" }, ["name", "title", "id"])).toBe("Fix the bug");
+	});
+
+	it("skips a blank or non-string candidate and keeps looking", () => {
+		expect(pickIdentityArgument({ name: "   ", id: 42, title: "Real title" }, ["name", "id", "title"])).toBe("Real title");
+	});
+
+	it("returns undefined when nothing in the priority list matches", () => {
+		expect(pickIdentityArgument({ backend: "github" }, ["name", "title", "id"])).toBeUndefined();
+	});
+
+	it("returns undefined for non-object args instead of throwing", () => {
+		expect(pickIdentityArgument(undefined, ["name"])).toBeUndefined();
+		expect(pickIdentityArgument(["a", "b"], ["name"])).toBeUndefined();
+	});
+
+	it("truncates to the given max length", () => {
+		expect(pickIdentityArgument({ name: "a".repeat(100) }, ["name"], 10)).toBe("a".repeat(10));
 	});
 });
 

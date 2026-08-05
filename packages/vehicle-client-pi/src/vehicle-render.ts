@@ -64,19 +64,51 @@ function formatArgValue(value: unknown): string {
 	return JSON.stringify(value) ?? String(value);
 }
 
-/**
- * A real "Tool Command" line, not a raw JSON args dump -- `key=value key2=value2`,
- * matching how Pi's own built-in tools (grep, bash) render their own calls.
- * Omits undefined-valued keys entirely rather than printing "key=undefined".
- */
-function compactArgs(args: unknown, width: number): string {
-	if (args === undefined || args === null) return "";
-	if (typeof args !== "object" || Array.isArray(args)) return truncateToWidth(formatArgValue(args), width);
-	const pairs = Object.entries(args as Record<string, unknown>)
-		.filter(([, value]) => value !== undefined)
+/** Generic identity-ish argument key names, priority order. A domain with richer
+ * semantics passes its own list to pickIdentityArgument instead. */
+const DEFAULT_IDENTITY_ARG_KEYS = ["name", "title", "id", "text", "query", "url"] as const;
+
+/** First present, non-empty string value from a priority-ordered key list. Exported so a
+ * domain's own renderCall can reuse this instead of hand-rolling the same lookup. */
+export function pickIdentityArgument(args: unknown, priorityKeys: readonly string[], maxLength = 80): string | undefined {
+	if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
+	const record = args as Record<string, unknown>;
+	for (const key of priorityKeys) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim()) return value.trim().slice(0, maxLength);
+	}
+	return undefined;
+}
+
+/** Drops any arg whose value equals cwd -- e.g. a project_root identical to the session's
+ * own working directory is noise once shown. */
+function dropCwdRedundantArgs(args: Record<string, unknown>, cwd: string | undefined): Record<string, unknown> {
+	if (cwd === undefined) return args;
+	return Object.fromEntries(Object.entries(args).filter(([, value]) => value !== cwd));
+}
+
+interface ArgsDisplay {
+	/** One recognized identity value (see DEFAULT_IDENTITY_ARG_KEYS), styled distinctly from `rest`. */
+	readonly identity?: string;
+	/** Remaining args as `key=value key2=value2`; omits undefined values and whichever key became `identity`. */
+	readonly rest?: string;
+}
+
+function splitArgsForDisplay(args: unknown, cwd: string | undefined, width: number): ArgsDisplay {
+	if (args === undefined || args === null) return {};
+	if (typeof args !== "object" || Array.isArray(args)) {
+		const text = truncateToWidth(formatArgValue(args), width);
+		return text ? { rest: text } : {};
+	}
+	const visible = dropCwdRedundantArgs(args as Record<string, unknown>, cwd);
+	const identityKey = DEFAULT_IDENTITY_ARG_KEYS.find((key) => typeof visible[key] === "string" && (visible[key] as string).trim());
+	const pairs = Object.entries(visible)
+		.filter(([key, value]) => value !== undefined && key !== identityKey)
 		.map(([key, value]) => `${key}=${formatArgValue(value)}`);
-	if (pairs.length === 0) return "";
-	return truncateToWidth(pairs.join(" "), width);
+	return {
+		identity: identityKey ? truncateToWidth(formatArgValue(visible[identityKey]), width) : undefined,
+		rest: pairs.length ? truncateToWidth(pairs.join(" "), width) : undefined,
+	};
 }
 
 export function renderVehicleCall(
@@ -85,10 +117,13 @@ export function renderVehicleCall(
 	theme: Theme,
 	context: RenderCallContext,
 ): Component {
-	const argsText = compactArgs(args, Math.max(10, context.cwd ? 60 : 60));
-	const name = theme.bold(descriptor.name);
-	const line = argsText ? `${name} ${theme.fg("dim", argsText)}` : name;
-	return new Text({ text: effectStyle(theme, descriptor.effect, line), measure });
+	const { identity, rest } = splitArgsForDisplay(args, context.cwd, 60);
+	const segments = [
+		theme.bold(descriptor.name),
+		...(identity ? [theme.fg("accent", identity)] : []),
+		...(rest ? [theme.fg("dim", rest)] : []),
+	];
+	return new Text({ text: effectStyle(theme, descriptor.effect, segments.join(" ")), measure });
 }
 
 /** Rows beyond this default render as a truncation note (via Malevich's renderBoundedTable) instead of an ever-taller table -- a generic renderer has no schema-level sense of "how much of this array actually matters," so it borrows the same order-of-magnitude default several of Lector's own list renderers use (files/matches). Resolved here, at the Vehicle client, from Pi's own tool-row `expanded` flag -- the identical mechanism Lector's own renderers already key off, not a second, Vehicle-specific toggle. */
