@@ -111,6 +111,16 @@ function splitArgsForDisplay(args: unknown, cwd: string | undefined, width: numb
 	};
 }
 
+/** "tasks.cancel_subtree" -> "Tasks Cancel Subtree": a mechanical, domain-agnostic
+ * transform (split on "." and "_", title-case each word), not a lookup table -- works
+ * the same for any "domain.action" operation name regardless of which Vehicle it's from. */
+export function humanizeOperationName(name: string): string {
+	return name
+		.split(".")
+		.map((segment) => segment.split("_").map((word) => (word ? word[0]!.toUpperCase() + word.slice(1) : word)).join(" "))
+		.join(" ");
+}
+
 export function renderVehicleCall(
 	descriptor: VehicleOperationDescriptor,
 	args: unknown,
@@ -119,7 +129,7 @@ export function renderVehicleCall(
 ): Component {
 	const { identity, rest } = splitArgsForDisplay(args, context.cwd, 60);
 	const segments = [
-		theme.bold(descriptor.name),
+		theme.bold(humanizeOperationName(descriptor.name)),
 		...(identity ? [theme.fg("accent", identity)] : []),
 		...(rest ? [theme.fg("dim", rest)] : []),
 	];

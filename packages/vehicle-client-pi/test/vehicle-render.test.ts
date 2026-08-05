@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { VehicleEffect, VehicleOperationDescriptor } from "@danypops/vehicle-core";
 import { initTheme, Theme, type ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Box, visibleWidth } from "@earendil-works/pi-tui";
-import { pickIdentityArgument, renderVehicleCall, renderVehicleResult } from "../src/vehicle-render.ts";
+import { humanizeOperationName, pickIdentityArgument, renderVehicleCall, renderVehicleResult } from "../src/vehicle-render.ts";
 
 // A real Theme, not a fake -- fg()/bg() throw for a token missing here, unlike fakeTheme/flatTheme/ansiTheme.
 const REAL_FG_COLORS: Record<ThemeColor, string> = {
@@ -124,7 +124,7 @@ describe("renderVehicleCall", () => {
 	it("includes the operation name and compact args as key=value pairs, not raw JSON", () => {
 		const component = renderVehicleCall(descriptor("read"), { backend: "github" }, fakeTheme, callContext());
 		const line = component.render(80).join("\n");
-		expect(line).toContain("issue.list");
+		expect(line).toContain("Issue List");
 		expect(line).toContain("backend=github");
 		expect(line).not.toContain("{");
 		expect(line).not.toContain('"');
@@ -145,12 +145,12 @@ describe("renderVehicleCall", () => {
 	it("renders the operation name bold, matching a real Tool Command title", () => {
 		const boldTheme = { ...fakeTheme, bold: (text: string) => `[b]${text}[/b]` } as unknown as Theme;
 		const component = renderVehicleCall(descriptor("read"), {}, boldTheme, callContext());
-		expect(component.render(80)[0]).toContain("[b]issue.list[/b]");
+		expect(component.render(80)[0]).toContain("[b]Issue List[/b]");
 	});
 
 	it("omits the args snippet for an empty-object call", () => {
 		const component = renderVehicleCall(descriptor("read"), {}, fakeTheme, callContext());
-		expect(component.render(80)).toEqual(["<muted>issue.list"]);
+		expect(component.render(80)).toEqual(["<muted>Issue List"]);
 	});
 
 	it("falls back to a hardcoded ANSI color when the theme never distinguishes any candidate token from plain text", () => {
@@ -191,7 +191,7 @@ describe("renderVehicleCall", () => {
 			fakeTheme,
 			callContext({ cwd: "/tmp" }),
 		);
-		expect(component.render(80).join("\n")).toBe("<muted>issue.list <accent>abc-123");
+		expect(component.render(80).join("\n")).toBe("<muted>Issue List <accent>abc-123");
 	});
 });
 
@@ -214,10 +214,24 @@ describe("renderVehicleCall against the real Theme class (golden)", () => {
 				const component = renderVehicleCall(descriptor(effect), args, realTheme, callContext({ cwd: "/tmp" }));
 				const line = component.render(80).join("\n");
 				expect(line.length).toBeGreaterThan(0);
-				expect(line).toContain("issue.list");
+				expect(line).toContain("Issue List");
 			});
 		}
 	}
+});
+
+describe("humanizeOperationName", () => {
+	it("title-cases a dotted domain.action operation name", () => {
+		expect(humanizeOperationName("tasks.show")).toBe("Tasks Show");
+	});
+
+	it("splits snake_case within a segment into separate title-cased words", () => {
+		expect(humanizeOperationName("tasks.cancel_subtree")).toBe("Tasks Cancel Subtree");
+	});
+
+	it("handles a single-segment, single-word name", () => {
+		expect(humanizeOperationName("backends_list")).toBe("Backends List");
+	});
 });
 
 describe("pickIdentityArgument", () => {
