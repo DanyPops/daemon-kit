@@ -269,6 +269,23 @@ describe("VehicleRegistry", () => {
 		).rejects.toMatchObject({ code: "deadline-exceeded" });
 	});
 
+	it("names the operation and its configured timeout when a handler genuinely runs past the deadline, not a generic message", async () => {
+		const slowOperation = defineVehicleOperation({
+			...ECHO_OPTIONS,
+			name: "test.slow-echo",
+			limits: { ...ECHO_OPTIONS.limits, defaultTimeoutMs: 20 },
+		});
+		const registry = new VehicleRegistry({ name: "test", version: "1", description: "Test." });
+		registry.register(
+			"echo-provider",
+			bindVehicleOperation(slowOperation, () => () => new Promise(() => {})), // never resolves
+		);
+		const rejection = await registry.invoke("test.slow-echo", 1, { value: "hello" }, { permissions: ["test:echo"] }).catch((error) => error);
+		expect(rejection).toMatchObject({ code: "deadline-exceeded" });
+		expect((rejection as Error).message).toContain("test.slow-echo");
+		expect((rejection as Error).message).toContain("20ms");
+	});
+
 	it("reports missing operation versions as structured failures", async () => {
 		await expect(registryWith().invoke("test.echo", 2, { value: "hello" }, { permissions: ["test:echo"] })).rejects.toBeInstanceOf(
 			VehicleError,

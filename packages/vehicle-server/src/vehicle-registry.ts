@@ -158,11 +158,15 @@ function parseEventPayload<T>(schema: VehicleSchemaCodec<T>, value: unknown, des
 	return result.value;
 }
 
-function abortError(signal: AbortSignal, deadline: number, operationId: string): VehicleError {
+/** `key` + `timeoutMs` name which operation timed out and its actual configured budget --
+ * a bare "Vehicle operation deadline exceeded" gives a caller nothing to act on (which
+ * operation? was it close, or wildly exceeded?). timeoutMs is the budget granted at
+ * invocation time, not recomputed here ("now" has already moved past `deadline`). */
+function abortError(signal: AbortSignal, deadline: number, operationId: string, key: string, timeoutMs: number): VehicleError {
 	const timedOut = Date.now() >= deadline || (signal.reason instanceof Error && signal.reason.name === "TimeoutError");
 	return new VehicleError(
 		timedOut ? "deadline-exceeded" : "cancelled",
-		timedOut ? "Vehicle operation deadline exceeded" : "Vehicle operation cancelled",
+		timedOut ? `${key} exceeded its ${timeoutMs}ms deadline -- the operation was still running when the timeout elapsed` : "Vehicle operation cancelled",
 		{
 			category: timedOut ? "timeout" : "cancelled",
 			retryable: false,
@@ -172,10 +176,17 @@ function abortError(signal: AbortSignal, deadline: number, operationId: string):
 	);
 }
 
-async function awaitWithSignal<T>(operation: Promise<T>, signal: AbortSignal, deadline: number, operationId: string): Promise<T> {
-	if (signal.aborted) throw abortError(signal, deadline, operationId);
+async function awaitWithSignal<T>(
+	operation: Promise<T>,
+	signal: AbortSignal,
+	deadline: number,
+	operationId: string,
+	key: string,
+	timeoutMs: number,
+): Promise<T> {
+	if (signal.aborted) throw abortError(signal, deadline, operationId, key, timeoutMs);
 	return new Promise<T>((resolve, reject) => {
-		const onAbort = (): void => reject(abortError(signal, deadline, operationId));
+		const onAbort = (): void => reject(abortError(signal, deadline, operationId, key, timeoutMs));
 		signal.addEventListener("abort", onAbort, { once: true });
 		void operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
 	});
@@ -681,6 +692,7 @@ export class VehicleRegistry {
 		}
 		const parsedInput = registration.parseInput(input, operationId);
 		const deadline = effectiveDeadline(registration.descriptor, options.deadline);
+		const timeoutMs = deadline - Date.now();
 		if (deadline <= Date.now()) {
 			throw new VehicleError("deadline-exceeded", `${key} deadline has already elapsed`, {
 				category: "timeout",
@@ -712,7 +724,7 @@ export class VehicleRegistry {
 				return await registration.invoke(candidate, context);
 			} catch (error) {
 				if (isVehicleError(error)) throw error;
-				if (signal.aborted) throw abortError(signal, deadline, operationId);
+				if (signal.aborted) throw abortError(signal, deadline, operationId, key, timeoutMs);
 				throw new VehicleError(
 					"handler-failed",
 					unexpectedFailureMessage(`${key} handler failed`, error, this.exposeHandlerFailureDetails),
@@ -745,7 +757,7 @@ export class VehicleRegistry {
 				);
 			}
 		})();
-		const output = await awaitWithSignal(pending, signal, deadline, operationId);
+		const output = await awaitWithSignal(pending, signal, deadline, operationId, key, timeoutMs);
 		enforcePayloadSize(output, registration.descriptor.limits.maxResponseBytes, "response", key, operationId);
 		return registration.parseOutput(output, operationId);
 	}
@@ -818,7 +830,9 @@ export class VehicleRegistry {
 					output = await registration.invoke(parsedInput, context);
 				} catch (error) {
 					if (isVehicleError(error)) throw error;
-					if (context.signal.aborted) throw abortError(context.signal, context.deadline, operationId);
+					if (context.signal.aborted) {
+						throw abortError(context.signal, context.deadline, operationId, key, context.deadline - Date.now());
+					}
 					throw new VehicleError(
 						"handler-failed",
 						unexpectedFailureMessage(`${key} handler failed`, error, this.exposeHandlerFailureDetails),
