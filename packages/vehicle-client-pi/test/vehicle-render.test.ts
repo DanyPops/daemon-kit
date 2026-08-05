@@ -481,6 +481,43 @@ describe("renderVehicleResult", () => {
 		expect(component.render(80).join("\n")).toContain('"a"');
 	});
 
+	it("unwraps a single domain array even when a VehicleContentBlock[] content sibling sits alongside it", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{
+				content: [],
+				details: {
+					output: { items: ["first", "second"], content: [{ type: "text", text: "Listed 2 items" }] },
+				},
+			},
+			{ isPartial: false, expanded: true },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).toContain("first");
+		expect(text).toContain("second");
+		// The raw-JSON fallback would print the content sibling's own {"type":"text",...}
+		// block verbatim -- absent here proves this actually unwrapped as a bulleted list,
+		// not merely that "first"/"second" happen to appear somewhere in an un-expanded dump.
+		expect(text).not.toContain("{");
+		expect(text).not.toContain('"type"');
+	});
+
+	it("still falls back to raw JSON when two GENUINE domain arrays sit alongside a content sibling -- content exclusion isn't newly permissive for real ambiguity", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{
+				content: [],
+				details: { output: { a: ["x"], b: ["y"], content: [{ type: "text", text: "note" }] } },
+			},
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		expect(component.render(80).join("\n")).toContain('"a"');
+	});
+
 	it("leaves an object with a non-primitive sibling on the raw-JSON fallback", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),

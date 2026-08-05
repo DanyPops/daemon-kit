@@ -170,9 +170,21 @@ function isPrimitive(value: unknown): value is Primitive {
  * primitive; anything else (multiple array fields, a non-primitive
  * sibling) is ambiguous enough to leave alone rather than guess.
  */
+/** A VehicleContentBlock[] sibling is Vehicle's own protocol field for the LLM's
+ * transcript text (see vehicle-core's WithVehicleContent), never domain payload --
+ * excluded up front so it can't count as a second array or fail the primitive-sibling check. */
+function isVehicleContentBlockArray(value: unknown): boolean {
+	return (
+		Array.isArray(value) &&
+		value.every((block) => typeof block === "object" && block !== null && (block as { type?: unknown }).type === "text")
+	);
+}
+
 function singleArrayEnvelope(output: unknown): { items: unknown[]; siblings: [string, Primitive][] } | undefined {
 	if (typeof output !== "object" || output === null || Array.isArray(output)) return undefined;
-	const entries = Object.entries(output as Record<string, unknown>);
+	const entries = Object.entries(output as Record<string, unknown>).filter(
+		([key, value]) => !(key === "content" && isVehicleContentBlockArray(value)),
+	);
 	const arrayEntries = entries.filter((entry): entry is [string, unknown[]] => Array.isArray(entry[1]));
 	if (arrayEntries.length !== 1) return undefined;
 	const [arrayKey, items] = arrayEntries[0] as [string, unknown[]];
