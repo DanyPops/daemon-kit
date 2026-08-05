@@ -131,12 +131,7 @@ describe("renderVehicleCall", () => {
 	});
 
 	it("joins several args with spaces, skipping undefined values", () => {
-		const component = renderVehicleCall(
-			descriptor("read"),
-			{ backend: "github", limit: 5, missing: undefined },
-			fakeTheme,
-			callContext(),
-		);
+		const component = renderVehicleCall(descriptor("read"), { backend: "github", limit: 5, missing: undefined }, fakeTheme, callContext());
 		const line = component.render(80).join("\n");
 		expect(line).toContain("backend=github limit=5");
 		expect(line).not.toContain("missing");
@@ -172,12 +167,7 @@ describe("renderVehicleCall", () => {
 	});
 
 	it("surfaces a recognized identity arg (id/name/title/...) plainly and first, not buried in key=value order", () => {
-		const component = renderVehicleCall(
-			descriptor("read"),
-			{ status: "review", id: "abc-123" },
-			fakeTheme,
-			callContext(),
-		);
+		const component = renderVehicleCall(descriptor("read"), { status: "review", id: "abc-123" }, fakeTheme, callContext());
 		const line = component.render(80).join("\n");
 		expect(line).not.toContain("id=abc-123");
 		expect(line.indexOf("<accent>abc-123")).toBeGreaterThan(-1);

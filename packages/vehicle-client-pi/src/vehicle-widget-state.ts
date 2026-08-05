@@ -22,7 +22,7 @@
  * Replaying from a truncated pointer recovers only that pointer, not the
  * real state -- an accepted, documented limitation of the fallback path.
  */
-import { createAtomicJsonWriter, type AtomicJsonFsAdapter } from "@danypops/vehicle-core";
+import { type AtomicJsonFsAdapter, createAtomicJsonWriter } from "@danypops/vehicle-core";
 import type { CustomEntry, ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 /**

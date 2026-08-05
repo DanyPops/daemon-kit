@@ -117,7 +117,12 @@ function splitArgsForDisplay(args: unknown, cwd: string | undefined, width: numb
 export function humanizeOperationName(name: string): string {
 	return name
 		.split(".")
-		.map((segment) => segment.split("_").map((word) => (word ? word[0]!.toUpperCase() + word.slice(1) : word)).join(" "))
+		.map((segment) =>
+			segment
+				.split("_")
+				.map((word) => (word ? word[0]!.toUpperCase() + word.slice(1) : word))
+				.join(" "),
+		)
 		.join(" ");
 }
 
@@ -198,10 +203,23 @@ function formatSiblingLine(siblings: readonly [string, Primitive][]): string {
 	return siblings.map(([key, value]) => `${key}: ${value === null || value === undefined ? "none" : String(value)}`).join(" · ");
 }
 
-/** Appends one more (already width-safe on its own render pass) line after an inner component's own output -- used to attach an envelope's sibling-field annotation without disturbing the inner component's own rendering. */
+/**
+ * Appends one or more (each already width-safe on its own render pass) lines after an inner
+ * component's own output -- used to attach an envelope's sibling-field annotation without
+ * disturbing the inner component's own rendering. Splits on embedded newlines first: a
+ * sibling value that is itself a real multi-paragraph string (not just a short cursor/count)
+ * still carries literal \n characters after formatSiblingLine joins it in -- appending that
+ * as ONE array entry violates the one-array-entry-per-physical-terminal-line contract every
+ * Component.render() consumer depends on (Table's own singleLine() guards the identical
+ * hazard for its cells). A real terminal splits the embedded newline into its own row
+ * regardless of how many array entries we thought we returned; only the LAST resulting
+ * fragment would ever receive the outer Box's own full-width padding, leaving every earlier
+ * physical line's background painted only as wide as its own text.
+ */
 function withTrailingLine(inner: Component, line: string): Component {
+	const lines = line.split("\n");
 	return {
-		render: (width: number) => [...inner.render(width), truncateToWidth(line, width)],
+		render: (width: number) => [...inner.render(width), ...lines.map((l) => truncateToWidth(l, width))],
 		invalidate: () => inner.invalidate(),
 	};
 }

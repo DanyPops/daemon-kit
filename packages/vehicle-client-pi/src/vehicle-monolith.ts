@@ -14,7 +14,7 @@ import { LocalVehicleClient } from "@danypops/vehicle-client/local";
 import type { VehicleManifestIdentity } from "@danypops/vehicle-core";
 import { VehicleRegistry } from "@danypops/vehicle-server";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerVehicleTools, type RegisterVehicleToolsOptions, type RegisteredPiVehicle } from "./vehicle-pi.js";
+import { type RegisteredPiVehicle, type RegisterVehicleToolsOptions, registerVehicleTools } from "./vehicle-pi.js";
 
 export interface MonolithVehicle {
 	readonly registry: VehicleRegistry;
