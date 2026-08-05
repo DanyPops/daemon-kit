@@ -4,12 +4,7 @@ import { initTheme, Theme, type ThemeColor } from "@earendil-works/pi-coding-age
 import { Box, visibleWidth } from "@earendil-works/pi-tui";
 import { pickIdentityArgument, renderVehicleCall, renderVehicleResult } from "../src/vehicle-render.ts";
 
-// The real Theme class -- not a hand-rolled fake -- built through its own public
-// constructor with every ThemeColor/ThemeBg token filled in (TypeScript enforces
-// completeness: an added or renamed token fails to compile here). Theme.fg()/bg()
-// throw "Unknown theme color" for any token missing from these maps, exactly as a
-// real installed theme's own resolved palette would -- every fakeTheme/flatTheme/
-// ansiTheme above accepts any string silently and can never catch that class of bug.
+// A real Theme, not a fake -- fg()/bg() throw for a token missing here, unlike fakeTheme/flatTheme/ansiTheme.
 const REAL_FG_COLORS: Record<ThemeColor, string> = {
 	accent: "#ee0000",
 	border: "#4d4d4d",
@@ -59,8 +54,7 @@ const REAL_FG_COLORS: Record<ThemeColor, string> = {
 	bashMode: "#e0e0e0",
 };
 
-// ThemeBg isn't exported from the package's top-level barrel -- inferred instead of
-// annotated, still structurally checked against Theme's real constructor below.
+// ThemeBg isn't exported from the top-level barrel; inferred instead of annotated.
 const REAL_BG_COLORS = {
 	selectedBg: "#292929",
 	userMessageBg: "#1f1f1f",
@@ -201,12 +195,8 @@ describe("renderVehicleCall", () => {
 	});
 });
 
-// Golden: drives renderVehicleCall through the REAL Theme class (see realTheme above)
-// across every VehicleEffect and every arg shape this file exercises with the permissive
-// fakes -- asserts it never throws and always renders a non-empty line. This is the test
-// that would have caught the accent-token risk (theme.fg throws "Unknown theme color" for
-// any token a real installed theme's resolved palette doesn't define), which no
-// fakeTheme/flatTheme/ansiTheme-based test can ever exercise.
+// Drives renderVehicleCall through the real Theme across every effect/arg shape --
+// asserts it never throws, unlike a fake theme that accepts any color string.
 describe("renderVehicleCall against the real Theme class (golden)", () => {
 	const effects: VehicleEffect[] = ["read", "local-write", "external-write", "destructive", "open-world"];
 	const argShapes: Record<string, unknown> = {
