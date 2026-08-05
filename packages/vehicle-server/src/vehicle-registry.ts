@@ -25,6 +25,7 @@ import {
 	defineVehicleOperation,
 	defineVehicleSchema,
 	isVehicleError,
+	VEHICLE_APPROVAL_RESOLVE_OPERATION_NAME,
 	VehicleError,
 	vehicleApprovalRequestedEvent,
 	vehicleApprovalResolvedEvent,
@@ -406,7 +407,7 @@ export class VehicleRegistry {
 		});
 
 		const ResolveOperation = defineVehicleOperation({
-			name: "vehicle.approval.resolve",
+			name: VEHICLE_APPROVAL_RESOLVE_OPERATION_NAME,
 			version: 1,
 			description: "Grants or denies a pending Vehicle approval request, minting a real capability on grant.",
 			input: inputSchema,

@@ -12,6 +12,18 @@ import { defineVehicleEvent, defineVehicleSchema } from "./vehicle-contract.js";
 /** Set once at registry-configuration time (VehicleRegistry.configureApprovals()); never on a per-invoke basis. */
 export const DEFAULT_APPROVAL_EFFECTS: readonly VehicleEffect[] = ["destructive", "open-world"];
 
+/**
+ * The name VehicleRegistry.configureApprovals() registers its built-in
+ * grant/deny operation under. Shared so vehicle-client-pi can recognize and
+ * exclude it from Pi tool projection by exact name (see its own use site):
+ * it is invoked only via this package's own approval-required retry dance
+ * using the extension's already-fixed permissions, never meant to be a
+ * model-callable tool -- a model that could call it directly would be able
+ * to grant its own pending approval requests, defeating the human-in-the-
+ * loop point of the gate entirely.
+ */
+export const VEHICLE_APPROVAL_RESOLVE_OPERATION_NAME = "vehicle.approval.resolve";
+
 /** How long a request stays resolvable before it lapses and must be re-requested. */
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60_000;
 

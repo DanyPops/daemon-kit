@@ -461,6 +461,36 @@ describe("registerVehicleTools", () => {
 		expect(client.calls.map((call) => call.name)).toEqual(["risk.destructive"]);
 	});
 
+	it("never projects vehicle.approval.resolve as a callable Pi tool, even when present in the manifest and fully permissioned -- it is invoked only by this package's own approval-required retry dance, never by the model directly", async () => {
+		const client = new FakeClient(
+			manifest([
+				operation("risk.destructive", 1, { effect: "destructive" }),
+				operation("vehicle.approval.resolve", 1, { permissions: ["vehicle:approvals:resolve"] }),
+			]),
+		);
+		const { pi, tools } = fakePi();
+
+		const registered = await registerVehicleTools(pi, client, { permissions: ["vehicle:approvals:resolve"] });
+
+		expect(tools.map((tool) => tool.name)).toEqual(["risk_destructive"]);
+		expect(registered.tools.map((tool) => tool.operationName)).toEqual(["risk.destructive"]);
+	});
+
+	it("refreshVehicleToolAvailability also never projects vehicle.approval.resolve, even once it first appears in a later manifest", async () => {
+		const client = new FakeClient(manifest([operation("risk.destructive", 1, { effect: "destructive" })]));
+		const { pi, tools } = fakePi();
+		const registered = await registerVehicleTools(pi, client, { permissions: ["vehicle:approvals:resolve"] });
+
+		client.value = manifest([
+			operation("risk.destructive", 1, { effect: "destructive" }),
+			operation("vehicle.approval.resolve", 1, { permissions: ["vehicle:approvals:resolve"] }),
+		]);
+		const refreshed = await refreshVehicleToolAvailability(pi, client, registered, { permissions: ["vehicle:approvals:resolve"] });
+
+		expect(tools.map((tool) => tool.name)).toEqual(["risk_destructive"]);
+		expect(refreshed.tools.map((tool) => tool.operationName)).toEqual(["risk.destructive"]);
+	});
+
 	it("passes resolved invocation metadata without allowing identity or signal replacement", async () => {
 		const client = new FakeClient(manifest([operation("meta.test")]));
 		const { pi, tools } = fakePi();

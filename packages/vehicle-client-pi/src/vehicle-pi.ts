@@ -10,7 +10,13 @@ import type {
 	VehicleOperationDescriptor,
 	VehiclePrincipal,
 } from "@danypops/vehicle-core";
-import { boundedCauseMessage, createAtomicJsonWriter, extractVehicleContent, VehicleError } from "@danypops/vehicle-core";
+import {
+	boundedCauseMessage,
+	createAtomicJsonWriter,
+	extractVehicleContent,
+	VEHICLE_APPROVAL_RESOLVE_OPERATION_NAME,
+	VehicleError,
+} from "@danypops/vehicle-core";
 import type {
 	AgentToolUpdateCallback,
 	ExtensionAPI,
@@ -407,6 +413,18 @@ async function requestLocalApproval(
 	}
 }
 
+/**
+ * Never projects VEHICLE_APPROVAL_RESOLVE_OPERATION_NAME as a Pi tool, even
+ * when it's present in the manifest (any registry with configureApprovals()
+ * enabled registers it) and the caller's own options.permissions happens to
+ * cover its required permission. It is invoked exactly one way in this
+ * package -- client.invoke() from inside the approval-required retry dance
+ * below, using options.permissions the extension author fixed at
+ * registration time -- never as a tool call a model can choose to make.
+ * Exposing it as a model-callable tool would let a model grant its own
+ * pending approval requests, defeating the human-in-the-loop point of the
+ * gate entirely.
+ */
 function projectedNames(
 	manifest: VehicleManifest,
 	nameProjector: NonNullable<RegisterVehicleToolsOptions["toolName"]>,
@@ -415,10 +433,12 @@ function projectedNames(
 	for (const descriptor of manifest.operations) {
 		versionCounts.set(descriptor.name, (versionCounts.get(descriptor.name) ?? 0) + 1);
 	}
-	return manifest.operations.map((descriptor) => ({
-		descriptor,
-		toolName: nameProjector(descriptor, (versionCounts.get(descriptor.name) ?? 0) > 1),
-	}));
+	return manifest.operations
+		.filter((descriptor) => descriptor.name !== VEHICLE_APPROVAL_RESOLVE_OPERATION_NAME)
+		.map((descriptor) => ({
+			descriptor,
+			toolName: nameProjector(descriptor, (versionCounts.get(descriptor.name) ?? 0) > 1),
+		}));
 }
 
 function assertNamesAvailable(
@@ -562,7 +582,7 @@ export async function invokeVehicleOperation(params: VehicleOperationInvocationP
 		let capability: string | undefined;
 		try {
 			const resolveOutput = (await client.invoke(
-				"vehicle.approval.resolve",
+				VEHICLE_APPROVAL_RESOLVE_OPERATION_NAME,
 				1,
 				{ requestId, decision: approved ? "granted" : "denied" },
 				{ permissions: options.permissions, principal: options.principal, signal },
