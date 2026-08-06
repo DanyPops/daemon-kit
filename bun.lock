@@ -56,7 +56,7 @@
     },
     "packages/vehicle-client-pi": {
       "name": "@danypops/vehicle-client-pi",
-      "version": "0.18.2",
+      "version": "0.18.3",
       "dependencies": {
         "@danypops/pi-extension-harness": "^0.6.1",
         "@danypops/vehicle-client": "workspace:*",
@@ -103,7 +103,7 @@
     },
     "packages/vehicle-server": {
       "name": "@danypops/vehicle-server",
-      "version": "0.18.1",
+      "version": "0.18.2",
       "dependencies": {
         "@danypops/armada": "workspace:*",
         "@danypops/vehicle-core": "workspace:*",
