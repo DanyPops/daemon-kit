@@ -24,7 +24,7 @@
  */
 import type { VehicleEffect } from "@danypops/vehicle-core";
 import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, matchesKey } from "@earendil-works/pi-tui";
+import { type Component, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Envelope, type TabBarTheme, TabbedContainer, type TabbedContainerTab, Table, type TableColumn } from "malevich-tui-components";
 import { VEHICLE_SAFETY_STATES, type VehicleSafetyPolicyStore, type VehicleSafetyState } from "./vehicle-safety.ts";
 import {
@@ -207,8 +207,14 @@ function buildTabs(rows: readonly VehicleSafetyRow[], theme: Theme): TabbedConta
  */
 async function showSafetyPanel(ctx: ExtensionCommandContext, rows: readonly VehicleSafetyRow[]): Promise<"edit" | undefined> {
 	return ctx.ui.custom<"edit" | undefined>((tui, theme, _keybindings, done) => {
-		const envelope = new Envelope({ title: `Vehicle safety -- ${rows.length} operation(s)`, borderStyle: "rounded" });
-		const tabbed = new TabbedContainer({ tabs: buildTabs(rows, theme), theme: tabBarTheme(theme) });
+		// measure must be explicit: both Envelope and TabbedContainer default to
+		// ASCII-only (raw .length, blind to ANSI escape codes), and this panel's tab
+		// bar is styled through tabBarTheme's own theme.fg/theme.inverse/theme.bold --
+		// without this, TabbedContainer truncates the styled bar by raw byte count,
+		// landing mid-escape-sequence at a narrow render width.
+		const measure = { visibleWidth, truncateToWidth };
+		const envelope = new Envelope({ title: `Vehicle safety -- ${rows.length} operation(s)`, borderStyle: "rounded", measure });
+		const tabbed = new TabbedContainer({ tabs: buildTabs(rows, theme), theme: tabBarTheme(theme), measure });
 		envelope.setContent(tabbed);
 		const helpLine = theme.fg("dim", "tab/shift-tab switch view \u2022 e edit an operation \u2022 esc close");
 		return {
