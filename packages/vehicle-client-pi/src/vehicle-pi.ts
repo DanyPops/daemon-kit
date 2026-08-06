@@ -250,15 +250,36 @@ export interface RegisteredPiVehicle {
 /** sanitizedFailure()'s own fallback code for a raw transport-level throw -- carries zero information on its own (every failure is "a vehicle client failed"), unlike a real domain code (not-found, validation, deadline-exceeded, ...) which is worth showing as-is. */
 const GENERIC_TRANSPORT_FAILURE_CODE = "vehicle-client-failed";
 
+/**
+ * Renders failure.details' own primitive fields (e.g. a capacity failure's { actualBytes,
+ * maxBytes }) into the same parenthesized annotation causeMessage already gets -- undefined for
+ * anything else (no details, a non-object, an array, or an object with no primitive fields),
+ * since an arbitrary nested JsonValue isn't safe to inline into a one-line error message.
+ */
+function formatFailureDetails(details: VehicleFailure["details"]): string | undefined {
+	if (details === undefined || details === null || typeof details !== "object" || Array.isArray(details)) return undefined;
+	const parts = Object.entries(details)
+		.filter((entry): entry is [string, string | number | boolean] => {
+			const value = entry[1];
+			return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+		})
+		.map(([key, value]) => `${key}=${value}`);
+	return parts.length === 0 ? undefined : parts.join(", ");
+}
+
 export class PiVehicleInvocationError extends Error {
 	constructor(
 		readonly failure: VehicleFailure,
 		/** The failing Vehicle's own manifest name (e.g. "papyrus") -- substituted for the generic transport-failure code so the visible message says which backend failed instead of repeating a label that's true of every such failure. */
 		vehicleName?: string,
 	) {
-		// causeMessage was captured but never shown -- Pi surfaces this .message, not .failure.
+		// causeMessage and details.{actualBytes,maxBytes} etc. were captured but never shown -- Pi
+		// surfaces this .message, not .failure, so a capacity failure otherwise gives no way to know
+		// how far over the cap the real payload was or what limit would fit.
 		const label = failure.code === GENERIC_TRANSPORT_FAILURE_CODE && vehicleName ? vehicleName : failure.code;
-		super(failure.causeMessage === undefined ? `${label}: ${failure.message}` : `${label}: ${failure.message} (${failure.causeMessage})`);
+		const annotations = [failure.causeMessage, formatFailureDetails(failure.details)].filter((part): part is string => part !== undefined);
+		const annotation = annotations.length === 0 ? "" : ` (${annotations.join("; ")})`;
+		super(`${label}: ${failure.message}${annotation}`);
 		this.name = "PiVehicleInvocationError";
 	}
 }

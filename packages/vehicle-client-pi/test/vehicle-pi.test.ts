@@ -571,6 +571,61 @@ describe("registerVehicleTools", () => {
 		}
 	});
 
+	it("appends a capacity failure's own actualBytes/maxBytes details, the same way causeMessage is appended", async () => {
+		// Regression guard: enforcePayloadSize (vehicle-server) attaches details: { actualBytes,
+		// maxBytes } on a response-too-large failure, but it was silently dropped before reaching a
+		// human/agent -- a tasks.list@1 oversized-response failure showed only the bare message, no
+		// way to know how far over the cap the real payload was or what limit would fit.
+		const client = new FakeClient(manifest([operation("fail.test")]));
+		client.error = new VehicleError("response-too-large", "tasks.list@1 response exceeds its 262144-byte limit", {
+			category: "capacity",
+			details: { actualBytes: 300_000, maxBytes: 262_144 },
+		});
+		const { pi, tools } = fakePi();
+		await registerVehicleTools(pi, client, {});
+		try {
+			await execute(tools[0]!, { value: "go" });
+			throw new Error("expected invocation failure");
+		} catch (error) {
+			expect(error).toBeInstanceOf(PiVehicleInvocationError);
+			expect((error as PiVehicleInvocationError).failure.details).toEqual({ actualBytes: 300_000, maxBytes: 262_144 });
+			expect((error as Error).message).toBe(
+				"response-too-large: tasks.list@1 response exceeds its 262144-byte limit (actualBytes=300000, maxBytes=262144)",
+			);
+		}
+	});
+
+	it("combines causeMessage and details when a failure carries both, causeMessage first", async () => {
+		const client = new FakeClient(manifest([operation("fail.test")]));
+		client.error = new VehicleError("response-too-large", "response too large", {
+			category: "capacity",
+			details: { actualBytes: 999 },
+			cause: new Error("underlying cause"),
+			exposeCause: true,
+		});
+		const { pi, tools } = fakePi();
+		await registerVehicleTools(pi, client, {});
+		try {
+			await execute(tools[0]!, { value: "go" });
+			throw new Error("expected invocation failure");
+		} catch (error) {
+			expect((error as Error).message).toBe("response-too-large: response too large (underlying cause; actualBytes=999)");
+		}
+	});
+
+	it("omits the details annotation entirely for a non-object, empty, or all-nested-value details -- never inlines an arbitrary nested JsonValue", async () => {
+		const client = new FakeClient(manifest([operation("fail.test")]));
+		client.error = new VehicleError("internal", "boom", { category: "internal", details: { nested: { a: 1 } } });
+		const { pi, tools } = fakePi();
+		await registerVehicleTools(pi, client, {});
+		try {
+			await execute(tools[0]!, { value: "go" });
+			throw new Error("expected invocation failure");
+		} catch (error) {
+			expect((error as Error).message).toBe("internal: boom");
+		}
+	});
+
 	it("never calls onInvoked when invoke() itself fails", async () => {
 		const client = new FakeClient(manifest([operation("focus.test")]));
 		client.error = new VehicleError("upstream-busy", "Provider is busy", { category: "unavailable", retryable: true });
