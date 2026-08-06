@@ -1,6 +1,6 @@
 {
 	"name": "@danypops/vehicle-core",
-	"version": "0.12.3",
+	"version": "0.12.4",
 	"description": "Vehicle's runtime-neutral wire contract: operation descriptors, schema codecs, failure shapes. Zero runtime dependencies, zero Bun-specific code -- the one thing every Vehicle client and server package depends on.",
 	"license": "MIT",
 	"type": "module",
