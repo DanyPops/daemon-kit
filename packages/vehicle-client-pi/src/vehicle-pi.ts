@@ -30,6 +30,13 @@ import { guardExtensionRuntimeInitialized, syncManagedActiveTools, tryExtensionR
 import { renderVehicleCall, renderVehicleResult } from "./vehicle-render.js";
 import { classifyVehicleOperationSafety, type VehicleSafetyPolicyStore, type VehicleSafetyState } from "./vehicle-safety.js";
 import { registerVehicleSafetyContributor } from "./vehicle-safety-registry.js";
+import {
+	applyVehicleShellActivation,
+	refreshVehicleShellManagedTools,
+	registerVehicleShell,
+	type VehicleShellHandle,
+	type VehicleShellOptions,
+} from "./vehicle-shell.js";
 
 export interface PiVehicleIdentity {
 	readonly name: string;
@@ -195,6 +202,16 @@ export interface RegisterVehicleToolsOptions {
 	 * behavior exactly.
 	 */
 	readonly handshake?: RegisterVehicleToolsHandshakeOptions;
+	/**
+	 * Opt-in Vehicle Shell activation: instead of activating every available, permitted operation
+	 * (this option's own default omission), registers two always-on meta-tools (tools_list,
+	 * tools_man by default) and keeps most operations inactive behind a decaying-TTL cache -- see
+	 * vehicle-shell.ts. Exists because a Vehicle with dozens of operations otherwise puts every
+	 * single one's full schema in context from turn one, regardless of whether the session ever
+	 * calls it. Omitted (the default) preserves today's all-active behavior exactly, for every
+	 * existing consumer that hasn't opted in.
+	 */
+	readonly shell?: VehicleShellOptions;
 }
 
 export interface RegisterVehicleToolsHandshakeOptions {
@@ -226,6 +243,8 @@ export interface RegisteredPiVehicle {
 	readonly tools: readonly RegisteredPiVehicleTool[];
 	/** True when `manifest` came from options.manifestCache's sidecar file rather than a live fetch -- the daemon was unreachable at registration/refresh time. A caller that cares (e.g. to show a reconnecting indicator) can check this; every existing caller ignoring it sees no behavior change. */
 	readonly stale: boolean;
+	/** Present only when options.shell was given -- pass this back into refreshVehicleToolAvailability so a later refresh keeps using the same TTL tracker instead of reactivating every available operation. */
+	readonly shell?: VehicleShellHandle;
 }
 
 /** sanitizedFailure()'s own fallback code for a raw transport-level throw -- carries zero information on its own (every failure is "a vehicle client failed"), unlike a real domain code (not-found, validation, deadline-exceeded, ...) which is worth showing as-is. */
@@ -783,6 +802,7 @@ export async function registerVehicleTools(
 		effect: descriptor.effect,
 		safetyState: resolveSafetyState(manifest.name, descriptor, options),
 	}));
+	const shell = registerVehicleShell(pi, manifest, shellManagedTools(tools), options.shell);
 	// Registered tools whose operation is currently unavailable (e.g. a
 	// missing credential) or currently resolved to "blocked" (missing
 	// permissions, or an explicit /safety override) are hidden from the LLM
@@ -793,11 +813,13 @@ export async function registerVehicleTools(
 	// registered but Pi's active-tool action methods are not ready yet; defer
 	// only availability sync so renderers exist before transcript replay.
 	const syncAvailability = () =>
-		syncManagedActiveTools(
-			pi,
-			tools.map((tool) => tool.toolName),
-			tools.filter((tool) => tool.available && tool.safetyState !== "blocked").map((tool) => tool.toolName),
-		);
+		shell
+			? applyVehicleShellActivation(pi, shell)
+			: syncManagedActiveTools(
+					pi,
+					tools.map((tool) => tool.toolName),
+					tools.filter((tool) => tool.available && tool.safetyState !== "blocked").map((tool) => tool.toolName),
+				);
 	if (runtime.status === "ready") {
 		syncAvailability();
 	} else {
@@ -805,7 +827,17 @@ export async function registerVehicleTools(
 	}
 	contributeToSafetyRegistry(manifest, tools);
 
-	return { manifest, tools, stale };
+	return { manifest, tools, stale, ...(shell ? { shell } : {}) };
+}
+
+/** RegisteredPiVehicleTool's own available/blocked facts, narrowed to what vehicle-shell.ts needs -- keeps that file from importing this one's own (much larger) type. */
+function shellManagedTools(tools: readonly RegisteredPiVehicleTool[]) {
+	return tools.map((tool) => ({
+		toolName: tool.toolName,
+		operationName: tool.operationName,
+		available: tool.available,
+		blocked: tool.safetyState === "blocked",
+	}));
 }
 
 /**
@@ -857,12 +889,17 @@ export async function refreshVehicleToolAvailability(
 		});
 	}
 
-	syncManagedActiveTools(
-		pi,
-		tools.map((tool) => tool.toolName),
-		tools.filter((tool) => tool.available && tool.safetyState !== "blocked").map((tool) => tool.toolName),
-	);
+	if (registered.shell) {
+		refreshVehicleShellManagedTools(registered.shell, shellManagedTools(tools));
+		applyVehicleShellActivation(pi, registered.shell);
+	} else {
+		syncManagedActiveTools(
+			pi,
+			tools.map((tool) => tool.toolName),
+			tools.filter((tool) => tool.available && tool.safetyState !== "blocked").map((tool) => tool.toolName),
+		);
+	}
 	contributeToSafetyRegistry(manifest, tools);
 
-	return { manifest, tools, stale: false };
+	return { manifest, tools, stale: false, ...(registered.shell ? { shell: registered.shell } : {}) };
 }
