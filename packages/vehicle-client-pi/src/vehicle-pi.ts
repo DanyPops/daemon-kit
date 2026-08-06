@@ -915,8 +915,20 @@ export async function refreshVehicleToolAvailability(
  */
 export type VehicleReadyEvent =
 	| { readonly kind: "client-unavailable"; readonly attempt: number; readonly attempts: number; readonly ctx: ExtensionContext }
-	| { readonly kind: "client-resolution-failed"; readonly attempt: number; readonly attempts: number; readonly error: unknown; readonly ctx: ExtensionContext }
-	| { readonly kind: "registration-failed"; readonly attempt: number; readonly attempts: number; readonly error: unknown; readonly ctx: ExtensionContext }
+	| {
+			readonly kind: "client-resolution-failed";
+			readonly attempt: number;
+			readonly attempts: number;
+			readonly error: unknown;
+			readonly ctx: ExtensionContext;
+	  }
+	| {
+			readonly kind: "registration-failed";
+			readonly attempt: number;
+			readonly attempts: number;
+			readonly error: unknown;
+			readonly ctx: ExtensionContext;
+	  }
 	| { readonly kind: "registered"; readonly attempt: number; readonly ctx: ExtensionContext }
 	| { readonly kind: "exhausted"; readonly attempts: number; readonly ctx: ExtensionContext };
 
@@ -986,31 +998,47 @@ export function registerVehicleToolsWhenReady(
 		settle = resolve;
 	});
 
+	// `attempt` reuses one ctx captured at session_start across every retry, including across the
+	// sleep between attempts -- a session replaced or reloaded during that window leaves `ctx`
+	// stale (see extensions.md's "Session replacement lifecycle and footguns"), and a caller's own
+	// `log` reading e.g. event.ctx.ui then throws. `attempt` itself runs fire-and-forget (see the
+	// `void attempt(1, ctx)` call below), so any exception escaping `log` would otherwise surface
+	// as an unhandled rejection that kills the whole host process, not just this one registration
+	// attempt. safeLog swallows that failure so a broken/now-stale log callback can never do that,
+	// and so every terminal branch still reaches its own settle() call.
+	function safeLog(event: VehicleReadyEvent): void {
+		try {
+			options.log?.(event);
+		} catch (error) {
+			console.error(`registerVehicleToolsWhenReady: log callback threw for a "${event.kind}" event -- ${error}`);
+		}
+	}
+
 	async function attempt(attemptNumber: number, ctx: ExtensionContext): Promise<void> {
 		let client: VehicleClient | undefined;
 		let resolutionFailed = false;
 		try {
 			client = await resolveClient();
 		} catch (error) {
-			options.log?.({ kind: "client-resolution-failed", attempt: attemptNumber, attempts, error, ctx });
+			safeLog({ kind: "client-resolution-failed", attempt: attemptNumber, attempts, error, ctx });
 			resolutionFailed = true;
 		}
 
 		if (client) {
 			try {
 				const registered = await registerVehicleTools(pi, client, options);
-				options.log?.({ kind: "registered", attempt: attemptNumber, ctx });
+				safeLog({ kind: "registered", attempt: attemptNumber, ctx });
 				settle(registered);
 				return;
 			} catch (error) {
-				options.log?.({ kind: "registration-failed", attempt: attemptNumber, attempts, error, ctx });
+				safeLog({ kind: "registration-failed", attempt: attemptNumber, attempts, error, ctx });
 			}
 		} else if (!resolutionFailed) {
-			options.log?.({ kind: "client-unavailable", attempt: attemptNumber, attempts, ctx });
+			safeLog({ kind: "client-unavailable", attempt: attemptNumber, attempts, ctx });
 		}
 
 		if (attemptNumber >= attempts) {
-			options.log?.({ kind: "exhausted", attempts, ctx });
+			safeLog({ kind: "exhausted", attempts, ctx });
 			settle(undefined);
 			return;
 		}
