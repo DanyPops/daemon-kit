@@ -1,4 +1,4 @@
-import type { VehicleEffect, VehicleOperationDescriptor } from "@danypops/vehicle-core";
+import { extractVehicleContent, type VehicleEffect, type VehicleOperationDescriptor } from "@danypops/vehicle-core";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { keyHint, type Theme, type ThemeColor, type ToolDefinition, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
@@ -199,6 +199,23 @@ function singleArrayEnvelope(output: unknown): { items: unknown[]; siblings: [st
 	return { items, siblings };
 }
 
+/**
+ * The envelope singleArrayEnvelope's own content exclusion leaves behind: no domain array at all,
+ * just a real content: VehicleContentBlock[] (Vehicle's own model-facing narration channel --
+ * extractVehicleContent already reads this exact shape for the LLM side) plus primitive siblings
+ * -- e.g. discuss.block/unblock's {blocked, content}. Rather than dumping raw JSON when there's
+ * nothing to tabulate, show the narration text plainly, the same text the model itself sees.
+ * Same ambiguity discipline as singleArrayEnvelope: a non-primitive sibling still falls through
+ * to raw JSON rather than guessing.
+ */
+function plainContentEnvelope(output: unknown): { text: string; siblings: [string, Primitive][] } | undefined {
+	const blocks = extractVehicleContent(output);
+	if (!blocks || blocks.length === 0) return undefined;
+	const siblings = Object.entries(output as Record<string, unknown>).filter(([key]) => key !== "content");
+	if (!siblings.every((entry): entry is [string, Primitive] => isPrimitive(entry[1]))) return undefined;
+	return { text: blocks.map((block) => block.text).join("\n"), siblings };
+}
+
 function formatSiblingLine(siblings: readonly [string, Primitive][]): string {
 	return siblings.map(([key, value]) => `${key}: ${value === null || value === undefined ? "none" : String(value)}`).join(" · ");
 }
@@ -291,6 +308,12 @@ export function renderVehicleResult(
 			const rendered = renderArrayOutput(envelope.items, options, theme);
 			if (rendered) {
 				return envelope.siblings.length > 0 ? withTrailingLine(rendered, theme.fg("dim", formatSiblingLine(envelope.siblings))) : rendered;
+			}
+		} else {
+			const plain = plainContentEnvelope(output);
+			if (plain) {
+				const rendered = new CollapsibleText({ text: plain.text, collapsedLines: options.expanded ? Number.MAX_SAFE_INTEGER : 5, measure });
+				return plain.siblings.length > 0 ? withTrailingLine(rendered, theme.fg("dim", formatSiblingLine(plain.siblings))) : rendered;
 			}
 		}
 	}

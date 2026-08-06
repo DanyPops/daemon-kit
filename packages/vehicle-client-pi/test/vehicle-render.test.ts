@@ -508,6 +508,36 @@ describe("renderVehicleResult", () => {
 		expect(component.render(80).join("\n")).toContain('"a"');
 	});
 
+	it("a content-only envelope (a boolean/primitive sibling plus a VehicleContentBlock[] content, no domain array at all) shows the content's own narration plainly, not raw JSON", () => {
+		// The exact real shape of Papyrus's discuss.block/unblock: {blocked: true, content: [...]}.
+		// singleArrayEnvelope correctly excludes `content` from ever being treated as domain array
+		// data (484f14c) -- but that leaves genuinely zero array fields here, so this must fall
+		// through to a content-aware plain-text rendering instead of a raw JSON dump, the same way
+		// the model's own content channel (extractVehicleContent) already reads this shape.
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: { blocked: true, content: [{ type: "text", text: 'Discussion "X" now blocks "Y"' }] } } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).toContain("now blocks");
+		expect(text).not.toContain("{");
+	});
+
+	it("a content-only envelope still annotates its other primitive siblings, same as a domain-array envelope does", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: { blocked: true, content: [{ type: "text", text: "done" }] } } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).toContain("blocked: true");
+	});
+
 	it("leaves an object with a non-primitive sibling on the raw-JSON fallback", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),
