@@ -277,3 +277,44 @@ export function createNodeServiceInstallDeps(): ServiceInstallDeps {
 		},
 	};
 }
+
+export type ServiceAction = "start" | "stop" | "restart" | "status";
+
+/** The real unit name Armada generates for a vehicle -- see armada's native/systemd.ts. */
+export function armadaUnitName(vehicleName: string): string {
+	return `armada-${vehicleName}.service`;
+}
+
+export interface ServiceCli {
+	unitName: string;
+	install: () => ServiceInstallResult;
+	uninstall: () => ServiceInstallResult;
+	action: (action: ServiceAction) => void;
+}
+
+export interface ServiceCliDeps extends ServiceInstallDeps {
+	/** Defaults to a real `systemctl --user <action> <unitName>` shell-out. */
+	runSystemctl?: (action: ServiceAction, unitName: string) => void;
+}
+
+const defaultRunSystemctl = (action: ServiceAction, unitName: string): void => {
+	execFileSync("systemctl", ["--user", action, unitName], { stdio: "inherit" });
+};
+
+/**
+ * Every Vehicle-backed daemon's own CLI (web-spider, papyrus, jittor, pipes,
+ * lector, tickets, ...) otherwise hand-rolls its own install()/systemctl()
+ * wrapper and re-derives the Armada unit name itself -- this is the one
+ * place that logic lives, so a `service install/start/stop/restart/status`
+ * command becomes a thin wrapper around one createServiceCli(spec) call.
+ */
+export function createServiceCli(spec: ServiceSpec, deps: ServiceCliDeps = createNodeServiceInstallDeps()): ServiceCli {
+	const unitName = armadaUnitName(spec.name);
+	const runSystemctl = deps.runSystemctl ?? defaultRunSystemctl;
+	return {
+		unitName,
+		install: () => installUserService(spec, deps),
+		uninstall: () => uninstallUserService(spec.name, deps),
+		action: (action) => runSystemctl(action, unitName),
+	};
+}

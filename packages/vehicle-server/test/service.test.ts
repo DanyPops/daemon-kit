@@ -1,15 +1,17 @@
 import { describe, expect, it } from "bun:test";
 import type { VehicleRegistrar, VehicleRegistrationOutcome } from "@danypops/armada";
 import {
+	armadaUnitName,
 	createNodeServiceInstallDeps,
+	createServiceCli,
 	detectLinuxInitSystem,
 	generateLaunchdPlist,
 	generateSystemdUnit,
 	installUserService,
 	isServiceInstalled,
 	isVehicleServiceRegistered,
-	registerVehicleService,
 	type RunResult,
+	registerVehicleService,
 	type ServiceInstallDeps,
 	type ServiceSpec,
 	uninstallUserService,
@@ -189,6 +191,33 @@ describe("Armada service ownership -- in-process registrar path", () => {
 		expect(result).toEqual({ installed: true });
 		expect(registrar.unregisterCalls).toEqual(["acme"]);
 		expect(await isVehicleServiceRegistered(SPEC.name, registrar)).toBe(false);
+	});
+});
+
+describe("createServiceCli", () => {
+	it("derives the real Armada unit name from the spec's own name", () => {
+		expect(armadaUnitName("acme")).toBe("armada-acme.service");
+		expect(createServiceCli(SPEC, fakeDeps()).unitName).toBe("armada-acme.service");
+	});
+
+	it("install/uninstall delegate to the same installUserService/uninstallUserService Armada calls", () => {
+		const deps = fakeDeps();
+		const cli = createServiceCli(SPEC, deps);
+		expect(cli.install()).toEqual({ installed: true });
+		expect(cli.uninstall()).toEqual({ installed: true });
+		expect(deps.commands.map((call) => call.args[1])).toEqual(["upsert", "reconcile", "remove"]);
+	});
+
+	it("action() runs systemctl --user <action> against the real Armada unit name, not the spec's bare name", () => {
+		const calls: Array<{ action: string; unitName: string }> = [];
+		const cli = createServiceCli(SPEC, { ...fakeDeps(), runSystemctl: (action, unitName) => calls.push({ action, unitName }) });
+		for (const action of ["start", "stop", "restart", "status"] as const) cli.action(action);
+		expect(calls).toEqual([
+			{ action: "start", unitName: "armada-acme.service" },
+			{ action: "stop", unitName: "armada-acme.service" },
+			{ action: "restart", unitName: "armada-acme.service" },
+			{ action: "status", unitName: "armada-acme.service" },
+		]);
 	});
 });
 
