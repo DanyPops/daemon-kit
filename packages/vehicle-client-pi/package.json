@@ -59,7 +59,7 @@
 		"@danypops/vehicle-client": "workspace:*",
 		"@danypops/vehicle-core": "workspace:*",
 		"@danypops/vehicle-server": "workspace:*",
-		"malevich-tui-components": "^0.20.3"
+		"malevich-tui-components": "^0.24.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-agent-core": "*",

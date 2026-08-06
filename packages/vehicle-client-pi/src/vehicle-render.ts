@@ -4,12 +4,16 @@ import { keyHint, type Theme, type ThemeColor, type ToolDefinition, type ToolRen
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
+	buildDetailLines,
 	CollapsibleText,
+	type DetailField,
+	type DetailViewTheme,
 	deriveTableColumns,
 	firstDistinctStyle,
 	ProgressBar,
 	renderBoundedTable,
 	renderTruncatedList,
+	statelessComponent,
 	Text,
 	type TextMeasure,
 } from "malevich-tui-components";
@@ -220,6 +224,48 @@ function formatSiblingLine(siblings: readonly [string, Primitive][]): string {
 	return siblings.map(([key, value]) => `${key}: ${value === null || value === undefined ? "none" : String(value)}`).join(" · ");
 }
 
+/** "taskId" -> "Task Id", "lease_expires_at" -> "Lease Expires At" -- the same mechanical,
+ * domain-agnostic transform as humanizeOperationName, applied to a flat record's own field
+ * names instead of an operation name. */
+function humanizeFieldKey(key: string): string {
+	return key
+		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+		.replace(/_/g, " ")
+		.split(" ")
+		.filter(Boolean)
+		.map((word) => word[0]!.toUpperCase() + word.slice(1))
+		.join(" ");
+}
+
+/**
+ * A plain object where every field is a primitive scalar -- e.g. tasks.claim's TaskLease
+ * ({taskId, owner, token, claimedAt, ...}). Neither singleArrayEnvelope nor
+ * plainContentEnvelope cover this: both require at least one array/content-block field.
+ * A flat record is the single most renderable shape there is (a key/value list), yet
+ * previously fell straight through to the raw-JSON fallback below for lack of any array
+ * to unwrap. undefined for an empty object or anything with a nested object/array field --
+ * genuinely structured data still falls through to raw JSON rather than flattening a shape
+ * this isn't meant to guess at.
+ */
+function flatRecordEnvelope(output: unknown): DetailField[] | undefined {
+	if (typeof output !== "object" || output === null || Array.isArray(output)) return undefined;
+	const entries = Object.entries(output as Record<string, unknown>);
+	if (entries.length === 0 || !entries.every((entry): entry is [string, Primitive] => isPrimitive(entry[1]))) return undefined;
+	return entries.map(([key, value]) => ({
+		label: humanizeFieldKey(key),
+		value: value === null || value === undefined ? "none" : String(value),
+	}));
+}
+
+function flatRecordTheme(theme: Theme): DetailViewTheme {
+	return {
+		field: (s) => theme.fg("text", s),
+		heading: (s) => theme.fg("toolTitle", theme.bold(s)),
+		byline: (s) => theme.fg("dim", s),
+		body: (s) => theme.fg("text", s),
+	};
+}
+
 /**
  * Appends one or more (each already width-safe on its own render pass) lines after an inner
  * component's own output -- used to attach an envelope's sibling-field annotation without
@@ -314,6 +360,13 @@ export function renderVehicleResult(
 			if (plain) {
 				const rendered = new CollapsibleText({ text: plain.text, collapsedLines: options.expanded ? Number.MAX_SAFE_INTEGER : 5, measure });
 				return plain.siblings.length > 0 ? withTrailingLine(rendered, theme.fg("dim", formatSiblingLine(plain.siblings))) : rendered;
+			}
+			const fields = flatRecordEnvelope(output);
+			if (fields) {
+				const fieldTheme = flatRecordTheme(theme);
+				return statelessComponent((width) =>
+					buildDetailLines(Math.max(1, width), { fields, alignFields: true, theme: fieldTheme, measure }),
+				);
 			}
 		}
 	}

@@ -386,15 +386,72 @@ describe("renderVehicleResult", () => {
 		expect(text).not.toContain("more");
 	});
 
-	it("falls back to collapsible JSON for a non-tabular output", () => {
+	it("renders a flat all-primitive object as an aligned field list, not raw JSON -- tasks.claim's real TaskLease shape", () => {
+		// The exact shape reported live: tasks.claim's TaskLease, previously dumped as raw JSON
+		// because it has no array field for singleArrayEnvelope/plainContentEnvelope to unwrap.
 		const component = renderVehicleResult(
-			descriptor("read"),
-			{ content: [], details: { output: { ok: true } } },
+			descriptor("local-write"),
+			{
+				content: [],
+				details: {
+					output: {
+						taskId: "56ab35b0-bc38-4b29-86ff-0561a0dc91a3",
+						owner: "019fd235-1941-7835-adcd-c42598576c5a",
+						token: "e52220fa-a577-4d10-8832-c051db78b438",
+						claimedAt: "2026-08-06T20:52:43.566Z",
+					},
+				},
+			},
 			{ isPartial: false, expanded: false },
 			fakeTheme,
 			resultContext(),
 		);
-		expect(component.render(80).join("\n")).toContain('"ok": true');
+		const text = component.render(80).join("\n");
+		expect(text).toContain("Task Id");
+		expect(text).toContain("56ab35b0-bc38-4b29-86ff-0561a0dc91a3");
+		expect(text).toContain("Owner");
+		expect(text).toContain("Claimed At");
+		expect(text).not.toContain("{");
+		expect(text).not.toContain('"');
+	});
+
+	it("renders null/undefined fields in a flat record as 'none', matching formatSiblingLine's own convention", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: { note: null, count: 3, active: true } } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		const text = component.render(80).join("\n");
+		expect(text).toContain("Note:");
+		expect(text).toContain("none");
+		expect(text).toContain("Count:");
+		expect(text).toContain("3");
+		expect(text).toContain("Active:");
+		expect(text).toContain("true");
+	});
+
+	it("still falls back to raw JSON for an object with a nested object field -- a flat record is a narrower shape than 'any object'", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: { nested: { a: 1 } } } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		expect(component.render(80).join("\n")).toContain('"a": 1');
+	});
+
+	it("still falls back to raw JSON for an empty object", () => {
+		const component = renderVehicleResult(
+			descriptor("read"),
+			{ content: [], details: { output: {} } },
+			{ isPartial: false, expanded: false },
+			fakeTheme,
+			resultContext(),
+		);
+		expect(component.render(80).join("\n")).toBe("{}");
 	});
 
 	it("expands the collapsible JSON view when options.expanded is true", () => {
