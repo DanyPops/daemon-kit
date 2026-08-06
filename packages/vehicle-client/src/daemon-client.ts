@@ -361,6 +361,32 @@ export interface ConnectVersionCheckRetryOptions {
 	readonly growFactor?: number;
 }
 
+/**
+ * Dependency-free dotted-numeric version comparator (no semver package -- this file
+ * deliberately has no imports of its own, see the module doc comment). Compares segments
+ * numerically ("0.44.12" < "0.45.0"); a non-numeric segment on either side falls back to a
+ * plain string comparison of that segment, which is still deterministic, just not
+ * semver-aware (pre-release tags, build metadata). Missing trailing segments compare as 0
+ * ("1.2" === "1.2.0"). Returns negative/zero/positive like Array.prototype.sort's comparator.
+ */
+export function compareVersions(a: string, b: string): number {
+	const partsA = a.split(".");
+	const partsB = b.split(".");
+	const length = Math.max(partsA.length, partsB.length);
+	for (let i = 0; i < length; i++) {
+		const rawA = partsA[i] ?? "0";
+		const rawB = partsB[i] ?? "0";
+		const numA = Number(rawA);
+		const numB = Number(rawB);
+		if (Number.isFinite(numA) && Number.isFinite(numB)) {
+			if (numA !== numB) return numA - numB;
+		} else if (rawA !== rawB) {
+			return rawA < rawB ? -1 : 1;
+		}
+	}
+	return 0;
+}
+
 /** Same jittered exponential-backoff formula as connectPushChannel's reconnect delay,
  * duplicated locally rather than shared since this file deliberately has no imports of its
  * own (see the module doc comment). */
@@ -399,13 +425,23 @@ async function connectAndReadVersionWithRetry<Handle extends DaemonHandleLike, C
  * wire protocol or schema may no longer match what this session expects.
  *
  * On every fresh connect (a new client instance, not a cached call), the
- * daemon's reported version is checked against `expectedVersion`. A
- * mismatch replaces the stale daemon (graceful shutdown request, falling
- * back to a direct kill signal) and reconnects against a freshly spawned
- * one, transparently to the caller -- no error surfaces for a normal
- * version-drift recovery. A version match takes the exact same path as
- * plain connectWithPolicy, with one extra readVersion() call and no other
- * added latency.
+ * daemon's reported version is checked against `expectedVersion`, compared
+ * with compareVersions (not string equality, so "which one is newer" is a
+ * real, ordered question, not just a difference):
+ * - Equal (or equal by comparison, e.g. "1.2" vs "1.2.0"): plain
+ *   connectWithPolicy's path, no extra latency beyond one readVersion() call.
+ * - Running is OLDER than expected: this is the genuine staleness case
+ *   (`npm update` ran, the daemon didn't restart) -- replaced transparently
+ *   (graceful shutdown request, falling back to a direct kill signal),
+ *   reconnects against a freshly spawned one, no error surfaces.
+ * - Running is NEWER than expected: this caller is the stale side, not the
+ *   daemon. Two different installed copies of the same consumer package can
+ *   coexist (a hoisted top-level copy plus another package's own undeduped
+ *   nested copy) and each resolve a different expectedVersion from their own
+ *   package.json -- without this direction check, they would kill and
+ *   respawn the daemon back and forth forever, each "fixing" what the other
+ *   had just "fixed". Refuses instead: never downgrades a live daemon, the
+ *   caller gets an actionable error naming the version to upgrade to.
  */
 export async function connectWithVersionCheck<Handle extends DaemonHandleLike, Client>(
 	policy: ConnectPolicyOptions<Handle, Client>,
@@ -414,7 +450,14 @@ export async function connectWithVersionCheck<Handle extends DaemonHandleLike, C
 	const { client, runningVersion } = await connectAndReadVersionWithRetry(policy, versionCheck);
 	const expectedVersion =
 		typeof versionCheck.expectedVersion === "function" ? await versionCheck.expectedVersion() : versionCheck.expectedVersion;
-	if (runningVersion === expectedVersion) return client;
+	const comparison = compareVersions(runningVersion, expectedVersion);
+	if (comparison === 0) return client;
+
+	if (comparison > 0) {
+		throw new Error(
+			`daemon is running a newer version (${runningVersion}) than this client expects (${expectedVersion}) -- upgrade this package to at least ${runningVersion} and retry; refusing to downgrade the running daemon`,
+		);
+	}
 
 	// Without a spawn() a replacement can never come back -- killing the
 	// stale daemon here would leave the caller with nothing at all, strictly

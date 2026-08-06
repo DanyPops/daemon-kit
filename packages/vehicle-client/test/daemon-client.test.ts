@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { PushChannel } from "@danypops/vehicle-server/push-channel";
 import {
+	compareVersions,
 	connectPushChannel,
 	connectWithPolicy,
 	connectWithVersionCheck,
@@ -676,6 +677,28 @@ describe("daemonStatus", () => {
 	});
 });
 
+describe("compareVersions", () => {
+	it("orders dotted-numeric versions numerically, not lexicographically", () => {
+		expect(compareVersions("0.44.12", "0.45.0")).toBeLessThan(0);
+		expect(compareVersions("0.45.0", "0.44.12")).toBeGreaterThan(0);
+		expect(compareVersions("0.9.0", "0.10.0")).toBeLessThan(0); // lexicographic would get this backwards
+	});
+
+	it("treats equal versions as equal", () => {
+		expect(compareVersions("1.2.3", "1.2.3")).toBe(0);
+	});
+
+	it("treats a missing trailing segment as zero", () => {
+		expect(compareVersions("1.2", "1.2.0")).toBe(0);
+		expect(compareVersions("1.2.0", "1.3")).toBeLessThan(0);
+	});
+
+	it("falls back to a string comparison for a non-numeric segment, deterministically", () => {
+		expect(compareVersions("1.2.3-beta", "1.2.3-beta")).toBe(0);
+		expect(compareVersions("1.2.3-alpha", "1.2.3-beta")).toBeLessThan(0);
+	});
+});
+
 describe("connectWithVersionCheck", () => {
 	it("returns the client unchanged when the running daemon's version already matches -- no kill, no respawn", async () => {
 		let spawnCalls = 0;
@@ -699,6 +722,33 @@ describe("connectWithVersionCheck", () => {
 			},
 		);
 		expect(client.port).toBe(4242);
+		expect(spawnCalls).toBe(0);
+		expect(killCalls).toBe(0);
+	});
+
+	it("refuses instead of downgrading when the running daemon is NEWER than expected -- never kills, never spawns", async () => {
+		let spawnCalls = 0;
+		let killCalls = 0;
+		await expect(
+			connectWithVersionCheck<DaemonHandleLike, VersionedFakeClient>(
+				{
+					readHandle: () => FAKE_HANDLE,
+					buildClient: (handle) => ({ port: handle.port, version: "0.45.0" }),
+					autoStart: true,
+					spawn: () => {
+						spawnCalls++;
+					},
+					fallbackMessage: "unreachable",
+				},
+				{
+					expectedVersion: "0.44.12",
+					readVersion: async (c) => c.version,
+					killStaleProcess: () => {
+						killCalls++;
+					},
+				},
+			),
+		).rejects.toThrow(/running a newer version \(0\.45\.0\).*upgrade this package to at least 0\.45\.0/);
 		expect(spawnCalls).toBe(0);
 		expect(killCalls).toBe(0);
 	});
