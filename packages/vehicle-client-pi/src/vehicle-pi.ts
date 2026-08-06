@@ -903,3 +903,124 @@ export async function refreshVehicleToolAvailability(
 
 	return { manifest, tools, stale: false, ...(registered.shell ? { shell: registered.shell } : {}) };
 }
+
+/**
+ * One attempt's outcome, reported through `log` instead of the silent
+ * return/bare-catch every consumer independently reimplemented (pi-tickets'
+ * registerTicketsVehicle, pi-papyrus's registerNotesVehicle): `resolveClient`
+ * returning undefined (no daemon target resolvable yet), `resolveClient`
+ * throwing, or `registerVehicleTools` itself throwing all previously
+ * vanished with zero diagnostic trail. `attempt`/`attempts` are 1-based and
+ * inclusive, e.g. "2 of 5".
+ */
+export type VehicleReadyEvent =
+	| { readonly kind: "client-unavailable"; readonly attempt: number; readonly attempts: number }
+	| { readonly kind: "client-resolution-failed"; readonly attempt: number; readonly attempts: number; readonly error: unknown }
+	| { readonly kind: "registration-failed"; readonly attempt: number; readonly attempts: number; readonly error: unknown }
+	| { readonly kind: "registered"; readonly attempt: number }
+	| { readonly kind: "exhausted"; readonly attempts: number };
+
+export interface VehicleReadyRetryOptions {
+	/** Total attempts across the whole resolve+register sequence, including the first. Defaults to 6. */
+	readonly attempts?: number;
+	/** Delay before the second attempt. Defaults to 250ms. */
+	readonly initialDelayMs?: number;
+	/** No retry delay is ever allowed to exceed this. Defaults to 5000ms. */
+	readonly maxDelayMs?: number;
+	/** Multiplier applied to the delay after each failed attempt. Defaults to 2. */
+	readonly growFactor?: number;
+}
+
+export interface RegisterVehicleToolsWhenReadyOptions extends RegisterVehicleToolsOptions {
+	/** Every resolution/registration outcome, success or failure -- see VehicleReadyEvent. Omitting this restores today's silent behavior; a caller wanting the fix should always supply one (e.g. ctx.ui.notify or a structured logger). */
+	readonly log?: (event: VehicleReadyEvent) => void;
+	readonly retry?: VehicleReadyRetryOptions;
+}
+
+const DEFAULT_READY_RETRY_ATTEMPTS = 6;
+const DEFAULT_READY_INITIAL_DELAY_MS = 250;
+const DEFAULT_READY_MAX_DELAY_MS = 5_000;
+const DEFAULT_READY_GROW_FACTOR = 2;
+
+/** Same jittered exponential-backoff shape as handshakeRetryDelayMs, sized for the coarser-grained problem this solves: a daemon that hasn't started at all yet (seconds), not a manifest call mid-flight (milliseconds). */
+function readyRetryDelayMs(attemptJustFailed: number, retry: VehicleReadyRetryOptions | undefined): number {
+	const initialDelayMs = retry?.initialDelayMs ?? DEFAULT_READY_INITIAL_DELAY_MS;
+	const maxDelayMs = retry?.maxDelayMs ?? DEFAULT_READY_MAX_DELAY_MS;
+	const growFactor = retry?.growFactor ?? DEFAULT_READY_GROW_FACTOR;
+	const raw = Math.min(initialDelayMs * growFactor ** (attemptJustFailed - 1), maxDelayMs);
+	return raw * (0.8 + Math.random() * 0.4);
+}
+
+/**
+ * Wraps `registerVehicleTools` with the one step it never owned: resolving
+ * the daemon target and building a client in the first place. That step is
+ * inherently consumer-specific (each daemon has its own handle file/target
+ * resolution), which is why it was never centralized here before -- but the
+ * failure handling around it (silent return on no target, bare catch on any
+ * error, no later retry) was reimplemented identically by every consumer
+ * and always dropped the failure on the floor. This centralizes that
+ * handling once: every step logs through `log` instead of vanishing, and a
+ * daemon that is merely slow to start gets bounded retries (see
+ * VehicleReadyRetryOptions) instead of a permanent zero-tools outcome for
+ * the rest of the session.
+ *
+ * Registers one `session_start` handler that kicks off the resolve+register
+ * sequence in the background (never blocks session_start itself on a
+ * multi-attempt backoff) and returns a promise that settles once the
+ * sequence either succeeds or exhausts its attempts -- awaiting it is
+ * optional, useful mainly for tests and for a caller that wants to know the
+ * final outcome (e.g. to show one status line) without polling.
+ *
+ * Every other `RegisterVehicleToolsOptions` field (including the opt-in
+ * `shell` activation mode) passes straight through to the eventual
+ * `registerVehicleTools` call unchanged.
+ */
+export function registerVehicleToolsWhenReady(
+	pi: ExtensionAPI,
+	resolveClient: () => Promise<VehicleClient | undefined>,
+	options: RegisterVehicleToolsWhenReadyOptions = {},
+): Promise<RegisteredPiVehicle | undefined> {
+	const attempts = Math.max(1, options.retry?.attempts ?? DEFAULT_READY_RETRY_ATTEMPTS);
+	let settle!: (value: RegisteredPiVehicle | undefined) => void;
+	const done = new Promise<RegisteredPiVehicle | undefined>((resolve) => {
+		settle = resolve;
+	});
+
+	async function attempt(attemptNumber: number): Promise<void> {
+		let client: VehicleClient | undefined;
+		let resolutionFailed = false;
+		try {
+			client = await resolveClient();
+		} catch (error) {
+			options.log?.({ kind: "client-resolution-failed", attempt: attemptNumber, attempts, error });
+			resolutionFailed = true;
+		}
+
+		if (client) {
+			try {
+				const registered = await registerVehicleTools(pi, client, options);
+				options.log?.({ kind: "registered", attempt: attemptNumber });
+				settle(registered);
+				return;
+			} catch (error) {
+				options.log?.({ kind: "registration-failed", attempt: attemptNumber, attempts, error });
+			}
+		} else if (!resolutionFailed) {
+			options.log?.({ kind: "client-unavailable", attempt: attemptNumber, attempts });
+		}
+
+		if (attemptNumber >= attempts) {
+			options.log?.({ kind: "exhausted", attempts });
+			settle(undefined);
+			return;
+		}
+		await sleep(readyRetryDelayMs(attemptNumber, options.retry));
+		await attempt(attemptNumber + 1);
+	}
+
+	pi.on("session_start", () => {
+		void attempt(1);
+	});
+
+	return done;
+}
