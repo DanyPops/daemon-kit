@@ -186,10 +186,8 @@ describe("fix: two installed copies with different expectedVersions converge ins
 		writeDaemonScript(daemonScriptPath);
 		const agentScriptPath = writeAgentScript(daemonScriptPath);
 
-		// Agent A ("the top-level hoisted copy", 0.45.0) and Agent B ("pi-papyrus's own
-		// nested copy", 0.44.12) reconnecting in alternation -- exactly what a TUI poll
-		// timer, a push-channel reconnect, and a retry-once-per-call each independently do
-		// in production, completely unsynchronized with each other.
+		// Agent A (0.45.0) and Agent B (0.44.12) reconnecting in alternation, unsynchronized --
+		// matching independent reconnect sources (a poll timer, a push-channel reconnect, a retry).
 		const rounds = 4;
 		for (let round = 0; round < rounds; round++) {
 			const agentA = await runScript(agentScriptPath, {
