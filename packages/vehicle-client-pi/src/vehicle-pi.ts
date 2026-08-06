@@ -914,11 +914,11 @@ export async function refreshVehicleToolAvailability(
  * inclusive, e.g. "2 of 5".
  */
 export type VehicleReadyEvent =
-	| { readonly kind: "client-unavailable"; readonly attempt: number; readonly attempts: number }
-	| { readonly kind: "client-resolution-failed"; readonly attempt: number; readonly attempts: number; readonly error: unknown }
-	| { readonly kind: "registration-failed"; readonly attempt: number; readonly attempts: number; readonly error: unknown }
-	| { readonly kind: "registered"; readonly attempt: number }
-	| { readonly kind: "exhausted"; readonly attempts: number };
+	| { readonly kind: "client-unavailable"; readonly attempt: number; readonly attempts: number; readonly ctx: ExtensionContext }
+	| { readonly kind: "client-resolution-failed"; readonly attempt: number; readonly attempts: number; readonly error: unknown; readonly ctx: ExtensionContext }
+	| { readonly kind: "registration-failed"; readonly attempt: number; readonly attempts: number; readonly error: unknown; readonly ctx: ExtensionContext }
+	| { readonly kind: "registered"; readonly attempt: number; readonly ctx: ExtensionContext }
+	| { readonly kind: "exhausted"; readonly attempts: number; readonly ctx: ExtensionContext };
 
 export interface VehicleReadyRetryOptions {
 	/** Total attempts across the whole resolve+register sequence, including the first. Defaults to 6. */
@@ -986,40 +986,40 @@ export function registerVehicleToolsWhenReady(
 		settle = resolve;
 	});
 
-	async function attempt(attemptNumber: number): Promise<void> {
+	async function attempt(attemptNumber: number, ctx: ExtensionContext): Promise<void> {
 		let client: VehicleClient | undefined;
 		let resolutionFailed = false;
 		try {
 			client = await resolveClient();
 		} catch (error) {
-			options.log?.({ kind: "client-resolution-failed", attempt: attemptNumber, attempts, error });
+			options.log?.({ kind: "client-resolution-failed", attempt: attemptNumber, attempts, error, ctx });
 			resolutionFailed = true;
 		}
 
 		if (client) {
 			try {
 				const registered = await registerVehicleTools(pi, client, options);
-				options.log?.({ kind: "registered", attempt: attemptNumber });
+				options.log?.({ kind: "registered", attempt: attemptNumber, ctx });
 				settle(registered);
 				return;
 			} catch (error) {
-				options.log?.({ kind: "registration-failed", attempt: attemptNumber, attempts, error });
+				options.log?.({ kind: "registration-failed", attempt: attemptNumber, attempts, error, ctx });
 			}
 		} else if (!resolutionFailed) {
-			options.log?.({ kind: "client-unavailable", attempt: attemptNumber, attempts });
+			options.log?.({ kind: "client-unavailable", attempt: attemptNumber, attempts, ctx });
 		}
 
 		if (attemptNumber >= attempts) {
-			options.log?.({ kind: "exhausted", attempts });
+			options.log?.({ kind: "exhausted", attempts, ctx });
 			settle(undefined);
 			return;
 		}
 		await sleep(readyRetryDelayMs(attemptNumber, options.retry));
-		await attempt(attemptNumber + 1);
+		await attempt(attemptNumber + 1, ctx);
 	}
 
-	pi.on("session_start", () => {
-		void attempt(1);
+	pi.on("session_start", (_event, ctx) => {
+		void attempt(1, ctx);
 	});
 
 	return done;

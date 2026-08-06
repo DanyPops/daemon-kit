@@ -71,6 +71,7 @@ describe("registerVehicleToolsWhenReady", () => {
 		expect(activeTools()).toEqual([]);
 		expect(events.some((e) => e.kind === "client-unavailable")).toBe(true);
 		expect(events.some((e) => e.kind === "exhausted")).toBe(true);
+		expect(events.every((e) => e.ctx !== undefined)).toBe(true);
 	});
 
 	it("logs client-resolution-failed instead of silently swallowing a thrown resolveClient()", async () => {
