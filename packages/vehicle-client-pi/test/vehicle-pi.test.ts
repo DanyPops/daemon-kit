@@ -1277,6 +1277,65 @@ describe("registerVehicleTools / refreshVehicleToolAvailability: manifestCache",
 	});
 });
 
+/**
+ * A live-reported bug (after /reload, a previously well-rendered Vehicle tool call renders as
+ * raw JSON instead of through its renderCall/renderResult) motivated this suite, modeled on
+ * pi-papyrus's real registerNotesVehicle: registerVehicleTools() called from session_start,
+ * wrapped in a try/catch that silently swallows any failure. The original hypothesis -- a stale
+ * tool name surviving in Pi's registry long enough to collide with the fresh post-reload
+ * registration -- is REFUTED by @earendil-works/pi-coding-agent's own source: AgentSession.reload()
+ * constructs a brand-new ExtensionRunner with an empty tools Map per extension before
+ * session_start ever re-fires, and every registerTool() call immediately refreshes the registry.
+ * There is no stale-registry window, so that collision can't happen; the real mechanism behind
+ * the reported symptom is still open. What remains here just verifies reload() itself re-runs
+ * registration correctly, which the harness's own reload() tests already establish generically --
+ * this is the Vehicle-specific instance of that same guarantee.
+ */
+describe("registerVehicleTools across a simulated /reload", () => {
+	function papyrusStyleFactory(client: VehicleClient) {
+		return (pi: ExtensionAPI) => {
+			pi.on("session_start", async () => {
+				try {
+					await registerVehicleTools(pi, client);
+				} catch {
+					// Daemon state is stale/unreachable -- degrade silently, matching
+					// pi-papyrus's own registerNotesVehicle comment verbatim.
+				}
+			});
+		};
+	}
+
+	it("registers renderCall and renderResult on first registration", async () => {
+		const client = new FakeClient(manifest([operation("tasks.show")]));
+		const h = createExtensionHarness(papyrusStyleFactory(client));
+		await h.boot();
+
+		const tool = h.tools.get("tasks_show");
+		expect(tool).toBeDefined();
+		expect(typeof tool?.definition.renderCall).toBe("function");
+		expect(typeof tool?.definition.renderResult).toBe("function");
+	});
+
+	it("re-registers renderCall and renderResult fresh after reload", async () => {
+		const client = new FakeClient(manifest([operation("tasks.show")]));
+		const h = createExtensionHarness(papyrusStyleFactory(client));
+		await h.boot();
+		const before = h.tools.get("tasks_show");
+		expect(before).toBeDefined();
+
+		await h.reload();
+
+		const after = h.tools.get("tasks_show");
+		expect(after).toBeDefined();
+		expect(typeof after?.definition.renderCall).toBe("function");
+		expect(typeof after?.definition.renderResult).toBe("function");
+		// Proves a real re-registration pass happened (matching Alef's supervisor-swap.test.ts own
+		// createCount()-style rigor: an object surviving unchanged would falsely pass a shallower
+		// "is it defined and callable" check even if reload never actually re-ran anything).
+		expect(after?.definition).not.toBe(before?.definition);
+	});
+});
+
 describe("safety policy (VehicleSafetyPolicyStore + classification)", () => {
 	afterEach(() => {
 		__resetVehicleSafetyRegistryForTests();
