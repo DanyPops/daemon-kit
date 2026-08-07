@@ -37,6 +37,22 @@ export class WatchLimitExceeded extends Error {
 	}
 }
 
+/**
+ * Raised when watchId already identifies a registration, in this scope or any other.
+ * add() previously let a duplicate id silently overwrite byId's entry while leaving
+ * the id behind in its original scope's byScope Set, corrupting both indexes: the
+ * original scope kept counting a watch whose byId lookup now pointed at the wrong
+ * scope/resource/topic (or, after remove(), a permanent phantom entry that could
+ * never itself be looked up but still consumed that scope's own bound forever).
+ * Fails closed instead, before either index is touched.
+ */
+export class WatchIdConflict extends Error {
+	constructor(readonly watchId: string) {
+		super(`watchId "${watchId}" is already registered -- watch ids must be unique across every scope`);
+		this.name = "WatchIdConflict";
+	}
+}
+
 export interface WatchRegistryOptions {
 	/** Defaults to DEFAULT_MAX_WATCHES_PER_SCOPE. */
 	readonly maxWatchesPerScope?: number;
@@ -52,6 +68,7 @@ export class WatchRegistry {
 	}
 
 	add(scope: string, resource: string, watchId: string, topic: string): WatchRegistration {
+		if (this.byId.has(watchId)) throw new WatchIdConflict(watchId);
 		const existing = this.byScope.get(scope) ?? new Set();
 		if (existing.size >= this.maxWatchesPerScope) throw new WatchLimitExceeded(scope, this.maxWatchesPerScope);
 		const registration: WatchRegistration = { watchId, scope, resource, topic };
@@ -80,7 +97,9 @@ export class WatchRegistry {
 	registrationsFor(scope: string): readonly WatchRegistration[] {
 		const ids = this.byScope.get(scope);
 		if (!ids) return [];
-		return Array.from(ids, (id) => this.byId.get(id)).filter((registration): registration is WatchRegistration => registration !== undefined);
+		return Array.from(ids, (id) => this.byId.get(id)).filter(
+			(registration): registration is WatchRegistration => registration !== undefined,
+		);
 	}
 }
 
