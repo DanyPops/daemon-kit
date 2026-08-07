@@ -61,9 +61,17 @@ function effectStyle(theme: Theme, effect: VehicleEffect, text: string): string 
 	return firstDistinctStyle(baseline, candidates, fallback);
 }
 
+/** Collapses embedded newlines (and their surrounding whitespace) into a single space -- a call's
+ * one-line args summary has no per-physical-line contract to split into (unlike withTrailingLine's
+ * result-side siblings below); a multi-paragraph value like tasks.create's body must stay one
+ * line, not leak extra orphaned lines into the Text component that renders this string. */
+function collapseToSingleLine(text: string): string {
+	return text.replace(/\s*\n+\s*/g, " ").trim();
+}
+
 /** A scalar value renders as itself; anything structured (array/object) falls back to compact JSON just for that one value, never for the whole args bag. */
 function formatArgValue(value: unknown): string {
-	if (typeof value === "string") return value;
+	if (typeof value === "string") return collapseToSingleLine(value);
 	if (typeof value === "number" || typeof value === "boolean" || value === null) return String(value);
 	return JSON.stringify(value) ?? String(value);
 }

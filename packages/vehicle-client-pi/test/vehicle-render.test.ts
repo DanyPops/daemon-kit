@@ -167,6 +167,21 @@ describe("renderVehicleCall", () => {
 		expect(line).toContain("status=review");
 	});
 
+	// tasks.create's real shape: a title plus a full markdown body -- previously leaked the
+	// body's embedded newlines straight into what's meant to be a one-line call summary,
+	// producing extra orphaned physical lines (confirmed live).
+	it("collapses embedded newlines in an arg value instead of leaking extra physical lines", () => {
+		const component = renderVehicleCall(
+			descriptor("local-write"),
+			{ title: "Lector: enforce Biome noImportCycles", body: "## Context\n\nThe repo's already-configured rule." },
+			fakeTheme,
+			callContext(),
+		);
+		const lines = component.render(80);
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).not.toContain("\n");
+	});
+
 	// Never buried in key=value order.
 	it("surfaces a recognized identity arg (id/name/title/...) plainly and first", () => {
 		const component = renderVehicleCall(descriptor("read"), { status: "review", id: "abc-123" }, fakeTheme, callContext());
