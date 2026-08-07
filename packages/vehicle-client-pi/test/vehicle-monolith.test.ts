@@ -42,7 +42,8 @@ async function createViaHarness(info: Parameters<typeof createMonolithVehicle>[1
 }
 
 describe("createMonolithVehicle", () => {
-	it("bundles a fresh VehicleRegistry + LocalVehicleClient + registerVehicleTools into one call, no network involved", async () => {
+	// No network involved.
+	it("bundles a fresh VehicleRegistry + LocalVehicleClient + registerVehicleTools into one call", async () => {
 		const { monolith, tools } = await createViaHarness({ name: "echo-vehicle", version: "1.0.0", description: "test" }, registerEcho);
 
 		expect(monolith.registry.manifest().operations.map((op) => op.name)).toEqual(["echo.say"]);
@@ -56,18 +57,20 @@ describe("createMonolithVehicle", () => {
 		expect(result.content[0]).toMatchObject({ text: expect.stringContaining("echo: hello") });
 	});
 
-	it("the returned client is the exact LocalVehicleClient instance calling the same registry directly", async () => {
+	it("the returned client is the exact LocalVehicleClient calling the same registry directly", async () => {
 		const { monolith } = await createViaHarness({ name: "echo-vehicle", version: "1.0.0", description: "test" }, registerEcho);
 		const output = await monolith.client.invoke<{ text: string }>("echo.say", 1, { text: "direct" });
 		expect(output.text).toBe("echo: direct");
 	});
 
-	it("register receives the real registry before any tool projection happens -- registering nothing yields zero tools, not an error", async () => {
+	// Registering nothing yields zero tools, not an error.
+	it("register receives the real registry before any tool projection happens", async () => {
 		const { tools } = await createViaHarness({ name: "empty-vehicle", version: "1.0.0", description: "test" }, () => {});
 		expect(tools).toHaveLength(0);
 	});
 
-	it("loads under every Pi extension load path (native ESM, jiti with/without tryNative) -- both source and the compiled artifact", async () => {
+	// native ESM, jiti with/without tryNative -- both source and the compiled artifact.
+	it("loads under every Pi extension load path", async () => {
 		const SRC = resolve(import.meta.dir, "..", "src", "vehicle-monolith.ts");
 		const DIST = resolve(import.meta.dir, "..", "dist", "vehicle-monolith.js");
 		for (const path of [SRC, DIST]) {

@@ -33,7 +33,8 @@ describe("createLocalSecretsBackend: plaintext", () => {
 		}
 	});
 
-	it("get() resolves undefined for a name with no backing file -- unlike env, a local name's existence IS the file", async () => {
+	// Unlike env, a local name's existence IS the file.
+	it("get() resolves undefined for a name with no backing file", async () => {
 		const dir = tmpDir();
 		try {
 			const record = await createLocalSecretsBackend({ dir }).get("github");
@@ -81,7 +82,8 @@ describe("createLocalSecretsBackend: plaintext", () => {
 		}
 	});
 
-	it("rotate() always throws SecretsBackendUnsupportedOperationError -- no generic re-auth mechanism exists", async () => {
+	// No generic re-auth mechanism exists.
+	it("rotate() always throws SecretsBackendUnsupportedOperationError", async () => {
 		const dir = tmpDir();
 		try {
 			await expect(createLocalSecretsBackend({ dir }).rotate("github")).rejects.toThrow(SecretsBackendUnsupportedOperationError);
@@ -119,7 +121,8 @@ describe("createLocalSecretsBackend: plaintext", () => {
 });
 
 describe("createLocalSecretsBackend: encrypted", () => {
-	it("round-trips through an encrypted store when masterKey is given, transparent to the port's caller", async () => {
+	// Transparent to the port's caller.
+	it("round-trips through an encrypted store when masterKey is given", async () => {
 		const dir = tmpDir();
 		try {
 			const masterKey = randomBytes(32);

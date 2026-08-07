@@ -73,7 +73,8 @@ describe("registerVehicleTools handshake against a real, transiently-down Vehicl
 		server = undefined;
 	});
 
-	it("registers tools once a daemon that was down at call time comes back up on the same port shortly after (no /reload, no manual retry)", async () => {
+	// No /reload, no manual retry -- the bounded handshake retry alone recovers.
+	it("registers tools once a daemon down at call time comes back up shortly after", async () => {
 		// Bind once just to claim a real free port, then immediately release it --
 		// the daemon is unreachable at the exact moment registration is attempted,
 		// exactly like a session_start racing a version-check kill/respawn.

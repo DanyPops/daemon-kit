@@ -22,7 +22,8 @@ describe("createEnvSecretsBackend", () => {
 		expect(await backend.get("github")).toEqual({ name: "github", source: "env", configured: false });
 	});
 
-	it("rotate() and revoke() both throw SecretsBackendUnsupportedOperationError -- an env var isn't this process's to mutate", async () => {
+	// An env var isn't this process's to mutate.
+	it("rotate() and revoke() both throw SecretsBackendUnsupportedOperationError", async () => {
 		const backend = createEnvSecretsBackend({ github: "GITHUB_TOKEN" }, {});
 		await expect(backend.rotate("github")).rejects.toThrow(SecretsBackendUnsupportedOperationError);
 		await expect(backend.revoke("github")).rejects.toThrow(SecretsBackendUnsupportedOperationError);

@@ -122,7 +122,7 @@ async function registerViaHarness(client: VehicleClient) {
 }
 
 describe("namespaced operations at mega-tool-replacing scale", () => {
-	it("projects a 38-operation single-namespace manifest to 38 distinct, collision-free, correctly-prefixed Pi tools", async () => {
+	it("projects a 38-operation manifest to 38 distinct, correctly-prefixed Pi tools", async () => {
 		const operations = operationsFor("tasks", TASK_ACTIONS);
 		expect(operations).toHaveLength(38);
 

@@ -56,7 +56,8 @@ function fakePi() {
 }
 
 describe("registerVehicleToolsWhenReady", () => {
-	it("logs client-unavailable instead of silently returning, and settles to undefined, when resolveClient() never resolves a target", async () => {
+	// Never silently returns; settles to undefined.
+	it("logs client-unavailable when resolveClient() never resolves a target", async () => {
 		const { pi, emit, activeTools } = fakePi();
 		const events: VehicleReadyEvent[] = [];
 		const ready = registerVehicleToolsWhenReady(pi, () => Promise.resolve(undefined), {

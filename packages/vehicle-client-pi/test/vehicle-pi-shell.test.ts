@@ -62,7 +62,8 @@ async function callTool(tools: ToolDefinition[], name: string, params: unknown) 
 }
 
 describe("registerVehicleTools with shell activation", () => {
-	it("boots with only the two meta-tools and the declared core operations active -- everything else registered but inactive", async () => {
+	// Everything else is registered but inactive.
+	it("boots with only the two meta-tools and the declared core operations active", async () => {
 		const { pi, harness } = fakePi();
 		await registerVehicleTools(
 			pi,
@@ -114,7 +115,8 @@ describe("registerVehicleTools with shell activation", () => {
 		expect(harness.activeTools).toContain("docs_list");
 	});
 
-	it("tools_man reports (and does not activate) an unknown operation name, pointing at tools_list", async () => {
+	// Points the caller at tools_list, and never activates the unknown name.
+	it("tools_man reports an unknown operation name without activating it", async () => {
 		const { pi, tools, harness } = fakePi();
 		await registerVehicleTools(pi, new FakeClient(manifest([operation("tasks.depend")])), { shell: {} });
 
@@ -152,7 +154,8 @@ describe("registerVehicleTools with shell activation", () => {
 		expect(harness.activeTools).not.toContain("tasks_depend");
 	});
 
-	it("a core operation also decays and can be evicted if truly unused for long enough, not permanently pinned", async () => {
+	// Not permanently pinned.
+	it("a core operation also decays and can be evicted if truly unused for long enough", async () => {
 		const { pi, harness } = fakePi();
 		await registerVehicleTools(pi, new FakeClient(manifest([operation("tasks.create")])), {
 			shell: { coreOperations: ["tasks.create"], coreTtlTurns: 1 },
@@ -174,7 +177,8 @@ describe("registerVehicleTools with shell activation", () => {
 		expect(harness.activeTools).not.toContain("tasks_depend");
 	});
 
-	it("refreshVehicleToolAvailability re-seeds a core operation that just became available, matching initial registration", async () => {
+	// Matches initial registration's own seeding.
+	it("refreshVehicleToolAvailability re-seeds a core operation that just became available", async () => {
 		const { pi, harness } = fakePi();
 		const client = new FakeClient(manifest([operation("tasks.create", { available: false })]));
 		const registered = await registerVehicleTools(pi, client, { shell: { coreOperations: ["tasks.create"] } });
@@ -185,7 +189,8 @@ describe("registerVehicleTools with shell activation", () => {
 		expect(harness.activeTools).toContain("tasks_create");
 	});
 
-	it("refreshVehicleToolAvailability leaves an already-decaying discovered tool's TTL alone -- it doesn't reset every available tool active", async () => {
+	// Doesn't reset every available tool active.
+	it("refreshVehicleToolAvailability leaves an already-decaying discovered tool's TTL alone", async () => {
 		const { pi, tools, harness } = fakePi();
 		const client = new FakeClient(manifest([operation("tasks.depend")]));
 		const registered = await registerVehicleTools(pi, client, { shell: { discoveredTtlTurns: 2 } });
@@ -199,7 +204,8 @@ describe("registerVehicleTools with shell activation", () => {
 		expect(harness.activeTools).not.toContain("tasks_depend");
 	});
 
-	it("without options.shell, every available operation is active immediately -- today's behavior is unchanged", async () => {
+	// Today's non-shell behavior is unchanged.
+	it("without options.shell, every available operation is active immediately", async () => {
 		const { pi, harness } = fakePi();
 		await registerVehicleTools(pi, new FakeClient(manifest([operation("tasks.create"), operation("tasks.depend")])), {});
 

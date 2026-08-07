@@ -31,7 +31,8 @@ describe("syncManagedActiveTools", () => {
 		expect(h.activeToolsHistory).toEqual([]);
 	});
 
-	it("throws if a desired-active name isn't declared as managed -- a caller bug, not silently accepted", () => {
+	// A caller bug, never silently accepted.
+	it("throws if a desired-active name isn't declared as managed", () => {
 		const h = harnessWith(["read"]);
 		expect(() => syncManagedActiveTools(h.api, ["vehicle_a"], ["vehicle_b"])).toThrow("not in managedToolNames");
 	});

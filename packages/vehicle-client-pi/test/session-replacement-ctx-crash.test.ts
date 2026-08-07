@@ -84,8 +84,10 @@ function runUnderBun(scriptPath: string): Promise<{ code: number | null; stdout:
 	});
 }
 
-describe("registerVehicleToolsWhenReady -- a session replaced/reloaded mid-retry must not crash the host", () => {
-	it("a log() callback touching a now-stale ctx.ui on the exhausted event is caught, not an uncaught process-killing rejection", async () => {
+// A session replaced/reloaded mid-retry must not crash the host: a log() callback touching a
+// now-stale ctx.ui on the exhausted event must be caught, not an uncaught process-killing rejection.
+describe("registerVehicleToolsWhenReady across a session replacement mid-retry", () => {
+	it("a log() callback touching a now-stale ctx.ui is caught, not an uncaught rejection", async () => {
 		const result = await runUnderBun(writeFixture());
 
 		expect(result.code).toBe(0);

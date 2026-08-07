@@ -101,11 +101,9 @@ function wrapInRealToolBox(component: Component, width: number): string[] {
 }
 
 describe("renderVehicleResult: full-width background coverage under the real tool Box (regression)", () => {
-	it("covers every cell when a single-array envelope's sibling scalar is itself multi-line -- tasks.context's exact real shape", async () => {
-		// The exact real output shape of Papyrus's tasks.context operation: a `content`
-		// array (the one array field singleArrayEnvelope unwraps) alongside a `context`
-		// sibling that is a real multi-paragraph string, not a short scalar like the
-		// existing nextCursor/total sibling tests use.
+	// tasks.context's exact real shape: a `content` array alongside a `context` sibling that's
+	// a real multi-paragraph string, not a short scalar like the existing nextCursor/total tests use.
+	it("covers every cell when a single-array envelope's sibling scalar is itself multi-line", async () => {
 		const output = {
 			context:
 				"Progress: 109/121 done\n" +

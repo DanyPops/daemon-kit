@@ -81,7 +81,8 @@ async function plainFrame(rendered: readonly string[], width: number): Promise<s
 }
 
 describe("createMultiSelectList through pi-integral's real VT harness", () => {
-	it("reproduces the four-topic flow: the fifth focus scrolls into view and remains selectable and deselectable", async () => {
+	// The four-topic flow: the fifth focus scrolls into view and stays selectable/deselectable.
+	it("scrolls a fifth focused topic into view, still selectable and deselectable", async () => {
 		const frames = await runMultiSelectViewportScenario({ component: triageList(), width: 80 });
 		expect(frames.initial.join("\n")).toContain("4. [ ] Symbol and dataflow history");
 		expect(frames.initial.join("\n")).not.toContain("5. [ ] Cross-workspace symbol search");

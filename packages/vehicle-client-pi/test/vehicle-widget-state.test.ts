@@ -73,7 +73,8 @@ describe("createReloadSafeWidgetState", () => {
 		expect(appended).toEqual([{ customType: "test.widget", data: { selectedId: "task-1", expanded: true } }]);
 	});
 
-	it("save() never appends a redundant entry when the state hasn't changed since the last save (fingerprint dedup)", async () => {
+	// Fingerprint dedup: an unchanged state produces no new entry.
+	it("save() never appends a redundant entry when the state hasn't changed since the last save", async () => {
 		const widgetState = createReloadSafeWidgetState<WidgetState>({
 			key: "test.widget",
 			filePath: tempFile(),
@@ -89,7 +90,8 @@ describe("createReloadSafeWidgetState", () => {
 		expect(appended).toHaveLength(2);
 	});
 
-	it("an oversized state degrades to a bounded pointer in the session-branch entry, while the sidecar still gets the full state", async () => {
+	// The sidecar still gets the full state even though the branch entry is truncated.
+	it("an oversized state degrades to a bounded pointer in the session-branch entry", async () => {
 		const filePath = tempFile();
 		const widgetState = createReloadSafeWidgetState<{ blob: string }>({
 			key: "test.widget",
@@ -144,7 +146,8 @@ describe("createReloadSafeWidgetState", () => {
 		expect(loaded).toEqual({ selectedId: "new", expanded: true });
 	});
 
-	it("load() returns undefined when the sidecar is missing and the only branch entry was itself a truncated pointer", async () => {
+	// The only branch entry is itself a truncated pointer, not a real value.
+	it("load() returns undefined when the sidecar is missing and the branch has only a pointer", async () => {
 		const widgetState = createReloadSafeWidgetState<WidgetState>({
 			key: "test.widget",
 			filePath: tempFile(),
@@ -155,7 +158,7 @@ describe("createReloadSafeWidgetState", () => {
 		expect(loaded).toBeUndefined();
 	});
 
-	it("load() returns undefined when neither the sidecar nor the branch has anything for this key", async () => {
+	it("load() returns undefined when neither the sidecar nor the branch has this key", async () => {
 		const widgetState = createReloadSafeWidgetState<WidgetState>({
 			key: "test.widget",
 			filePath: tempFile(),
@@ -168,7 +171,7 @@ describe("createReloadSafeWidgetState", () => {
 	// rendering state survives a session reload, using a representative
 	// widget state shape (selection + expansion, matching Papyrus's own
 	// TaskOverlay/NoteOverlay -- the candidate widget named in this task).
-	it("proves state survives a simulated session reload against a representative widget state shape", async () => {
+	it("state survives a simulated session reload", async () => {
 		const filePath = tempFile();
 		const key = "papyrus.task-overlay";
 		const beforeReload = createReloadSafeWidgetState<WidgetState>({ key, filePath, fs: createNodeAtomicJsonFsAdapter() });
@@ -186,7 +189,8 @@ describe("createReloadSafeWidgetState", () => {
 		expect(restored).toEqual({ selectedId: "task-42", expanded: true });
 	});
 
-	it("loads under every Pi extension load path (native ESM, jiti with/without tryNative) -- both source and the compiled artifact", async () => {
+	// native ESM, jiti with/without tryNative -- both source and the compiled artifact.
+	it("loads under every Pi extension load path", async () => {
 		const SRC = resolve(import.meta.dir, "..", "src", "vehicle-widget-state.ts");
 		const DIST = resolve(import.meta.dir, "..", "dist", "vehicle-widget-state.js");
 		for (const path of [SRC, DIST]) {

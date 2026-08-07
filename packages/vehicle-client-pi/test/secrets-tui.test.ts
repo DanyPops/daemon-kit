@@ -269,14 +269,15 @@ describe("performReveal", () => {
 		expect(notifications).toEqual([{ text: 'github: {"accessToken":"real-value"}', level: "info" }]);
 	});
 
-	it("notifies 'no credential stored' without calling anything further when reveal() resolves undefined", async () => {
+	it("notifies 'no credential stored' when reveal() resolves undefined", async () => {
 		const { ctx, notifications } = fakeCtx({ mode: "tui" });
 		const backend: SecretsBackend = { ...backendStub("local"), reveal: async () => undefined };
 		await performReveal(ctx, backend, "github");
 		expect(notifications).toEqual([{ text: "github: no credential stored.", level: "info" }]);
 	});
 
-	it("notifies an unsupported-backend error, distinct from a generic failure, for SecretsBackendUnsupportedOperationError", async () => {
+	// Distinct from the generic failure notification below.
+	it("notifies an unsupported-backend error for SecretsBackendUnsupportedOperationError", async () => {
 		const { ctx, notifications } = fakeCtx({ mode: "tui" });
 		const backend: SecretsBackend = {
 			...backendStub("env"),
@@ -319,7 +320,7 @@ describe("performReveal", () => {
 // ── Thin wiring smoke tests -- one or two per shape, not exhaustive chains ──
 
 describe("runSecretsCommand: wiring smoke tests", () => {
-	it("[secrets]-only mode (no ServicesRegistry): shows the merged item list built by buildSecretsMenuItems", async () => {
+	it("[secrets]-only mode (no ServicesRegistry) shows buildSecretsMenuItems' merged list", async () => {
 		const backend: SecretsBackend = { ...backendStub("local"), list: async () => [record("github", "local")] };
 		let seenItems: unknown;
 		const pick: PickFromList = async (_ctx, _title, items) => {
@@ -331,7 +332,7 @@ describe("runSecretsCommand: wiring smoke tests", () => {
 		expect(seenItems).toEqual(buildSecretsMenuItems([{ backend, record: record("github", "local") }], []));
 	});
 
-	it("with a ServicesRegistry: top-level menu is exactly TOP_LEVEL_MENU_ITEMS, selecting [services] enters buildServicesMenuItems' output", async () => {
+	it("with a ServicesRegistry, selecting [services] enters buildServicesMenuItems' output", async () => {
 		const { ctx } = fakeCtx();
 		const registry = { list: async () => [{ name: "pipes", backends: ["github"] }] };
 		const seenMenus: unknown[] = [];
@@ -345,7 +346,8 @@ describe("runSecretsCommand: wiring smoke tests", () => {
 		expect(seenMenus[1]).toEqual(buildServicesMenuItems([{ name: "pipes", backends: ["github"] }], new Set()));
 	});
 
-	it("a backend's list() failing mid-session notifies which backend failed, without an uncaught throw", async () => {
+	// Never an uncaught throw.
+	it("a backend's list() failing mid-session notifies which backend failed", async () => {
 		const { ctx, notifications } = fakeCtx();
 		const failing: SecretsBackend = { ...backendStub("enigma"), list: async () => Promise.reject(new Error("HTTP 500")) };
 		await expect(runSecretsCommand(ctx, { backends: [failing], pick: async () => null })).resolves.toBeUndefined();
@@ -384,7 +386,8 @@ describe("registerSecretsCommand", () => {
 		]);
 	});
 
-	it("registers under a caller-supplied name instead, for a consumer that genuinely wants its own standalone command", () => {
+	// For a consumer that wants its own standalone command.
+	it("registers under a caller-supplied name instead", () => {
 		const registered: string[] = [];
 		const pi = { registerCommand: (name: string) => registered.push(name) } as unknown as ExtensionAPI;
 		registerSecretsCommand(pi, () => ({ backends: [] }), "tickets-secrets");
@@ -459,7 +462,7 @@ describe("registerSharedSecretsCommand", () => {
 		).toEqual(["enigma", "tickets"]);
 	});
 
-	it("invoking the claimed command merges every registered contributor's current resolve(), not just the claimer's own", async () => {
+	it("invoking the claimed command merges every registered contributor's current resolve()", async () => {
 		resetAll();
 		let handler: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
 		const pi = { registerCommand: (_name: string, def: { handler: typeof handler }) => (handler = def.handler) } as unknown as ExtensionAPI;

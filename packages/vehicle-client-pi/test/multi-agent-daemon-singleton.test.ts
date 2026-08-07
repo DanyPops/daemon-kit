@@ -158,7 +158,8 @@ function collectNdjson<T>(process: { onStdout: (listener: (chunk: Buffer) => voi
 	return { lines, stop };
 }
 
-describe("multi-agent daemon singleton: N faux Pi agents, N vehicle-client-pi registrations, one real Vehicle daemon", () => {
+// N faux Pi agents, each doing a real vehicle-client-pi registration, against one real Vehicle daemon.
+describe("multi-agent daemon singleton", () => {
 	let dir: string | undefined;
 	let daemon: ManagedProcess | undefined;
 	let daemonEvents: { lines: DaemonEvent[]; stop: () => void } | undefined;
@@ -215,7 +216,8 @@ describe("multi-agent daemon singleton: N faux Pi agents, N vehicle-client-pi re
 		return results.lines[0] as AgentResult;
 	}
 
-	it("8 concurrent agents that all agree on the real version register successfully and the daemon starts exactly once", async () => {
+	// The daemon starts exactly once across all 8.
+	it("8 concurrent agents agreeing on the real version all register successfully", async () => {
 		dir = mkdtempSync(join(tmpdir(), "vehicle-multi-agent-"));
 		const handlePath = join(dir, "handle.json");
 		await startRealDaemon("9.9.9", handlePath);
@@ -237,7 +239,8 @@ describe("multi-agent daemon singleton: N faux Pi agents, N vehicle-client-pi re
 		expect(daemon?.pid).toBe(initialPid);
 	}, 20_000);
 
-	it("a genuine version mismatch across all agents kills the stale daemon exactly once and every agent converges on the single replacement", async () => {
+	// The stale daemon is killed exactly once; every agent converges on the single replacement.
+	it("a genuine version mismatch across all agents triggers exactly one daemon replacement", async () => {
 		dir = mkdtempSync(join(tmpdir(), "vehicle-multi-agent-"));
 		const handlePath = join(dir, "handle.json");
 		await startRealDaemon("1.0.0", handlePath); // deliberately stale

@@ -14,7 +14,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 describe("startWatchedRefresh: Pi-side generic watch/unwatch + push/poll refresh helper", () => {
-	it("calls refresh immediately and on each poll tick, without ever attempting a push connection when resolvePushTarget returns undefined", async () => {
+	// Never attempts a push connection when resolvePushTarget returns undefined.
+	it("calls refresh immediately and on each poll tick", async () => {
 		let refreshCount = 0;
 		let watchCalls = 0;
 		const handle = startWatchedRefresh({
@@ -85,7 +86,8 @@ describe("startWatchedRefresh: Pi-side generic watch/unwatch + push/poll refresh
 			return { baseUrl: `http://127.0.0.1:${port}`, pushUrl: `ws://127.0.0.1:${port}/push`, token, pushChannel };
 		}
 
-		it("a real resource change, published by the provider directly to the returned topic, drives a push-triggered refresh", async () => {
+		// Published by the provider directly to the returned topic.
+		it("a resource change drives a push-triggered refresh", async () => {
 			const { baseUrl, pushUrl, token, pushChannel } = startServer();
 			const client = new RemoteVehicleClient({ baseUrl, token });
 
@@ -117,7 +119,8 @@ describe("startWatchedRefresh: Pi-side generic watch/unwatch + push/poll refresh
 			handle.stop();
 		});
 
-		it("polling alone still refreshes when the push target never resolves, even though a watch is otherwise reachable", async () => {
+		// Even though a watch is otherwise reachable.
+		it("polling alone still refreshes when the push target never resolves", async () => {
 			const { baseUrl, token } = startServer();
 			const client = new RemoteVehicleClient({ baseUrl, token });
 

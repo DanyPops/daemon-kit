@@ -68,7 +68,8 @@ function registryWithOwner(): VehicleRegistry {
 }
 
 describe("ci.wait: reproduces the real invoke()-deadline-clamp bug", () => {
-	it("clamps a longRunning invoke() to its own maxTimeoutMs regardless of the requested deadline, and it really does abort a still-running handler", async () => {
+	// Clamps regardless of the requested deadline, and really does abort a still-running handler.
+	it("clamps a longRunning invoke() to its own maxTimeoutMs", async () => {
 		const registry = registryWithOwner();
 		const wait = controllableWaitHandler();
 		const operation = defineVehicleOperation({
@@ -182,7 +183,8 @@ describe("ci.wait as a Vehicle Job: submit/poll/tail/cancel never hit any deadli
 		return { harness, wait, jobStore };
 	}
 
-	it("ci_wait_submit returns a jobId immediately -- no wait for the handler, no deadline to clamp", async () => {
+	// No wait for the handler; no deadline to clamp.
+	it("ci_wait_submit returns a jobId immediately", async () => {
 		const { harness, wait } = harnessWithJobBackedCiWait();
 		await harness.boot();
 
@@ -194,7 +196,8 @@ describe("ci.wait as a Vehicle Job: submit/poll/tail/cancel never hit any deadli
 		await harness.shutdown();
 	});
 
-	it("ci_wait_poll reports running, then succeeded with the handler's real output, without either call ever timing out", async () => {
+	// Neither call ever times out.
+	it("ci_wait_poll reports running, then succeeded with the handler's real output", async () => {
 		const { harness, wait } = harnessWithJobBackedCiWait();
 		await harness.boot();
 
@@ -219,7 +222,7 @@ describe("ci.wait as a Vehicle Job: submit/poll/tail/cancel never hit any deadli
 		await harness.shutdown();
 	});
 
-	it("ci_wait_tail accumulates every progress tick the handler reports, cursor advancing each time", async () => {
+	it("ci_wait_tail accumulates every progress tick, cursor advancing each time", async () => {
 		const { harness, wait } = harnessWithJobBackedCiWait();
 		await harness.boot();
 

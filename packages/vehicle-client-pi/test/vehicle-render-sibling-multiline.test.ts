@@ -95,8 +95,9 @@ function wrapInRealToolBox(component: Component, width: number): string[] {
 	return box.render(width);
 }
 
-describe("renderVehicleResult: a multi-line envelope sibling value keeps full background coverage (regression)", () => {
-	it("covers every cell even when a single-array envelope's sibling scalar contains embedded newlines", async () => {
+// Regression: a multi-line envelope sibling value must still get full background coverage.
+describe("renderVehicleResult: an envelope sibling scalar with embedded newlines", () => {
+	it("covers every cell of every physical line the multi-line sibling produces", async () => {
 		// singleArrayEnvelope's own content-array exclusion (484f14c) only guards the specific
 		// {content: VehicleContentBlock[]} shape. ANY other operation whose sibling scalar happens
 		// to be a real multi-paragraph string (not just a short cursor/count) hits the same

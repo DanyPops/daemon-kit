@@ -46,7 +46,8 @@ describe("activity broker", () => {
 		expect(() => publishVehicleActivity(event())).not.toThrow();
 	});
 
-	it("treats a globalThis value lacking a publish() method as absent, structural duck typing only", () => {
+	// Structural duck typing only.
+	it("treats a globalThis value lacking a publish() method as absent", () => {
 		registerActivityBroker({ publish: 42 } as never);
 		expect(() => publishVehicleActivity(event())).not.toThrow();
 	});

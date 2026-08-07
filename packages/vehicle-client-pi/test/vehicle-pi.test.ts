@@ -209,7 +209,8 @@ function fakeContext(overrides: Record<string, unknown> = {}) {
 }
 
 describe("invokeVehicleOperation (standalone, no Pi tool registration)", () => {
-	it("invokes the operation and returns the same content/details shape a registered tool's execute() would", async () => {
+	// Matches execute()'s own output shape, for a caller with no registered Pi tool at all.
+	it("invokes the operation and returns execute()'s own content/details shape", async () => {
 		const descriptor = operation("category.list");
 		const client = new FakeClient(manifest([descriptor]));
 		client.result = { categories: [] };
@@ -253,7 +254,8 @@ describe("invokeVehicleOperation (standalone, no Pi tool registration)", () => {
 		}
 	});
 
-	it("a local /safety 'ask' override denies before ever calling invoke() -- same as a registered tool", async () => {
+	// Same denial behavior as a registered tool's execute().
+	it("a local /safety 'ask' override denies before ever calling invoke()", async () => {
 		const descriptor = operation("category.remove");
 		const client = new FakeClient(manifest([descriptor]));
 		const safetyPolicyStore = await VehicleSafetyPolicyStore.restore();
@@ -274,7 +276,8 @@ describe("invokeVehicleOperation (standalone, no Pi tool registration)", () => {
 		expect(client.calls).toHaveLength(0);
 	});
 
-	it("the server approval-required retry dance works identically to a registered tool's execute()", async () => {
+	// Must behave identically to a registered tool's execute().
+	it("runs the server approval-required retry dance", async () => {
 		const descriptor = operation("category.remove", 1, { effect: "local-write" });
 		const client = new ApprovalFlowClient(manifest([descriptor]));
 
@@ -296,7 +299,8 @@ describe("invokeVehicleOperation (standalone, no Pi tool registration)", () => {
 		expect(client.calls.some((call) => call.name === "vehicle.approval.resolve")).toBe(true);
 	});
 
-	it("auto-injects an idempotencyKey from toolCallId for a keyed operation, exactly like execute() does", async () => {
+	// Matches execute()'s own idempotency-key injection exactly.
+	it("auto-injects an idempotencyKey from toolCallId for a keyed operation", async () => {
 		const descriptor = operation("category.assign", 1, { idempotency: { mode: "keyed", retentionMs: 60_000 } });
 		const client = new FakeClient(manifest([descriptor]));
 
@@ -358,7 +362,8 @@ describe("registerVehicleTools", () => {
 		});
 	});
 
-	it("suffixes multiple operation versions and rejects projected or existing name collisions atomically", async () => {
+	// Version suffixing and collision rejection must both be atomic -- a collision leaves zero tools registered.
+	it("suffixes multiple operation versions and rejects name collisions atomically", async () => {
 		const versions = new FakeClient(manifest([operation("issues.search", 1), operation("issues.search", 2)]));
 		const projected = fakePi();
 		await registerVehicleTools(projected.pi, versions);
@@ -408,7 +413,8 @@ describe("registerVehicleTools", () => {
 		]);
 	});
 
-	it("passes an explicitly resolved approvalCapability straight through without any gate of its own -- gating is the registry's job now", async () => {
+	// Gating moved to the registry; this call site no longer duplicates that check.
+	it("passes an explicitly resolved approvalCapability straight through, no gate of its own", async () => {
 		const client = new FakeClient(manifest([operation("risk.destructive", 1, { effect: "destructive" })]));
 		const { pi, tools } = fakePi();
 		await registerVehicleTools(pi, client, { resolveInvocation: () => ({ approvalCapability: "pre-approved" }) });
@@ -416,7 +422,7 @@ describe("registerVehicleTools", () => {
 		expect(client.calls[0]?.options?.approvalCapability).toBe("pre-approved");
 	});
 
-	it("attempts a local UI approval prompt on approval-required, and retries with the capability vehicle.approval.resolve mints", async () => {
+	it("prompts locally on approval-required, then retries with the minted capability", async () => {
 		const client = new ApprovalFlowClient(manifest([operation("risk.destructive", 1, { effect: "destructive" })]));
 		const { pi, tools } = fakePi();
 		await registerVehicleTools(pi, client);
@@ -452,7 +458,8 @@ describe("registerVehicleTools", () => {
 		expect(client.calls[1]?.input).toMatchObject({ decision: "denied" });
 	});
 
-	it("never attempts a local prompt when hasUI is false -- surfaces approval-required directly, no resolve call at all", async () => {
+	// No UI means no prompt is possible; surface approval-required directly instead.
+	it("never attempts a local prompt when hasUI is false", async () => {
 		const client = new ApprovalFlowClient(manifest([operation("risk.destructive", 1, { effect: "destructive" })]));
 		const { pi, tools } = fakePi();
 		await registerVehicleTools(pi, client);
@@ -461,7 +468,8 @@ describe("registerVehicleTools", () => {
 		expect(client.calls.map((call) => call.name)).toEqual(["risk.destructive"]);
 	});
 
-	it("never projects vehicle.approval.resolve as a callable Pi tool, even when present in the manifest and fully permissioned -- it is invoked only by this package's own approval-required retry dance, never by the model directly", async () => {
+	// vehicle.approval.resolve is invoked only by this package's own retry dance, never by the model.
+	it("never projects vehicle.approval.resolve as a callable Pi tool, even fully permissioned", async () => {
 		const client = new FakeClient(
 			manifest([
 				operation("risk.destructive", 1, { effect: "destructive" }),
@@ -476,7 +484,7 @@ describe("registerVehicleTools", () => {
 		expect(registered.tools.map((tool) => tool.operationName)).toEqual(["risk.destructive"]);
 	});
 
-	it("refreshVehicleToolAvailability also never projects vehicle.approval.resolve, even once it first appears in a later manifest", async () => {
+	it("refreshVehicleToolAvailability also never projects vehicle.approval.resolve", async () => {
 		const client = new FakeClient(manifest([operation("risk.destructive", 1, { effect: "destructive" })]));
 		const { pi, tools } = fakePi();
 		const registered = await registerVehicleTools(pi, client, { permissions: ["vehicle:approvals:resolve"] });
@@ -513,7 +521,8 @@ describe("registerVehicleTools", () => {
 		});
 	});
 
-	it("calls onInvoked with the resolved output after a successful invoke, and never lets its own error surface", async () => {
+	// onInvoked's own thrown error must never surface as an invoke() failure.
+	it("calls onInvoked with the resolved output after a successful invoke", async () => {
 		const client = new FakeClient(manifest([operation("focus.test")]));
 		client.result = { taskId: "task-1" };
 		const { pi, tools } = fakePi();
@@ -529,7 +538,7 @@ describe("registerVehicleTools", () => {
 		expect(result.content[0]).toMatchObject({ text: expect.stringContaining("task-1") });
 	});
 
-	it("surfaces a plain transport error's own .cause (e.g. Node fetch's real ECONNREFUSED/ECONNRESET detail), not just its opaque top-level message", async () => {
+	it("surfaces a transport error's own .cause detail, not just its top-level message", async () => {
 		// Regression guard for a real live incident: pi-pipes' ci.wait surfaced only "vehicle-client-failed:
 		// fetch failed" with zero further detail -- Node's fetch() always populates a TypeError's .cause with
 		// the real underlying reason (ECONNREFUSED, ECONNRESET, DNS failure, ...), but sanitizedFailure()'s
@@ -571,7 +580,7 @@ describe("registerVehicleTools", () => {
 		}
 	});
 
-	it("appends a capacity failure's own actualBytes/maxBytes details, the same way causeMessage is appended", async () => {
+	it("appends a capacity failure's own actualBytes/maxBytes details", async () => {
 		// Regression guard: enforcePayloadSize (vehicle-server) attaches details: { actualBytes,
 		// maxBytes } on a response-too-large failure, but it was silently dropped before reaching a
 		// human/agent -- a tasks.list@1 oversized-response failure showed only the bare message, no
@@ -613,7 +622,8 @@ describe("registerVehicleTools", () => {
 		}
 	});
 
-	it("omits the details annotation entirely for a non-object, empty, or all-nested-value details -- never inlines an arbitrary nested JsonValue", async () => {
+	// Never inlines an arbitrary nested JsonValue.
+	it("omits the details annotation for a non-object, empty, or all-nested-value details", async () => {
 		const client = new FakeClient(manifest([operation("fail.test")]));
 		client.error = new VehicleError("internal", "boom", { category: "internal", details: { nested: { a: 1 } } });
 		const { pi, tools } = fakePi();
@@ -640,7 +650,8 @@ describe("registerVehicleTools", () => {
 		expect(called).toBe(false);
 	});
 
-	it("lets a per-operation executionMode override win, defaulting to Pi's own concurrency mode when the resolver returns undefined", async () => {
+	// Falls back to Pi's own concurrency mode when the resolver returns undefined.
+	it("lets a per-operation executionMode override win over Pi's own default", async () => {
 		const client = new FakeClient(manifest([operation("discuss.open"), operation("issues.search")]));
 		const { pi, tools } = fakePi();
 		await registerVehicleTools(pi, client, {
@@ -680,7 +691,8 @@ describe("registerVehicleTools", () => {
 			expect((result.details as PiVehicleToolDetails).output).toEqual({ discussions: [] });
 		});
 
-		it("the resolver only applies its follow-up to the operation it targets -- every other operation is unaffected", async () => {
+		// Every other operation is unaffected by a resolver targeting one specific operation.
+		it("the resolver only applies its follow-up to the operation it targets", async () => {
 			const client = new FakeClient(manifest([operation("issues.search")]));
 			client.result = { hits: 3 };
 			const { pi, tools } = fakePi();
@@ -700,7 +712,8 @@ describe("registerVehicleTools", () => {
 			expect(result.content[0]).toMatchObject({ text: expect.stringContaining("task-1") });
 		});
 
-		it("a follow-up's own thrown error propagates as a real tool failure, even though the primary invoke() already succeeded", async () => {
+		// The primary invoke() already succeeded; the follow-up's own failure must still surface.
+		it("a follow-up's own thrown error propagates as a real tool failure", async () => {
 			const client = new FakeClient(manifest([operation("discuss.open")]));
 			client.result = { discussion: { id: "d-1" } };
 			const { pi, tools } = fakePi();
@@ -714,7 +727,8 @@ describe("registerVehicleTools", () => {
 			expect(client.calls).toHaveLength(1);
 		});
 
-		it("the follow-up receives the tool call's own signal and onUpdate, for its own abortable/progress-reporting round trip", async () => {
+		// Lets the follow-up's own round trip be abortable and report progress like the primary call.
+		it("the follow-up receives the tool call's own signal and onUpdate", async () => {
 			const client = new FakeClient(manifest([operation("discuss.open")]));
 			client.result = { discussion: { id: "d-1" } };
 			const { pi, tools } = fakePi();
@@ -739,7 +753,7 @@ describe("registerVehicleTools", () => {
 			expect((updates.at(-1) as { content: unknown }).content).toEqual([{ type: "text", text: "waiting" }]);
 		});
 
-		it("the follow-up receives the real VehicleClient, usable to make its own additional invoke() calls", async () => {
+		it("the follow-up receives the real VehicleClient, for its own additional invoke() calls", async () => {
 			const client = new FakeClient(manifest([operation("discuss.open")]));
 			client.result = { discussion: { id: "d-1" } };
 			const { pi, tools } = fakePi();
@@ -828,7 +842,8 @@ describe("registerVehicleTools", () => {
 		expect(client.closed).toBe(true);
 	});
 
-	it("registers a currently-unavailable operation's tool but never activates it, so the LLM never sees it", async () => {
+	// An inactive tool is invisible to the LLM even though it's registered.
+	it("registers a currently-unavailable operation's tool but never activates it", async () => {
 		const client = new FakeClient(
 			manifest([
 				operation("issues.search"),
@@ -872,7 +887,8 @@ describe("registerVehicleTools", () => {
 		expect(activeTools().sort()).toEqual(["edit", "read"]);
 	});
 
-	it("registers a permission-ineligible operation's tool but never activates it -- registered in getAllTools(), absent from getActiveTools()", async () => {
+	// Present in getAllTools(), absent from getActiveTools().
+	it("registers a permission-ineligible operation's tool but never activates it", async () => {
 		const client = new FakeClient(
 			manifest([
 				operation("issues.search", 1, { permissions: ["issues:read"] }),
@@ -916,7 +932,8 @@ describe("registerVehicleTools", () => {
 		expect(activeTools()).toEqual([]);
 	});
 
-	it("never hides a tool over an operation with no declared permissions, matching the registry's own missing.length === 0 rule", async () => {
+	// Matches the registry's own missing.length === 0 rule.
+	it("never hides a tool for an operation with no declared permissions", async () => {
 		const client = new FakeClient(manifest([operation("issues.search", 1, { permissions: [] })]));
 		const { pi, activeTools } = fakePi();
 
@@ -925,7 +942,7 @@ describe("registerVehicleTools", () => {
 		expect(activeTools()).toEqual(["issues_search"]);
 	});
 
-	it("registers renderers during async extension loading and defers runtime-dependent activation until session_start", async () => {
+	it("registers renderers during loading, defers activation until session_start", async () => {
 		const client = new FakeClient(manifest([operation("issues.search", 1, { available: false })]));
 		const tools: ToolDefinition[] = [];
 		const sessionStartHandlers: Array<() => void> = [];
@@ -963,7 +980,8 @@ describe("registerVehicleTools", () => {
 		expect(activeTools).toEqual([]);
 	});
 
-	it('sets promptSnippet so Pi\'s "Available tools" system-prompt section lists the tool -- omitted entirely otherwise, confirmed live', async () => {
+	// Omitted entirely otherwise -- confirmed live.
+	it('sets promptSnippet so the "Available tools" system-prompt section lists the tool', async () => {
 		const descriptor = operation("issues.search");
 		const client = new FakeClient(manifest([descriptor]));
 		const { pi, tools } = fakePi();
@@ -973,7 +991,8 @@ describe("registerVehicleTools", () => {
 		expect(tools[0]?.promptSnippet).toBe(descriptor.description);
 	});
 
-	it("wires the generic Vehicle renderer by default, so a projected tool never falls back to Pi's raw-JSON rendering", async () => {
+	// A projected tool never falls back to Pi's raw-JSON rendering.
+	it("wires the generic Vehicle renderer by default", async () => {
 		const client = new FakeClient(manifest([operation("issues.search")]));
 		const { pi, tools } = fakePi();
 
@@ -1010,7 +1029,8 @@ describe("registerVehicleTools", () => {
 		expect(result.content).toEqual([{ type: "text", text: '{\n  "total": 2\n}' }]);
 	});
 
-	it("sends an operation's own content blocks to the model instead of raw JSON, when its output carries them", async () => {
+	// Only when the output actually carries content blocks.
+	it("sends an operation's own content blocks to the model instead of raw JSON", async () => {
 		const client = new FakeClient(manifest([operation("skills.run"), operation("issues.search")]));
 		client.result = {
 			runId: "run-1",
@@ -1034,7 +1054,8 @@ describe("registerVehicleTools", () => {
 		expect(searchResult.content).toEqual([{ type: "text", text: '{\n  "ok": true\n}' }]);
 	});
 
-	it("falls back to raw JSON when an output's content field is present but malformed, rather than forwarding partial blocks", async () => {
+	// Never forwards partial content blocks.
+	it("falls back to raw JSON when an output's content field is malformed", async () => {
 		const client = new FakeClient(manifest([operation("issues.search")]));
 		client.result = { total: 2, content: [{ type: "text" }, "not a block"] };
 		const { pi, tools } = fakePi();
@@ -1120,7 +1141,8 @@ describe("refreshVehicleToolAvailability", () => {
 		expect(setCallCount()).toBe(before);
 	});
 
-	it("reveals a tool once options.permissions gains the coverage it was missing, without re-registering it", async () => {
+	// Doesn't re-register the tool -- only its active/inactive state changes.
+	it("reveals a tool once options.permissions gains the coverage it was missing", async () => {
 		const client = new FakeClient(manifest([operation("issues.write", 1, { permissions: ["issues:write"] })]));
 		const { pi, tools, activeTools } = fakePi();
 		const registered = await registerVehicleTools(pi, client, { permissions: [] });
@@ -1133,7 +1155,8 @@ describe("refreshVehicleToolAvailability", () => {
 		expect(refreshed.tools[0]?.permissionsSatisfied).toBe(true);
 	});
 
-	it("hides a tool once options.permissions loses coverage it previously had, e.g. a delegated-scope downgrade", async () => {
+	// E.g. a delegated-scope downgrade.
+	it("hides a tool once options.permissions loses coverage it previously had", async () => {
 		const client = new FakeClient(manifest([operation("issues.write", 1, { permissions: ["issues:write"] })]));
 		const { pi, activeTools } = fakePi();
 		const registered = await registerVehicleTools(pi, client, { permissions: ["issues:write"] });
@@ -1146,16 +1169,18 @@ describe("refreshVehicleToolAvailability", () => {
 	});
 });
 
-describe("registerVehicleTools / refreshVehicleToolAvailability: manifestCache survives a restart/reload while the daemon is unreachable", () => {
+// Survives a restart/reload while the daemon is unreachable.
+describe("registerVehicleTools / refreshVehicleToolAvailability: manifestCache", () => {
 	/** A permanent failure still throws, same as before the handshake retry existed -- it just no longer throws on the very first attempt: see RegisterVehicleToolsOptions.handshake. */
-	it("without manifestCache configured, a factory-time manifest() failure still throws once the bounded handshake retry is exhausted", async () => {
+	it("without manifestCache configured, a factory-time manifest() failure still throws", async () => {
 		const client = new FakeClient(manifest([operation("issues.search")]));
 		client.manifestError = new Error("daemon unreachable");
 		const { pi } = fakePi();
 		await expect(registerVehicleTools(pi, client, { handshake: { attempts: 1 } })).rejects.toThrow("daemon unreachable");
 	});
 
-	it("retries the initial manifest fetch and succeeds once a transient failure clears, without ever touching manifestCache", async () => {
+	// Never touches manifestCache when the retry alone succeeds.
+	it("retries the initial manifest fetch and succeeds once a transient failure clears", async () => {
 		const client = new FakeClient(manifest([operation("issues.search")]));
 		client.manifestError = new Error("daemon unreachable");
 		const { pi } = fakePi();
@@ -1183,7 +1208,7 @@ describe("registerVehicleTools / refreshVehicleToolAvailability: manifestCache s
 	});
 
 	/** The exact production scenario: a prior successful session persisted the cache, then the process restarted/reloaded while the daemon happened to be down (a crash-loop, a slow restart) -- transcript replay of a historical tool call still needs a real renderer, not a thrown registration error. */
-	it("falls back to a previously-cached manifest when the live fetch fails, registering tools and their renderers anyway", async () => {
+	it("falls back to a previously-cached manifest when the live fetch fails", async () => {
 		const fs = fakeFs();
 		const warmClient = new FakeClient(manifest([operation("issues.search")]));
 		await registerVehicleTools(fakePi().pi, warmClient, { manifestCache: { filePath: "/cache/vehicle.json", fs } });
@@ -1201,7 +1226,8 @@ describe("registerVehicleTools / refreshVehicleToolAvailability: manifestCache s
 		expect(tools).toHaveLength(1); // the renderer-carrying Pi tool really got registered, not skipped
 	});
 
-	it("still rethrows the original failure when manifestCache is configured but nothing has ever been cached yet", async () => {
+	// Even though manifestCache is configured.
+	it("still rethrows the original failure when nothing has ever been cached yet", async () => {
 		const client = new FakeClient(manifest([operation("issues.search")]));
 		client.manifestError = new Error("daemon unreachable");
 		const { pi } = fakePi();
@@ -1213,7 +1239,8 @@ describe("registerVehicleTools / refreshVehicleToolAvailability: manifestCache s
 		).rejects.toThrow("daemon unreachable");
 	});
 
-	it("a fallback-registered tool still activates once refreshVehicleToolAvailability succeeds against a live daemon, matching the session_start reconciliation every consumer already wires up", async () => {
+	// Matches the session_start reconciliation every consumer already wires up.
+	it("a fallback-registered tool still activates once a live refresh succeeds", async () => {
 		const fs = fakeFs();
 		const warmClient = new FakeClient(manifest([operation("issues.search")]));
 		await registerVehicleTools(fakePi().pi, warmClient, { manifestCache: { filePath: "/cache/vehicle.json", fs } });
@@ -1236,7 +1263,8 @@ describe("registerVehicleTools / refreshVehicleToolAvailability: manifestCache s
 		expect(activeTools()).toEqual(["issues_search"]);
 	});
 
-	it("a failed refresh keeps throwing even with manifestCache configured -- refresh's whole point is verifying a real live daemon, never silently reusing stale data as if it were fresh", async () => {
+	// refresh's whole point is verifying a live daemon -- never silently reuse stale cached data as fresh.
+	it("a failed refresh keeps throwing even with manifestCache configured", async () => {
 		const fs = fakeFs();
 		const client = new FakeClient(manifest([operation("issues.search")]));
 		const { pi } = fakePi();
@@ -1278,7 +1306,8 @@ describe("safety policy (VehicleSafetyPolicyStore + classification)", () => {
 		expect(registered.tools[0]?.safetyState).toBe("allow");
 	});
 
-	it("refreshVehicleToolAvailability re-evaluates the safety policy store, not just permissions/availability", async () => {
+	// Not just permissions/availability.
+	it("refreshVehicleToolAvailability re-evaluates the safety policy store too", async () => {
 		const client = new FakeClient(manifest([operation("issues.write")]));
 		const { pi, activeTools } = fakePi();
 		const safetyPolicyStore = await VehicleSafetyPolicyStore.restore();
@@ -1292,7 +1321,8 @@ describe("safety policy (VehicleSafetyPolicyStore + classification)", () => {
 		expect(refreshed.tools[0]?.safetyState).toBe("blocked");
 	});
 
-	it("an override of 'ask' gates execute() with a local confirm before ever calling invoke() -- denial never touches the client at all", async () => {
+	// A denial never touches the client at all.
+	it("an override of 'ask' gates execute() with a local confirm before invoke()", async () => {
 		const client = new FakeClient(manifest([operation("issues.write")]));
 		const { pi, tools } = fakePi();
 		const safetyPolicyStore = await VehicleSafetyPolicyStore.restore();
@@ -1318,7 +1348,8 @@ describe("safety policy (VehicleSafetyPolicyStore + classification)", () => {
 		expect(result.content).toBeTruthy();
 	});
 
-	it("registerVehicleTools contributes to the shared safety registry unconditionally -- no option needed to opt in", async () => {
+	// No option needed to opt in.
+	it("registerVehicleTools contributes to the shared safety registry unconditionally", async () => {
 		const client = new FakeClient(manifest([operation("issues.search"), operation("risk.destructive", 1, { effect: "destructive" })]));
 		const { pi } = fakePi();
 

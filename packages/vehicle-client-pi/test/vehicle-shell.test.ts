@@ -55,7 +55,8 @@ describe("matchesShellQuery", () => {
 });
 
 describe("formatOperationManPage", () => {
-	it("includes the tool name, operation name/version, description, effect, permissions, and idempotency", () => {
+	// Every field: tool name, operation name/version, description, effect, permissions, idempotency.
+	it("includes every field a man page needs", () => {
 		const page = formatOperationManPage(descriptor(), "tasks_depend");
 		expect(page).toContain("tasks_depend (tasks.depend, v1)");
 		expect(page).toContain("Adds a dependency edge between two tasks.");
@@ -94,7 +95,8 @@ describe("VehicleShellTtlTracker", () => {
 		expect(tracker.trackedNames()).toEqual([]);
 	});
 
-	it("refreshes a tool's TTL back to its starting value when it's called during a turn, instead of merely skipping one decrement", () => {
+	// A call during a turn refreshes to full TTL, not merely skips one decrement.
+	it("refreshes a tool's TTL back to its starting value when it's called during a turn", () => {
 		const tracker = new VehicleShellTtlTracker();
 		tracker.seed("tasks_create", 3);
 
@@ -115,7 +117,8 @@ describe("VehicleShellTtlTracker", () => {
 		expect(tracker.trackedNames()).toEqual([]);
 	});
 
-	it("re-seeding an already-tracked tool (a repeat tools_man call) resets it to full TTL immediately, not just on next call", () => {
+	// Resets immediately, not just on the next tick.
+	it("re-seeding an already-tracked tool (a repeat tools_man call) resets it to full TTL", () => {
 		const tracker = new VehicleShellTtlTracker();
 		tracker.seed("tasks_depend", 2);
 		tracker.tick(); // 2 -> 1

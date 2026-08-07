@@ -148,7 +148,8 @@ describe("renderVehicleCall", () => {
 		expect(component.render(80)).toEqual(["<muted>Issue List"]);
 	});
 
-	it("falls back to a hardcoded ANSI color when the theme never distinguishes any candidate token from plain text", () => {
+	// Applies when the theme never distinguishes any candidate token from plain text.
+	it("falls back to a hardcoded ANSI color", () => {
 		const component = renderVehicleCall(descriptor("destructive"), {}, flatTheme, callContext());
 		expect(component.render(80)[0]).toContain("\x1b[31m");
 	});
@@ -166,7 +167,8 @@ describe("renderVehicleCall", () => {
 		expect(line).toContain("status=review");
 	});
 
-	it("surfaces a recognized identity arg (id/name/title/...) plainly and first, not buried in key=value order", () => {
+	// Never buried in key=value order.
+	it("surfaces a recognized identity arg (id/name/title/...) plainly and first", () => {
 		const component = renderVehicleCall(descriptor("read"), { status: "review", id: "abc-123" }, fakeTheme, callContext());
 		const line = component.render(80).join("\n");
 		expect(line).not.toContain("id=abc-123");
@@ -300,7 +302,8 @@ describe("renderVehicleResult", () => {
 		expect(text.toLowerCase()).toContain("no results");
 	});
 
-	it("bounds a large array output to the default visible row count and reports how many more remain, using Pi's own expanded flag", () => {
+	// Reports how many more rows remain, using Pi's own expanded flag.
+	it("bounds a large array output to the default visible row count", () => {
 		const rows = Array.from({ length: 30 }, (_, i) => ({ id: `row-${i}` }));
 		const component = renderVehicleResult(
 			descriptor("read"),
@@ -357,7 +360,7 @@ describe("renderVehicleResult", () => {
 		expect(text).not.toContain("[\n");
 	});
 
-	it("bounds a large plain-string array to the default visible count and reports how many more remain", () => {
+	it("bounds a large plain-string array to the default visible count", () => {
 		const rows = Array.from({ length: 30 }, (_, i) => `row-${i}`);
 		const component = renderVehicleResult(
 			descriptor("read"),
@@ -386,9 +389,9 @@ describe("renderVehicleResult", () => {
 		expect(text).not.toContain("more");
 	});
 
-	it("renders a flat all-primitive object as an aligned field list, not raw JSON -- tasks.claim's real TaskLease shape", () => {
-		// The exact shape reported live: tasks.claim's TaskLease, previously dumped as raw JSON
-		// because it has no array field for singleArrayEnvelope/plainContentEnvelope to unwrap.
+	// The exact shape reported live: tasks.claim's TaskLease, previously dumped as raw JSON
+	// because it has no array field for singleArrayEnvelope/plainContentEnvelope to unwrap.
+	it("renders a flat all-primitive object as an aligned field list, not raw JSON", () => {
 		const component = renderVehicleResult(
 			descriptor("local-write"),
 			{
@@ -415,7 +418,8 @@ describe("renderVehicleResult", () => {
 		expect(text).not.toContain('"');
 	});
 
-	it("renders null/undefined fields in a flat record as 'none', matching formatSiblingLine's own convention", () => {
+	// Matches formatSiblingLine's own convention.
+	it("renders null/undefined fields in a flat record as 'none'", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),
 			{ content: [], details: { output: { note: null, count: 3, active: true } } },
@@ -432,7 +436,8 @@ describe("renderVehicleResult", () => {
 		expect(text).toContain("true");
 	});
 
-	it("still falls back to raw JSON for an object with a nested object field -- a flat record is a narrower shape than 'any object'", () => {
+	// A flat record is a narrower shape than "any object".
+	it("still falls back to raw JSON for an object with a nested object field", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),
 			{ content: [], details: { output: { nested: { a: 1 } } } },
@@ -478,7 +483,7 @@ describe("renderVehicleResult", () => {
 		expect(expanded.render(80).length).toBeGreaterThan(collapsed.render(80).length);
 	});
 
-	it("unwraps a single-array pagination envelope ({events, nextCursor}) and renders the inner array as a table", () => {
+	it("unwraps a single-array pagination envelope ({events, nextCursor}) as a table", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),
 			{
@@ -517,7 +522,8 @@ describe("renderVehicleResult", () => {
 		expect(text).toContain("total: 2");
 	});
 
-	it("leaves an object with two array fields on the raw-JSON fallback -- too ambiguous to guess which array is the real payload", () => {
+	// Too ambiguous to guess which array is the real payload.
+	it("leaves an object with two array fields on the raw-JSON fallback", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),
 			{ content: [], details: { output: { a: ["x"], b: ["y"] } } },
@@ -528,7 +534,7 @@ describe("renderVehicleResult", () => {
 		expect(component.render(80).join("\n")).toContain('"a"');
 	});
 
-	it("unwraps a single domain array even when a VehicleContentBlock[] content sibling sits alongside it", () => {
+	it("unwraps a single domain array alongside a VehicleContentBlock[] content sibling", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),
 			{
@@ -551,7 +557,8 @@ describe("renderVehicleResult", () => {
 		expect(text).not.toContain('"type"');
 	});
 
-	it("still falls back to raw JSON when two GENUINE domain arrays sit alongside a content sibling -- content exclusion isn't newly permissive for real ambiguity", () => {
+	// content exclusion isn't newly permissive for real ambiguity.
+	it("still falls back to raw JSON for two GENUINE domain arrays plus a content sibling", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),
 			{
@@ -565,12 +572,12 @@ describe("renderVehicleResult", () => {
 		expect(component.render(80).join("\n")).toContain('"a"');
 	});
 
-	it("a content-only envelope (a boolean/primitive sibling plus a VehicleContentBlock[] content, no domain array at all) shows the content's own narration plainly, not raw JSON", () => {
-		// The exact real shape of Papyrus's discuss.block/unblock: {blocked: true, content: [...]}.
-		// singleArrayEnvelope correctly excludes `content` from ever being treated as domain array
-		// data (484f14c) -- but that leaves genuinely zero array fields here, so this must fall
-		// through to a content-aware plain-text rendering instead of a raw JSON dump, the same way
-		// the model's own content channel (extractVehicleContent) already reads this shape.
+	// The exact real shape of Papyrus's discuss.block/unblock: {blocked: true, content: [...]}.
+	// singleArrayEnvelope correctly excludes `content` from ever being treated as domain array
+	// data (484f14c) -- but that leaves genuinely zero array fields here, so this must fall
+	// through to a content-aware plain-text rendering instead of a raw JSON dump, the same way
+	// the model's own content channel (extractVehicleContent) already reads this shape.
+	it("a content-only envelope with no domain array shows its own narration, not raw JSON", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),
 			{ content: [], details: { output: { blocked: true, content: [{ type: "text", text: 'Discussion "X" now blocks "Y"' }] } } },
@@ -583,7 +590,8 @@ describe("renderVehicleResult", () => {
 		expect(text).not.toContain("{");
 	});
 
-	it("a content-only envelope still annotates its other primitive siblings, same as a domain-array envelope does", () => {
+	// Same as a domain-array envelope does.
+	it("a content-only envelope still annotates its other primitive siblings", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),
 			{ content: [], details: { output: { blocked: true, content: [{ type: "text", text: "done" }] } } },
@@ -606,7 +614,8 @@ describe("renderVehicleResult", () => {
 		expect(component.render(80).join("\n")).toContain('"meta"');
 	});
 
-	it("an envelope with an empty inner array falls through to raw JSON rather than a misleading 'No results.'", () => {
+	// Never a misleading "No results."
+	it("an envelope with an empty inner array falls through to raw JSON", () => {
 		const component = renderVehicleResult(
 			descriptor("read"),
 			{ content: [], details: { output: { events: [], nextCursor: 1 } } },
@@ -617,7 +626,8 @@ describe("renderVehicleResult", () => {
 		expect(component.render(80).join("\n")).toContain("events");
 	});
 
-	it("an envelope's unwrapped array still expands to show every row, with the sibling annotation preserved", () => {
+	// The sibling annotation is preserved through the expansion.
+	it("an envelope's unwrapped array still expands to show every row", () => {
 		const rows = Array.from({ length: 30 }, (_, i) => ({ id: `row-${i}` }));
 		const component = renderVehicleResult(
 			descriptor("read"),
@@ -649,7 +659,7 @@ describe("renderVehicleResult", () => {
 	// characters, undercounting the padding a styled line needs). Wraps the error
 	// Component in a real pi-tui Box with a background function, mirroring Pi's own
 	// tool-execution.ts (both the call and result renderers share one Box/one width).
-	it("pads an ANSI-styled error result to the full box width, matching every other line -- no ragged background edge", () => {
+	it("pads an ANSI-styled error result to the full box width, matching every other line", () => {
 		const longMessage = "vehicle-client-failed: Vehicle operation deadline exceeded";
 		const component = renderVehicleResult(
 			descriptor("read"),
