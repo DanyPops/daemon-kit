@@ -1,6 +1,6 @@
 import { manifestHash } from "../fleet/hash.js";
 import type { VehicleSpec } from "../fleet/manifest.js";
-import { capabilityDiagnostics, hasError, nativeServiceIdentity, xmlEscape } from "./descriptor.js";
+import { capabilityDiagnostics, hasError, nativeServiceIdentity, sortedEnvEntries, xmlEscape } from "./descriptor.js";
 import type { DescriptorOutcome, NativeManagerCapabilities, NativeServiceStrategy } from "./service-manager.js";
 
 const capabilities: NativeManagerCapabilities = Object.freeze({
@@ -38,6 +38,7 @@ function generateDescriptor(vehicle: VehicleSpec): DescriptorOutcome {
 		"  <key>EnvironmentVariables</key>",
 		"  <dict>",
 		...keyValue("DAEMON_KIT_LAUNCH_PROVENANCE", "service").map((line) => `  ${line.trimStart()}`),
+		...sortedEnvEntries(vehicle).flatMap(([key, value]) => keyValue(key, value).map((line) => `  ${line.trimStart()}`)),
 		"  </dict>",
 	];
 	if (vehicle.workingDirectory !== undefined) lines.push(...keyValue("WorkingDirectory", vehicle.workingDirectory));

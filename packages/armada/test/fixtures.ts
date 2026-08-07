@@ -15,6 +15,7 @@ export function vehicle(overrides: Partial<Omit<VehicleSpec, "name">> & { name?:
 		readiness: overrides.readiness ?? { timeoutMs: 5_000, pollIntervalMs: 100 },
 		...(overrides.workingDirectory === undefined ? {} : { workingDirectory: overrides.workingDirectory }),
 		...(overrides.resources === undefined ? {} : { resources: overrides.resources }),
+		...(overrides.env === undefined ? {} : { env: overrides.env }),
 	});
 }
 

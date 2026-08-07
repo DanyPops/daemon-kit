@@ -51,4 +51,18 @@ describe("decodeArmadaManifest", () => {
 		if (outcome.ok) return;
 		expect(outcome.diagnostics[0]?.code).toBe("MANIFEST_VEHICLE_DUPLICATE");
 	});
+
+	it("accepts and preserves a Vehicle's env map", () => {
+		const outcome = decodeArmadaManifest(manifestJson([{ ...JSON.parse(manifestJson()).vehicles[0], env: { PI_BIN: "/abs/path/pi" } }]));
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.manifest.vehicles[0]?.env).toEqual({ PI_BIN: "/abs/path/pi" });
+	});
+
+	it("rejects an env key that isn't a valid environment-variable name", () => {
+		const outcome = decodeArmadaManifest(manifestJson([{ ...JSON.parse(manifestJson()).vehicles[0], env: { "not-a-valid-name": "x" } }]));
+		expect(outcome.ok).toBe(false);
+		if (outcome.ok) return;
+		expect(outcome.diagnostics.map((item) => item.code)).toContain("MANIFEST_SCHEMA_INVALID");
+	});
 });

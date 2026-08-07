@@ -9,6 +9,10 @@ export const MAX_MANIFEST_BYTES = 1024 * 1024;
 export const MAX_VEHICLES = 100;
 
 const BoundedString = Type.String({ minLength: 1, maxLength: 4_096 });
+const EnvironmentMap = Type.Record(Type.String({ pattern: "^[A-Z_][A-Z0-9_]*$" }), BoundedString, {
+	maxProperties: 32,
+	additionalProperties: false,
+});
 const Requirement = Type.Object(
 	{
 		value: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
@@ -36,6 +40,7 @@ const VehicleSchema = Type.Object(
 		arguments: Type.Optional(Type.Array(BoundedString, { maxItems: 64 })),
 		workingDirectory: Type.Optional(BoundedString),
 		handlePath: BoundedString,
+		env: Type.Optional(EnvironmentMap),
 		restart: RestartPolicy,
 		readiness: Type.Object(
 			{
@@ -96,6 +101,7 @@ export interface VehicleSpec {
 	readonly arguments: readonly string[];
 	readonly workingDirectory?: string;
 	readonly handlePath: string;
+	readonly env?: Readonly<Record<string, string>>;
 	readonly restart: VehicleRestartPolicy;
 	readonly readiness: {
 		readonly timeoutMs: number;
@@ -144,6 +150,7 @@ function toVehicle(raw: RawVehicle): VehicleSpec {
 		arguments: [...(raw.arguments ?? [])],
 		...(raw.workingDirectory === undefined ? {} : { workingDirectory: raw.workingDirectory }),
 		handlePath: raw.handlePath,
+		...(raw.env === undefined ? {} : { env: { ...raw.env } }),
 		restart: { ...raw.restart },
 		readiness: { ...raw.readiness },
 		...(raw.resources === undefined ? {} : { resources: { ...raw.resources } }),

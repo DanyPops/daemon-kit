@@ -1,6 +1,6 @@
 import { manifestHash } from "../fleet/hash.js";
 import type { VehicleSpec } from "../fleet/manifest.js";
-import { capabilityDiagnostics, hasError, nativeServiceIdentity, seconds, xmlEscape } from "./descriptor.js";
+import { capabilityDiagnostics, hasError, nativeServiceIdentity, seconds, sortedEnvEntries, xmlEscape } from "./descriptor.js";
 import type { DescriptorOutcome, NativeManagerCapabilities, NativeServiceStrategy } from "./service-manager.js";
 
 const capabilities: NativeManagerCapabilities = Object.freeze({
@@ -50,7 +50,10 @@ function generateDescriptor(vehicle: VehicleSpec): DescriptorOutcome {
 	const specHash = manifestHash(vehicle);
 	const identity = `\\Armada\\${vehicle.name}`;
 	const commandText = [vehicle.executable, ...vehicle.arguments].map(quoteArgument).join(" ");
-	const argumentsText = `/d /s /c "set DAEMON_KIT_LAUNCH_PROVENANCE=service&& ${commandText}"`;
+	const envPrefix = sortedEnvEntries(vehicle)
+		.map(([key, value]) => `set ${key}=${value}&& `)
+		.join("");
+	const argumentsText = `/d /s /c "set DAEMON_KIT_LAUNCH_PROVENANCE=service&& ${envPrefix}${commandText}"`;
 	const lines = [
 		'<?xml version="1.0" encoding="UTF-8"?>',
 		'<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',

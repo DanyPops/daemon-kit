@@ -71,6 +71,7 @@ function descriptorTextDiagnostics(vehicle: VehicleSpec): Diagnostic[] {
 		["/executable", vehicle.executable],
 		...vehicle.arguments.map((value, index) => [`/arguments/${index}`, value] as const),
 		...(vehicle.workingDirectory === undefined ? [] : [["/workingDirectory", vehicle.workingDirectory] as const]),
+		...Object.entries(vehicle.env ?? {}).map(([key, value]) => [`/env/${key}`, value] as const),
 	] as const;
 	for (const [path, value] of values) {
 		const hasControlCharacter = [...value].some((character) => {
@@ -94,6 +95,10 @@ export function capabilityDiagnostics(vehicle: VehicleSpec, capabilities: Native
 
 export function hasError(diagnostics: readonly Diagnostic[]): boolean {
 	return diagnostics.some((item) => item.severity === "error");
+}
+
+export function sortedEnvEntries(vehicle: VehicleSpec): ReadonlyArray<readonly [string, string]> {
+	return Object.entries(vehicle.env ?? {}).sort(([left], [right]) => left.localeCompare(right));
 }
 
 export function xmlEscape(value: string): string {

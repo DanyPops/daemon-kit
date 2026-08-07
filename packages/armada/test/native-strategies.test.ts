@@ -52,6 +52,42 @@ describe("native service strategies", () => {
 		expect(outcome).toMatchObject({ ok: false, diagnostics: [{ code: "NATIVE_DESCRIPTOR_TEXT_INVALID", severity: "error" }] });
 	});
 
+	it("rejects control characters injected through an env value", () => {
+		const outcome = systemdStrategy.generateDescriptor(vehicle({ env: { PI_BIN: "/bin/pi\n[Install]" } }));
+		expect(outcome).toMatchObject({ ok: false, diagnostics: [{ code: "NATIVE_DESCRIPTOR_TEXT_INVALID", severity: "error" }] });
+	});
+
+	it("emits a vehicle's own env entries alongside the launch-provenance line in a systemd unit", () => {
+		const outcome = systemdStrategy.generateDescriptor(
+			vehicle({ restart: { policy: "never" }, env: { PI_BIN: "/abs/path/pi", PATH: "/abs/bin:/usr/bin" } }),
+		);
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.descriptor.content).toContain('Environment="DAEMON_KIT_LAUNCH_PROVENANCE=service"');
+		expect(outcome.descriptor.content).toContain('Environment="PATH=/abs/bin:/usr/bin"');
+		expect(outcome.descriptor.content).toContain('Environment="PI_BIN=/abs/path/pi"');
+	});
+
+	it("emits a vehicle's own env entries in a launchd EnvironmentVariables dict", () => {
+		const outcome = launchdStrategy.generateDescriptor(vehicle({ restart: { policy: "never" }, env: { PI_BIN: "/abs/path/pi" } }));
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.descriptor.content).toContain("<key>DAEMON_KIT_LAUNCH_PROVENANCE</key>");
+		expect(outcome.descriptor.content).toContain("<key>PI_BIN</key>");
+		expect(outcome.descriptor.content).toContain("<string>/abs/path/pi</string>");
+	});
+
+	it("emits a vehicle's own env entries as set commands ahead of a Task Scheduler command line", () => {
+		const outcome = windowsTaskSchedulerStrategy.generateDescriptor(
+			vehicle({ executable: "C:\\Program Files\\Papyrus\\papyrus.exe", env: { PI_BIN: "C:\\pi\\pi.exe" } }),
+		);
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.descriptor.content).toContain("set PI_BIN=C:\\pi\\pi.exe");
+		expect(outcome.descriptor.content).toContain("set DAEMON_KIT_LAUNCH_PROVENANCE=service");
+		expect(outcome.descriptor.content.indexOf("DAEMON_KIT_LAUNCH_PROVENANCE")).toBeLessThan(outcome.descriptor.content.indexOf("PI_BIN"));
+	});
+
 	it("fails launchd generation when bounded restart semantics are requested", () => {
 		const outcome = launchdStrategy.generateDescriptor(vehicle());
 		expect(outcome).toMatchObject({
