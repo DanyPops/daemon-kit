@@ -2,7 +2,7 @@ import { extractVehicleContent, type VehicleEffect, type VehicleOperationDescrip
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { keyHint, type Theme, type ThemeColor, type ToolDefinition, type ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth as truncateToWidthUnsafe, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
 	buildDetailLines,
 	CollapsibleText,
@@ -32,6 +32,29 @@ type RenderResultContext = Parameters<NonNullable<ToolDefinition["renderResult"]
  * RegisterVehicleToolsOptions.renderers -- this is the fallback, not the
  * only option.
  */
+
+/**
+ * pi-tui's own truncateToWidth (dist/utils.js, finalizeTruncatedResult) embeds an
+ * unconditional full SGR reset (\x1b[0m) after any truncated content -- even for
+ * plain, uncolored text -- whenever it actually truncates. That's fine in isolation,
+ * but this string is later handed to Pi's own Box, which paints one background color
+ * across the *entire* line by wrapping it once, start to end (Box.applyBg /
+ * applyBackgroundToLine in the same package). A full reset embedded mid-line kills
+ * that background early: everything after it renders on the terminal's own default
+ * background instead of the tool box's, since nothing re-establishes it afterward.
+ *
+ * Replacing \x1b[0m with every SGR reset *except* background (\x1b[49m) preserves
+ * truncateToWidth's own intent -- stop whatever styling the truncated/ellipsis text
+ * carried -- without discarding a background this function has no visibility into
+ * and that gets applied by a caller further up the render tree.
+ */
+export function neutralizeEmbeddedFullResets(text: string): string {
+	return text.replaceAll("\x1b[0m", "\x1b[22;23;24;25;27;28;29;39m");
+}
+
+function truncateToWidth(text: string, maxWidth: number, ellipsis?: string, pad?: boolean): string {
+	return neutralizeEmbeddedFullResets(truncateToWidthUnsafe(text, maxWidth, ellipsis, pad));
+}
 
 const measure: TextMeasure = { visibleWidth, truncateToWidth, wrapTextWithAnsi };
 
